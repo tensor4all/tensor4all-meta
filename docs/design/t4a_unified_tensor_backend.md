@@ -62,8 +62,16 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 │   5 operations: Contraction, Reduction, Permutation,         │
 │                 ElementwiseBinary, ElementwiseTrinary         │
 │   Plan-based execution (create_plan → execute)               │
+│   CPU impl + GPU dispatch (via t4a-device)                   │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│ Shared Infrastructure: GPU Device Layer (t4a-device)         │
+│   Device enum (Cpu, Cuda(id), Rocm(id))                      │
 │   BackendRegistry (runtime GPU discovery via dlopen)         │
+│   TensorLibVtable (cuTENSOR / hipTensor function pointers)   │
 │   Caller-injected .so paths (no auto-search)                 │
+│   Used by: t4a-buffer, t4a-tensorops, t4a-linalg             │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -110,10 +118,13 @@ t4a-rs/ (workspace) ── Dense array foundation ──────────
 ├── t4a-view             # Re-exports strided-view (thin wrapper)
 ├── t4a-buffer           # DataBuffer<T>: CPU Vec<T> / GPU device memory (Arc-based COW)
 ├── t4a-algebra          # Semiring/Algebra traits, tropical types (MaxPlus, MinPlus, MaxMul)
+├── t4a-device           # GPU device discovery and handle management
+│                        #   Device enum, BackendRegistry, TensorLibVtable
+│                        #   Runtime dlopen (libloading), caller-injected .so paths
+│                        #   Shared by t4a-tensorops, t4a-linalg, t4a-buffer
 ├── t4a-tensorops        # Unified tensor operation protocol (TensorOps trait)
 │                        #   cuTENSOR/hipTensor compatible API (enum-based, 5 operations)
-│                        #   BackendRegistry, runtime GPU discovery
-│                        #   Plan-based execution
+│                        #   Plan-based execution (GPU dispatch via t4a-device)
 │                        #   CPU impl uses strided-kernel internally
 │                        #   Custom closures: use strided-kernel directly via Tensor::as_strided_view()
 ├── t4a-einsum           # Einsum engine (absorbs strided-einsum2 + strided-opteinsum + omeinsum-rs)
@@ -121,7 +132,7 @@ t4a-rs/ (workspace) ── Dense array foundation ──────────
 │                        #   Delegates binary contraction to t4a-tensorops
 ├── t4a-tensor           # Tensor<T> = DataBuffer + sizes + strides + offset
 │                        #   User-facing API
-├── t4a-linalg           # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER)
+├── t4a-linalg           # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER via t4a-device)
 ├── t4a-autograd         # TrackedTensor, DualTensor, VJP/JVP
 ├── t4a-capi             # C FFI (tensor ops + VJP/JVP + backend loading)
 └── burn-t4a             # Burn Backend bridge [OPTIONAL, for NN only]
@@ -150,24 +161,27 @@ t4a-scalar (← strided-traits)
     │
     ├──────────────────────────────┐
     ↓                              ↓
-t4a-view (← strided-view)    t4a-buffer
-    │                              │
-    ├──── t4a-algebra ←────────────┤
-    │                              │
-    ↓                              ↓
-t4a-tensorops ←────────────────────┘  (TensorOps trait, BackendRegistry,
-    │  (← strided-kernel)             libloading, GPU vtable)
-    │
-    ↓
-t4a-einsum (absorbs strided-einsum2 +
-    │       strided-opteinsum + omeinsum-rs)
-    ↓
-t4a-tensor
-                   │
-         ┌─────────┼───────────┐
-         ↓         ↓           ↓
-   t4a-linalg  t4a-autograd  t4a-capi
-   (← faer)
+t4a-view (← strided-view)    t4a-buffer ←── t4a-device
+    │                              │          (Device enum, BackendRegistry,
+    ├──── t4a-algebra ←────────────┤           TensorLibVtable, libloading)
+    │                              │               │
+    ↓                              ↓               │
+t4a-tensorops ←────────────────────┘               │
+    │  (← strided-kernel, ← t4a-device)           │
+    │  (TensorOps trait, plan-based execution)     │
+    ↓                                              │
+t4a-einsum (absorbs strided-einsum2 +              │
+    │       strided-opteinsum + omeinsum-rs)       │
+    ↓                                              │
+t4a-tensor                                         │
+                   │                               │
+         ┌─────────┼───────────┐                   │
+         ↓         ↓           ↓                   │
+   t4a-linalg  t4a-autograd  t4a-capi             │
+   (← faer,        │          (wraps t4a-device    │
+    ← t4a-device)  │           for library loading)│
+         │         │                               │
+         └─────────┴───────────────────────────────┘
 
 [separate workspace: t4a-structured-rs]
 t4a-blocksparse ← t4a-tensor
@@ -186,7 +200,8 @@ burn-t4a ← t4a-tensor, burn-backend
 | t4a-view | Depends on strided-view | Thin re-export wrapper |
 | t4a-buffer | New | CPU/GPU buffer abstraction |
 | t4a-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types |
-| t4a-tensorops | **New** (replaces t4a-backend) | cuTENSOR/hipTensor-compatible `TensorOps` trait (enum-based only); CPU impl uses strided-kernel |
+| t4a-device | **New** | GPU device discovery: `Device` enum, `BackendRegistry`, `TensorLibVtable`, libloading/dlopen |
+| t4a-tensorops | **New** (replaces t4a-backend) | cuTENSOR/hipTensor-compatible `TensorOps` trait (enum-based only); CPU impl uses strided-kernel; GPU dispatch via t4a-device |
 | t4a-einsum | **Absorbs** strided-einsum2 + strided-opteinsum + omeinsum-rs | Merge all einsum; delegates binary contraction to `TensorOps` |
 | t4a-tensor | New | Tensor<T> API over DataBuffer |
 | t4a-linalg | ndtensors-rs (linalg) | Port SVD/QR/eigen |
@@ -207,8 +222,8 @@ burn-t4a ← t4a-tensor, burn-backend
 | GPU vendor (cuTENSOR/hipTensor) | **Runtime** (dlopen) | Single binary for all platforms; Julia/Python inject .so path |
 | CPU GEMM (faer/cblas) | **Compile-time** (Cargo feature) | Fundamentally different linking (pure Rust vs C ABI) |
 | Elementwise ops | **Enum-based only** | cuTENSOR-compatible operator enums; custom closures via strided-kernel directly |
-| libloading dependency | **Always ON** | Lightweight, no overhead when GPU absent, no feature gate needed |
-| .so path for GPU libs | **Caller-injected** | Rust does not search; Julia/Python provide exact path |
+| libloading dependency | **Always ON** (in t4a-device) | Lightweight, no overhead when GPU absent, no feature gate needed |
+| .so path for GPU libs | **Caller-injected** (via t4a-device) | Rust does not search; Julia/Python provide exact path |
 
 ---
 
@@ -285,8 +300,8 @@ pub struct CpuBuffer<T: ScalarBase> {
 pub struct GpuBuffer<T: ScalarBase> {
     ptr: *mut T,
     len: usize,
-    device: Device,   // Cuda(id) or Rocm(id)
-    // Drop handles deallocation via BackendRegistry
+    device: Device,   // from t4a-device: Cuda(id) or Rocm(id)
+    // Drop handles deallocation via t4a-device's BackendRegistry
 }
 
 pub enum DataBuffer<T: ScalarBase> {
@@ -323,6 +338,80 @@ pub struct MaxMul<T>(pub T);      // sem_add = max, sem_mul = ×
 Also provides:
 - Argmax tracking for tropical backward pass
 - Algebra trait extending Semiring with optional backward/gradient support
+
+### t4a-device
+
+**Shared GPU infrastructure** used by `t4a-buffer`, `t4a-tensorops`, and `t4a-linalg`.
+
+```rust
+/// Device identifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Device {
+    Cpu,
+    Cuda(usize),   // NVIDIA GPU #id
+    Rocm(usize),   // AMD GPU #id
+}
+```
+
+**BackendRegistry** — runtime GPU discovery via dlopen:
+
+```rust
+pub struct BackendRegistry {
+    cpu: CpuBackend,
+    gpu: Option<GpuBackend>,
+}
+
+impl BackendRegistry {
+    pub fn new() -> Self { ... }  // CPU only
+    pub fn load_cutensor(&mut self, path: &str) -> Result<()> { ... }
+    pub fn load_hiptensor(&mut self, path: &str) -> Result<()> { ... }
+    pub fn available_devices(&self) -> Vec<Device> { ... }
+}
+```
+
+**GPU vtable** — cuTENSOR and hipTensor have nearly identical C APIs
+(AMD intentionally mirrors NVIDIA). A single function pointer table
+(`TensorLibVtable`) abstracts over both, populated at runtime from
+whichever library is loaded:
+
+```rust
+impl TensorLibVtable {
+    fn load_cutensor(lib: &Library) -> Result<Self> {
+        Ok(Self {
+            create_handle: lib.get(b"cutensorCreate")?,
+            contract: lib.get(b"cutensorContract")?,
+            // ...
+        })
+    }
+    fn load_hiptensor(lib: &Library) -> Result<Self> {
+        Ok(Self {
+            create_handle: lib.get(b"hiptensorCreate")?,
+            contract: lib.get(b"hiptensorContract")?,
+            // ...
+        })
+    }
+}
+```
+
+**GpuBackend** wraps the vtable and handle:
+
+```rust
+pub struct GpuBackend {
+    vtable: TensorLibVtable,
+    handle: *mut c_void,
+    _lib: Library,  // prevent unloading
+}
+```
+
+C API for library loading (exposed via `t4a-capi`):
+
+```c
+int t4a_backend_load_cutensor(const char* libcutensor_path);
+int t4a_backend_load_hiptensor(const char* libhiptensor_path);
+```
+
+`libloading` is an unconditional dependency (always linked, lightweight,
+no overhead when GPU libraries are absent).
 
 ### t4a-tensorops
 
@@ -366,45 +455,21 @@ backend.contract(&plan, alpha, &a2, &b2, beta, &mut c2)?;  // reuse plan
 contract_once(&backend, alpha, &a, &meta_a, &modes_a, ...)?;
 ```
 
-**Runtime GPU discovery** via `BackendRegistry`:
+**Runtime GPU discovery** via `t4a-device`:
+
+GPU device discovery, handle management, and vendor library loading
+are provided by the **t4a-device** crate (see below). `t4a-tensorops`
+depends on `t4a-device` and uses its `GpuBackend` to implement
+`TensorOps` for GPU tensors.
 
 ```rust
+use t4a_device::BackendRegistry;
+
 let mut registry = BackendRegistry::new();  // CPU only
 
-// Julia/Python provides .so path
+// Julia/Python provides .so path (via t4a-device)
 registry.load_cutensor("/path/to/libcutensor.so")?;   // NVIDIA
 registry.load_hiptensor("/path/to/libhiptensor.so")?; // AMD
-```
-
-C API for library loading:
-
-```c
-int t4a_backend_load_cutensor(const char* libcutensor_path);
-int t4a_backend_load_hiptensor(const char* libhiptensor_path);
-```
-
-**GPU vtable** — cuTENSOR and hipTensor have nearly identical C APIs
-(AMD intentionally mirrors NVIDIA). A single function pointer table
-(`TensorLibVtable`) abstracts over both, populated at runtime from
-whichever library is loaded:
-
-```rust
-impl TensorLibVtable {
-    fn load_cutensor(lib: &Library) -> Result<Self> {
-        Ok(Self {
-            create_handle: lib.get(b"cutensorCreate")?,
-            contract: lib.get(b"cutensorContract")?,
-            // ...
-        })
-    }
-    fn load_hiptensor(lib: &Library) -> Result<Self> {
-        Ok(Self {
-            create_handle: lib.get(b"hiptensorCreate")?,
-            contract: lib.get(b"hiptensorContract")?,
-            // ...
-        })
-    }
-}
 ```
 
 **Elementwise design**: enum-based only (`UnaryOp`, `BinaryOp`), cuTENSOR-compatible,
@@ -520,7 +585,7 @@ All decomposition functions:
 
 **Trait bound**: `T: Scalar + faer::ComplexField` (enforced here, not in t4a-scalar/tensor).
 
-**GPU path**: cuSOLVER/rocSOLVER via runtime-loaded vendor library (same dlopen pattern as t4a-tensorops).
+**GPU path**: cuSOLVER/rocSOLVER via runtime-loaded vendor library through **t4a-device** (same dlopen pattern, shared `BackendRegistry` and device handles).
 
 **Existing code to reuse**:
 - `ndtensors-rs/crates/ndtensors/src/backend/faer_interop.rs` — faer bridge pattern
@@ -587,12 +652,14 @@ pub fn dual_contract<T: Scalar>(
 
 ### Backend Loading API
 
+Wraps `t4a-device`'s `BackendRegistry` as C functions:
+
 ```c
-// Load GPU vendor library at runtime (Julia/Python provides path)
+// Load GPU vendor library at runtime (wraps t4a-device)
 int t4a_backend_load_cutensor(const char* libcutensor_path);
 int t4a_backend_load_hiptensor(const char* libhiptensor_path);
 
-// Query available devices
+// Query available devices (wraps t4a-device)
 int t4a_backend_device_count(void);
 int t4a_backend_device_type(int device_id);  // 0=CPU, 1=CUDA, 2=ROCm
 ```
@@ -800,7 +867,7 @@ This happens **after t4a core is stable**.
 ### After Phase 1 (core):
 ```bash
 cd t4a-rs && cargo test -p t4a-scalar -p t4a-view -p t4a-buffer \
-    -p t4a-algebra -p t4a-tensorops -p t4a-einsum -p t4a-tensor
+    -p t4a-algebra -p t4a-device -p t4a-tensorops -p t4a-einsum -p t4a-tensor
 ```
 - Unit tests for all Tensor operations
 - Zero-copy verification: assert same Arc pointer after view ops
@@ -841,8 +908,8 @@ cd t4a-rs && cargo test -p t4a-scalar -p t4a-view -p t4a-buffer \
 | opteinsum | `strided-rs/strided-opteinsum/src/lib.rs` | **Absorbed** into t4a-einsum |
 | Algebra traits | `omeinsum-rs/src/algebra/` | **Absorbed** into t4a-algebra |
 | Backend trait | `omeinsum-rs/src/backend/traits.rs` | **Absorbed** into t4a-tensorops (evolved into TensorOps) |
-| cuTENSOR wrapper | `omeinsum-rs/src/backend/cuda/cutensor/` | **Absorbed** into t4a-tensorops (GPU vtable) |
-| PlanCache | `omeinsum-rs/src/backend/cuda/cutensor/contract.rs` | **Absorbed** into t4a-tensorops |
+| cuTENSOR wrapper | `omeinsum-rs/src/backend/cuda/cutensor/` | **Absorbed** into t4a-device (GPU vtable, BackendRegistry) |
+| PlanCache | `omeinsum-rs/src/backend/cuda/cutensor/contract.rs` | **Absorbed** into t4a-device |
 | faer bridge | `ndtensors-rs/.../faer_interop.rs` | t4a-linalg |
 | contract_vjp | `ndtensors-rs/.../contract/naive.rs` | t4a-autograd |
 | TrackedTensor | `ndtensors-rs/.../autodiff/tensor.rs` | t4a-autograd |
