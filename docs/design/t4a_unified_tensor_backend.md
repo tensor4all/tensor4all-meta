@@ -300,17 +300,15 @@ backend and map/reduce operations.
 
 ### t4a-view
 
-Renamed from strided-view. No functional changes.
+Thin re-export wrapper around `strided-view`. Defines no new types.
 
 ```rust
-pub struct StridedArrayView<'a, T, const N: usize, Op = Identity> { ... }
-pub struct StridedArrayViewMut<'a, T, const N: usize, Op = Identity> { ... }
+pub use strided_view::{StridedArrayView, StridedArrayViewMut};
 ```
 
-- Borrows `&'a [T]` — pure CPU, no GPU dependencies
-- Const-generic rank `N`
-- Zero-copy: slice, reshape, permute, transpose
-- Lazy element operations via `Op` type parameter (Identity, Conj, Transpose, Adjoint)
+This exists so that downstream t4a crates depend on `t4a-view` (not
+`strided-view` directly), keeping the dependency graph consistent if
+the re-export mapping ever changes.
 
 ### t4a-buffer
 
