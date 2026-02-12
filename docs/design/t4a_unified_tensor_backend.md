@@ -23,7 +23,7 @@ Four independent Rust projects exist in tensor4all:
 
 These have significant overlap (3 einsum implementations, 3 scalar trait definitions, 3 dense storage types) yet critical gaps. The goal is to unify into a coherent, reusable tensor backend library **t4a-\*** that:
 
-1. Integrates strided-rs and omeinsum-rs components directly (not as external dependencies)
+1. Integrates selected strided-rs add-on crates (`strided-einsum2`, `strided-opteinsum`) and omeinsum-rs components into `t4a-*` (while keeping `strided-traits/view/kernel` as external foundational dependencies)
 2. Provides unified CPU/GPU dispatch via a **cuTENSOR/hipTensor-compatible protocol** (`t4a-tensorops`)
 3. Supports both NVIDIA and AMD GPUs via **runtime library loading** (no compile-time vendor lock-in)
 4. Supports complex numbers natively
@@ -112,7 +112,7 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 ## Crate Structure
 
 ```
-strided-rs/ (independent workspace) ── Stays as-is ───────
+strided-rs/ (independent workspace) ── Foundation crates stay as-is ───────
 │  General-purpose strided array library. No BLAS dependency.
 │  Can be used standalone by projects other than t4a.
 │
@@ -882,7 +882,7 @@ block indices and fusion-rule-constrained block structure.
 |---|---|
 | `float_add` | `TensorOps::elementwise_binary` (BinaryOp::Add) |
 | `float_matmul` | `TensorOps::contract` |
-| `float_exp/sin/...` | `TensorOps::permute` with UnaryOp (Exp, etc.) |
+| `float_exp/sin/...` | `TensorOps::permute` with `UnaryOp` on identity permutation (same shape/order) |
 | `float_reshape/permute/slice` | Metadata-only (zero-copy) |
 | `float_sum/sum_dim` | `TensorOps::reduce` (ReduceOp::Add) |
 
