@@ -13,7 +13,7 @@
 ```
 Layer 4: Einsum Engine (t4a-einsum)
          High-level API on Tensor<T>
-         Absorbs strided-einsum2 + strided-opteinsum + omeinsum-rs
+         Absorbs strided-opteinsum + omeinsum-rs
          N-ary contraction tree, algebra dispatch, backward
          ↓
 Layer 3: Tensor Type (t4a-tensor)
@@ -22,6 +22,7 @@ Layer 3: Tensor Type (t4a-tensor)
          ↓
 Layer 2: Tensor Operation Protocol (t4a-tensorops)
          "Tensor BLAS": cuTENSOR / hipTensor compatible unified trait
+         Absorbs strided-einsum2 (binary contraction pipeline)
          TensorOps on raw Storage<T> + TensorMeta
          5 operations: Contraction, Reduction, Permutation,
                        ElementwiseBinary, ElementwiseTrinary

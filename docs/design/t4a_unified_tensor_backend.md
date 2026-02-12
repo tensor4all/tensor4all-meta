@@ -120,7 +120,8 @@ strided-rs/ (independent workspace) ── Stays as-is ───────
 └── strided-kernel       # Cache-optimized map/reduce/broadcast kernels
 
 t4a-rs/ (workspace) ── Dense array foundation ────────────
-│  Depends on strided-rs. Absorbs strided-einsum2 + strided-opteinsum + omeinsum-rs.
+│  Depends on strided-rs. Absorbs strided-einsum2 + strided-opteinsum + omeinsum-rs
+│  (einsum2 → t4a-tensorops, opteinsum + omeinsum → t4a-einsum).
 │
 ├── t4a-scalar           # Extends strided-traits: adds Scalar (division, complex), RealScalar
 ├── t4a-view             # Re-exports strided-view (thin wrapper)
@@ -133,13 +134,14 @@ t4a-rs/ (workspace) ── Dense array foundation ──────────
 ├── t4a-tensorops        # "Tensor BLAS" — low-level cuTENSOR-compatible protocol
 │                        #   TensorOps trait on raw Storage<T> + TensorMeta
 │                        #   Plan-based execution, CPU/GPU backends (GPU via t4a-device)
+│                        #   Absorbs strided-einsum2 (binary contraction pipeline)
 │                        #   CPU impl uses strided-kernel internally
 ├── t4a-tensor           # Tensor<T> = DataBuffer + shape + strides + offset
 │                        #   Zero-copy view ops: slice, permute, transpose, expand, flip
 │                        #   Bridge to strided-rs via as_strided_view()
 │                        #   Custom closures: use strided-kernel directly via as_strided_view()
 ├── t4a-einsum           # High-level einsum on Tensor<T>
-│                        #   Absorbs strided-einsum2 + strided-opteinsum + omeinsum-rs
+│                        #   Absorbs strided-opteinsum + omeinsum-rs
 │                        #   N-ary optimizer, algebra dispatch, backward
 │                        #   Internally delegates binary contraction to t4a-tensorops
 ├── t4a-linalg           # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER via t4a-device)
@@ -216,9 +218,9 @@ burn-t4a ← t4a-tensor, burn-backend
 | t4a-buffer | New | CPU/GPU buffer abstraction |
 | t4a-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types |
 | t4a-device | **New** | GPU device discovery: `Device` enum, `BackendRegistry`, `TensorLibVtable`, libloading/dlopen |
-| t4a-tensorops | **New** (replaces t4a-backend) | "Tensor BLAS": low-level `TensorOps` trait on raw Storage + TensorMeta; GPU dispatch via t4a-device |
+| t4a-tensorops | **Absorbs** strided-einsum2 | "Tensor BLAS": low-level `TensorOps` trait on raw Storage + TensorMeta; binary contraction pipeline; GPU dispatch via t4a-device |
 | t4a-tensor | New | `Tensor<T>` type + zero-copy view ops + `as_strided_view()` bridge |
-| t4a-einsum | **Absorbs** strided-einsum2 + strided-opteinsum + omeinsum-rs | High-level einsum on `Tensor<T>`; internally delegates to `TensorOps` |
+| t4a-einsum | **Absorbs** strided-opteinsum + omeinsum-rs | High-level einsum on `Tensor<T>`; N-ary tree, algebra dispatch, backward; delegates binary contraction to `TensorOps` |
 | t4a-linalg | ndtensors-rs (linalg) | Port SVD/QR/eigen |
 | t4a-autograd | ndtensors-rs (autodiff) | Port TrackedTensor/DualTensor |
 | t4a-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | Port C FFI + backend loading API |
@@ -573,8 +575,8 @@ strided_kernel::zip_map2_into(&mut out_view, &a_view, &b_view, |a, b| a * b + 1.
 
 ### t4a-einsum
 
-High-level einsum API on `Tensor<T>`. Merges strided-einsum2 +
-strided-opteinsum + omeinsum-rs.
+High-level einsum API on `Tensor<T>`. Merges strided-opteinsum +
+omeinsum-rs. (strided-einsum2 is absorbed by t4a-tensorops.)
 
 Internally extracts `storage()` and `meta()` from each `Tensor<T>` and
 delegates binary contractions to `t4a-tensorops` (`TensorOps::contract`).
@@ -1011,8 +1013,8 @@ cd t4a-rs && cargo test -p t4a-scalar -p t4a-view -p t4a-buffer \
 | ElementOp | `strided-rs/strided-traits/src/element_op.rs` | Stays in strided-rs; t4a-scalar depends on it |
 | StridedArrayView | `strided-rs/strided-view/src/view.rs` | Stays in strided-rs; t4a-view re-exports |
 | map/reduce kernels | `strided-rs/strided-kernel/src/` | Stays in strided-rs; t4a-tensorops depends on it |
-| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | **Absorbed** into t4a-einsum |
-| BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | **Absorbed** into t4a-einsum |
+| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | **Absorbed** into t4a-tensorops (CPU contraction) |
+| BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | **Absorbed** into t4a-tensorops (GEMM dispatch) |
 | opteinsum | `strided-rs/strided-opteinsum/src/lib.rs` | **Absorbed** into t4a-einsum |
 | Algebra traits | `omeinsum-rs/src/algebra/` | **Absorbed** into t4a-algebra |
 | Backend trait | `omeinsum-rs/src/backend/traits.rs` | **Absorbed** into t4a-tensorops (evolved into TensorOps) |
