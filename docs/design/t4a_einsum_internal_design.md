@@ -663,6 +663,44 @@ High-level einsum API on `Tensor<T>`. Internally extracts `storage()`
 and `meta()` from each tensor and delegates binary contractions to
 `t4a-tensorops`.
 
+### Public API
+
+Three variants, all same-type `T` (no mixed-type inputs):
+
+```rust
+/// Allocating — returns new tensor.
+pub fn einsum<T: ScalarBase>(
+    inputs: &[&Tensor<T>],
+    input_labels: &[&[i32]],
+    output_labels: &[i32],
+) -> Result<Tensor<T>>;
+
+/// Into — writes into caller's output buffer.
+/// Supports accumulation: output = α·einsum(...) + β·output.
+pub fn einsum_into<T: ScalarBase>(
+    inputs: &[&Tensor<T>],
+    input_labels: &[&[i32]],
+    output: &mut Tensor<T>,
+    output_labels: &[i32],
+    alpha: T, beta: T,
+) -> Result<()>;
+
+/// Owned — consumes input tensors, reuses their buffers as
+/// intermediate workspace (avoids allocation when Arc refcount == 1).
+pub fn einsum_owned_into<T: ScalarBase>(
+    inputs: Vec<Tensor<T>>,
+    input_labels: &[&[i32]],
+    output: &mut Tensor<T>,
+    output_labels: &[i32],
+    alpha: T, beta: T,
+) -> Result<()>;
+```
+
+`einsum` is a convenience wrapper over `einsum_into` with `alpha=1, beta=0`.
+`einsum_owned_into` enables the buffer pool optimization: when
+`Arc::strong_count() == 1`, input buffers are recycled as workspace
+for intermediate contractions in the N-ary tree.
+
 ### N-ary Contraction
 
 For N > 2 inputs, the einsum engine uses contraction tree optimization
@@ -670,13 +708,6 @@ For N > 2 inputs, the einsum engine uses contraction tree optimization
 each pairwise contraction through `TensorOps::contract`.
 
 ```rust
-/// High-level API on Tensor<T>.
-pub fn einsum<T: ScalarBase>(
-    inputs: &[&Tensor<T>],
-    input_labels: &[&[i32]],
-    output_labels: &[i32],
-) -> Result<Tensor<T>>;
-
 /// Internal: dispatches to TensorOps backend.
 fn einsum_impl<B: TensorOps, T: OpScalar>(
     backend: &B,

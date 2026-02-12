@@ -561,17 +561,61 @@ strided_kernel::zip_map2_into(&mut out_view, &a_view, &b_view, |a, b| a * b + 1.
 High-level einsum API on `Tensor<T>`. Merges strided-einsum2 +
 strided-opteinsum + omeinsum-rs.
 
+Internally extracts `storage()` and `meta()` from each `Tensor<T>` and
+delegates binary contractions to `t4a-tensorops` (`TensorOps::contract`).
+
+> **Detailed design**: See [t4a Einsum Internal Design](./t4a_einsum_internal_design.md)
+> for the CPU contraction pipeline (6-step strided-einsum2), CPU plan
+> internals, algebra dispatch, and backward pass design.
+
+**API variants**:
+
 ```rust
-/// High-level einsum on Tensor<T>.
+/// Allocating — returns new tensor.
 pub fn einsum<T: ScalarBase>(
     inputs: &[&Tensor<T>],
     input_labels: &[&[i32]],
     output_labels: &[i32],
 ) -> Result<Tensor<T>>;
+
+/// Into — writes into caller's output buffer.
+/// Supports accumulation: output = α·einsum(...) + β·output.
+pub fn einsum_into<T: ScalarBase>(
+    inputs: &[&Tensor<T>],
+    input_labels: &[&[i32]],
+    output: &mut Tensor<T>,
+    output_labels: &[i32],
+    alpha: T,
+    beta: T,
+) -> Result<()>;
+
+/// Owned — consumes input tensors, reuses their buffers as
+/// intermediate workspace (avoids allocation when Arc refcount == 1).
+/// Also writes into caller's output buffer.
+pub fn einsum_owned_into<T: ScalarBase>(
+    inputs: Vec<Tensor<T>>,
+    input_labels: &[&[i32]],
+    output: &mut Tensor<T>,
+    output_labels: &[i32],
+    alpha: T,
+    beta: T,
+) -> Result<()>;
 ```
 
-Internally extracts `storage()` and `meta()` from each `Tensor<T>` and
-delegates binary contractions to `t4a-tensorops` (`TensorOps::contract`).
+| Variant | Allocation | Buffer reuse | Use case |
+|---------|-----------|-------------|----------|
+| `einsum` | New output | No | Simple one-off |
+| `einsum_into` | No output alloc | No input reuse | Hot loops, accumulation |
+| `einsum_owned_into` | No output alloc | Input buffers → pool | Maximum performance (TCI inner loops) |
+
+**Owned-input optimization**: When `inputs` are passed by value and
+`Arc::strong_count() == 1`, the engine can reuse their `DataBuffer` as
+workspace for intermediate contractions (buffer pool pattern from
+strided-opteinsum). This avoids allocation in N-ary contraction trees.
+
+**No mixed-type inputs**: All inputs and output must be the same type `T`.
+This keeps the API type-safe and avoids enum dispatch overhead. If mixed
+types are needed, the caller converts explicitly before calling einsum.
 
 The einsum engine handles:
 - N-ary contraction tree optimization (omeco: Greedy, TreeSA)
@@ -579,10 +623,6 @@ The einsum engine handles:
 - Backward pass (VJP/JVP for automatic differentiation)
 - Single-tensor fast paths (trace, partial trace, permutation-only)
 - Buffer pool for intermediate tensor reuse
-
-> **Detailed design**: See [t4a Einsum Internal Design](./t4a_einsum_internal_design.md)
-> for the CPU contraction pipeline (6-step strided-einsum2), CPU plan
-> internals, algebra dispatch, and backward pass design.
 
 **CPU contraction pipeline** (from strided-einsum2, via `TensorOps`):
 1. Trace pre-reduction — sum out axes before GEMM
@@ -598,12 +638,24 @@ The einsum engine handles:
 - `MaxPlus<f64>` → tropical-gemm (SIMD, future)
 - GPU tensors → cuTENSOR/hipTensor via `TensorOps`
 
-**User API**:
+**User examples**:
 ```rust
-// High-level (most users)
+// Simple (allocating)
 let c = einsum(&[&a, &b], &[&modes_a, &modes_b], &modes_c)?;
 
-// Low-level (fine-grained control via t4a-tensorops)
+// Hot loop with pre-allocated output
+let mut c = Tensor::zeros(&output_shape);
+for step in 0..n_steps {
+    einsum_into(&[&a, &b], &[&modes_a, &modes_b], &mut c, &modes_c, 1.0, 0.0)?;
+}
+
+// Maximum performance: consume temporaries, reuse buffers
+einsum_owned_into(
+    vec![temp_a, temp_b], &[&modes_a, &modes_b],
+    &mut result, &modes_c, 1.0, 0.0,
+)?;
+
+// Low-level (fine-grained control via t4a-tensorops directly)
 let plan = backend.create_contraction_plan::<f64>(
     &a.meta(), &modes_a, &b.meta(), &modes_b, &c.meta(), &modes_c,
 )?;
