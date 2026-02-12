@@ -606,7 +606,7 @@ pub fn einsum_owned_into<T: ScalarBase>(
 |---------|-----------|-------------|----------|
 | `einsum` | New output | No | Simple one-off |
 | `einsum_into` | No output alloc | No input reuse | Hot loops, accumulation |
-| `einsum_owned_into` | No output alloc | Input buffers → pool | Maximum performance (TCI inner loops) |
+| `einsum_owned_into` | No output alloc | Input buffers → pool | Maximum performance |
 
 **Owned-input optimization**: When `inputs` are passed by value and
 `Arc::strong_count() == 1`, the engine can reuse their `DataBuffer` as
