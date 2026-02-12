@@ -271,11 +271,12 @@ pub trait Scalar: ScalarBase + ElementOpApply
     fn is_complex() -> bool;
 }
 
-pub trait RealScalar: Scalar<Real = Self> + PartialOrd {
-    fn sqrt(self) -> Self;
-    fn abs(self) -> Self;
-    fn to_f64(self) -> f64;
-    fn from_f64(val: f64) -> Self;
+/// Numeric conversions delegated to num-traits (FromPrimitive, ToPrimitive).
+pub trait RealScalar: Scalar<Real = Self> + PartialOrd
+    + num_traits::Float + num_traits::FromPrimitive + num_traits::ToPrimitive
+{
+    // sqrt, abs, etc. provided by num_traits::Float
+    // from_f64, to_f64, etc. provided by FromPrimitive/ToPrimitive (fallible)
 }
 ```
 
