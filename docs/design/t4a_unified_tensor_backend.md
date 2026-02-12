@@ -547,6 +547,20 @@ impl<T: ScalarBase> Tensor<T> {
 
 **Zero-copy view operations**: permute, transpose, slice, select, expand, flip, diagonal — all modify metadata only.
 
+**Type casting** (allocates new buffer):
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    /// Lossless cast (compile error if lossy).
+    /// e.g. f32→f64, f64→Complex64.
+    pub fn cast<U: ScalarBase + From<T>>(&self) -> Tensor<U>;
+
+    /// Lossy cast (`as` semantics, like numpy astype).
+    /// e.g. f64→f32, Complex64→f64.
+    pub fn cast_as<U: ScalarBase>(&self) -> Tensor<U>
+    where T: num_traits::AsPrimitive<U>;
+}
+```
+
 For **custom element-wise closures** (arbitrary user functions not in the
 `TensorOps` enum), use strided-kernel directly via `as_strided_view()`:
 
