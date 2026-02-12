@@ -6,7 +6,7 @@
 > proposed by the Grenoble team (TheoryPheliqs) as a tensor toolkit with
 > hybrid indexing for tensor networks. Adopting `tensoratu` would change the
 > crate prefix from `t4a-*` to `tensoratu-*` (e.g., `tensoratu-view`,
-> `tensoratu-omeinsum`). Throughout this document, `t4a-*` should be read
+> `tensoratu-einsum`). Throughout this document, `t4a-*` should be read
 > as a placeholder for whatever prefix is ultimately chosen.
 
 > **Companion documents**:
@@ -74,11 +74,12 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
-│ Shared Infrastructure: GPU Device Layer (t4a-device)         │
+│ Shared Infrastructure: Device Layer (t4a-device)               │
 │   Device enum (Cpu, Cuda(id), Rocm(id))                      │
-│   BackendRegistry (runtime GPU discovery via dlopen)         │
-│   TensorLibVtable (cuTENSOR / hipTensor function pointers)   │
-│   Caller-injected .so paths (no auto-search)                 │
+│   BackendRegistry (CPU + GPU management)                     │
+│   CpuBackend (future: per-core thread pools, NUMA)           │
+│   GpuBackend + TensorLibVtable (cuTENSOR / hipTensor)        │
+│   Runtime GPU discovery via dlopen, caller-injected .so paths│
 │   Used by: t4a-buffer, t4a-tensorops, t4a-linalg             │
 └──────────────────────┬──────────────────────────────────────┘
                        │
@@ -127,9 +128,11 @@ t4a-rs/ (workspace) ── Dense array foundation ──────────
 ├── t4a-view             # Re-exports strided-view (thin wrapper)
 ├── t4a-buffer           # DataBuffer<T>: CPU Vec<T> / GPU device memory (Arc-based COW)
 ├── t4a-algebra          # Semiring/Algebra traits, tropical types (MaxPlus, MinPlus, MaxMul)
-├── t4a-device           # GPU device discovery and handle management
-│                        #   Device enum, BackendRegistry, TensorLibVtable
-│                        #   Runtime dlopen (libloading), caller-injected .so paths
+├── t4a-device           # Device management (CPU + GPU)
+│                        #   Device enum, BackendRegistry, CpuBackend, GpuBackend
+│                        #   TensorLibVtable, runtime dlopen (libloading)
+│                        #   CPU: per-core thread pools (future), NUMA (future)
+│                        #   GPU: caller-injected .so paths
 │                        #   Shared by t4a-tensorops, t4a-linalg, t4a-buffer
 ├── t4a-tensorops        # "Tensor BLAS" — low-level cuTENSOR-compatible protocol
 │                        #   TensorOps trait on raw Storage<T> + TensorMeta
@@ -175,7 +178,8 @@ t4a-scalar (← strided-traits)
     ↓                              ↓
 t4a-view (← strided-view)    t4a-buffer ←── t4a-device
     │                              │          (Device enum, BackendRegistry,
-    ├──── t4a-algebra ←────────────┤           TensorLibVtable, libloading)
+    ├──── t4a-algebra ←────────────┤           CpuBackend, GpuBackend,
+    │                              │           TensorLibVtable, libloading)
     │                              │               │
     ↓                              ↓               │
 t4a-tensorops ←────────────────────┘               │
@@ -217,7 +221,7 @@ burn-t4a ← t4a-tensor, burn-backend
 | t4a-view | Depends on strided-view | Thin re-export wrapper |
 | t4a-buffer | New | CPU/GPU buffer abstraction |
 | t4a-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types |
-| t4a-device | **New** | GPU device discovery: `Device` enum, `BackendRegistry`, `TensorLibVtable`, libloading/dlopen |
+| t4a-device | **New** | Device management: `Device` enum, `BackendRegistry`, `CpuBackend`, `GpuBackend`, `TensorLibVtable`, libloading/dlopen. CPU: future per-core thread pools. |
 | t4a-tensorops | **Absorbs** strided-einsum2 | "Tensor BLAS": low-level `TensorOps` trait on raw Storage + TensorMeta; binary contraction pipeline; GPU dispatch via t4a-device |
 | t4a-tensor | New | `Tensor<T>` type + zero-copy view ops + `as_strided_view()` bridge |
 | t4a-einsum | **Absorbs** strided-opteinsum + omeinsum-rs | High-level einsum on `Tensor<T>`; N-ary tree, algebra dispatch, backward; delegates binary contraction to `TensorOps` |
@@ -359,7 +363,9 @@ Also provides:
 
 ### t4a-device
 
-**Shared GPU infrastructure** used by `t4a-buffer`, `t4a-tensorops`, and `t4a-linalg`.
+**Shared device infrastructure** used by `t4a-buffer`, `t4a-tensorops`, and `t4a-linalg`.
+Manages both CPU and GPU backends. CPU backends are also managed here
+(e.g., per-core thread pools, NUMA-aware allocation in the future).
 
 ```rust
 /// Device identifier.
@@ -371,9 +377,15 @@ pub enum Device {
 }
 ```
 
-**BackendRegistry** — runtime GPU discovery via dlopen:
+**BackendRegistry** — manages all devices (CPU + GPU) via runtime discovery:
 
 ```rust
+/// CPU backend configuration (defined in t4a-device).
+/// TensorOps implementation for CpuBackend lives in t4a-tensorops.
+pub struct CpuBackend {
+    // Future: per-core thread pool, NUMA-aware allocation
+}
+
 pub struct BackendRegistry {
     cpu: CpuBackend,
     gpu: Option<GpuBackend>,
@@ -641,7 +653,8 @@ The einsum engine handles:
 - Single-tensor fast paths (trace, partial trace, permutation-only)
 - Buffer pool for intermediate tensor reuse
 
-**CPU contraction pipeline** (from strided-einsum2, via `TensorOps`):
+**CPU contraction pipeline** (implemented in t4a-tensorops, from strided-einsum2;
+t4a-einsum delegates binary contractions here via `TensorOps::contract`):
 1. Trace pre-reduction — sum out axes before GEMM
 2. Permutation to canonical order — `A[left, contracted, batch]`
 3. Element-wise bypass — Hadamard product skips GEMM
@@ -950,7 +963,7 @@ Users extend the system at the appropriate level:
 | Level | What to implement | Result |
 |-------|-------------------|--------|
 | `ScalarBase` only | Basic trait bounds | Einsum via naive loop, map/reduce work |
-| `ScalarBase` + custom GEMM | `BgemmBackend<T>` in t4a-einsum | Einsum uses custom GEMM (permute→reshape→bgemm) |
+| `ScalarBase` + custom GEMM | `BgemmBackend<T>` in t4a-tensorops | Einsum uses custom GEMM (permute→reshape→bgemm) |
 | Full `TensorOps` | Custom backend implementation | Complete control over all operations |
 
 **Algebra-aware dispatch** in t4a-einsum:

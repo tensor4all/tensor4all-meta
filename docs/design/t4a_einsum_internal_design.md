@@ -30,13 +30,14 @@ Layer 2: Tensor Operation Protocol (t4a-tensorops)
          CPU impl depends on strided-kernel (stays in strided-rs)
          GPU dispatch via t4a-device
          ↓
-Shared:  GPU Device Layer (t4a-device)
-         Device enum, BackendRegistry, TensorLibVtable
-         Runtime GPU discovery (dlopen, caller-injected .so paths)
+Shared:  Device Layer (t4a-device)
+         Device enum, BackendRegistry, CpuBackend, GpuBackend
+         TensorLibVtable, runtime GPU discovery (dlopen)
+         CPU: future per-core thread pools, NUMA
          Used by: t4a-buffer, t4a-tensorops, t4a-linalg
          ↓
 Layer 1: Backend Implementations
-         CPU: strided-einsum2 pipeline (faer or cblas)
+         CPU: GEMM backends (faer or cblas), strided-kernel
          NVIDIA: cuTENSOR via t4a-device (dlopen)
          AMD: hipTensor via t4a-device (dlopen)
 
@@ -262,11 +263,12 @@ reuse it.
 
 ## Layer 1: Backend Implementations
 
-### Runtime Backend Discovery (via t4a-device)
+### Backend Discovery (via t4a-device)
 
-GPU device discovery, handle management, and vendor library loading
-are provided by the **t4a-device** crate — a shared infrastructure
-crate used by `t4a-buffer`, `t4a-tensorops`, and `t4a-linalg`.
+Device management (CPU configuration and GPU discovery), handle management,
+and vendor library loading are provided by the **t4a-device** crate — a
+shared infrastructure crate used by `t4a-buffer`, `t4a-tensorops`, and
+`t4a-linalg`.
 
 The caller (Julia, Python, or standalone Rust) provides the path to
 the shared library. This avoids:
@@ -276,6 +278,13 @@ the shared library. This avoids:
 
 ```rust
 // t4a-device crate
+
+/// CPU backend configuration (defined in t4a-device).
+/// TensorOps implementation for CpuBackend lives in t4a-tensorops.
+pub struct CpuBackend {
+    // Future: per-core thread pool, NUMA-aware allocation
+}
+
 pub struct BackendRegistry {
     cpu: CpuBackend,
     gpu: Option<GpuBackend>,
@@ -473,7 +482,7 @@ The CPU backend implements `TensorOps` using strided-rs kernels.
 #### GEMM Backend Selection (Compile-Time)
 
 ```toml
-# t4a-einsum/Cargo.toml
+# t4a-tensorops/Cargo.toml
 [features]
 default = ["faer"]
 faer = ["dep:faer"]
@@ -495,7 +504,7 @@ downstream user:
 - **`cblas-src`**: Links OpenBLAS or MKL (standalone Rust apps)
 - **`cblas-inject`**: Julia injects `libblastrampoline` symbols at runtime
 
-`t4a-einsum` depends only on `cblas-sys` function signatures and is
+`t4a-tensorops` depends only on `cblas-sys` function signatures and is
 agnostic to the CBLAS provider.
 
 #### CPU Contraction Plan
@@ -826,7 +835,8 @@ t4a-scalar
     ↓                              ↓
 t4a-view                      t4a-buffer ←── t4a-device
     │                              │          (Device enum, BackendRegistry,
-    ├──── t4a-algebra ←────────────┤           TensorLibVtable, libloading)
+    ├──── t4a-algebra ←────────────┤           CpuBackend, GpuBackend,
+    │                              │           TensorLibVtable, libloading)
     │                              │               │
     ↓                              ↓               │
 t4a-tensorops ←────────────────────┘               │
