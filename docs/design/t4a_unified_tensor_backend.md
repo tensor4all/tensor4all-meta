@@ -44,16 +44,24 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Layer 4: Application                                         │
+│ Layer 5: Application                                         │
 │   tensor4all-rs (TCI, Quantics, MPS algorithms)              │
 │   Julia / Python (C API via t4a-capi)                        │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
-│ Layer 3: Einsum Engine (t4a-einsum)                        │
+│ Layer 4: Einsum Engine (t4a-einsum)                        │
+│   High-level API on Tensor<T>                                │
 │   N-ary contraction tree optimization (omeco)                │
 │   Algebra dispatch (Standard, Tropical, custom)              │
 │   Backward pass (VJP/JVP)                                    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│ Layer 3: Tensor Type (t4a-tensor)                            │
+│   Tensor<T> = DataBuffer + shape + strides                   │
+│   Zero-copy view ops: slice, permute, transpose, expand      │
+│   Bridge to strided-rs via as_strided_view()                 │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -122,16 +130,18 @@ t4a-rs/ (workspace) ── Dense array foundation ──────────
 │                        #   Device enum, BackendRegistry, TensorLibVtable
 │                        #   Runtime dlopen (libloading), caller-injected .so paths
 │                        #   Shared by t4a-tensorops, t4a-linalg, t4a-buffer
-├── t4a-tensorops        # Unified tensor operation protocol (TensorOps trait)
-│                        #   cuTENSOR/hipTensor compatible API (enum-based, 5 operations)
-│                        #   Plan-based execution (GPU dispatch via t4a-device)
+├── t4a-tensorops        # "Tensor BLAS" — low-level cuTENSOR-compatible protocol
+│                        #   TensorOps trait on raw Storage<T> + TensorMeta
+│                        #   Plan-based execution, CPU/GPU backends (GPU via t4a-device)
 │                        #   CPU impl uses strided-kernel internally
-│                        #   Custom closures: use strided-kernel directly via Tensor::as_strided_view()
-├── t4a-einsum           # Einsum engine (absorbs strided-einsum2 + strided-opteinsum + omeinsum-rs)
+├── t4a-tensor           # Tensor<T> = DataBuffer + shape + strides + offset
+│                        #   Zero-copy view ops: slice, permute, transpose, expand, flip
+│                        #   Bridge to strided-rs via as_strided_view()
+│                        #   Custom closures: use strided-kernel directly via as_strided_view()
+├── t4a-einsum           # High-level einsum on Tensor<T>
+│                        #   Absorbs strided-einsum2 + strided-opteinsum + omeinsum-rs
 │                        #   N-ary optimizer, algebra dispatch, backward
-│                        #   Delegates binary contraction to t4a-tensorops
-├── t4a-tensor           # Tensor<T> = DataBuffer + sizes + strides + offset
-│                        #   User-facing API
+│                        #   Internally delegates binary contraction to t4a-tensorops
 ├── t4a-linalg           # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER via t4a-device)
 ├── t4a-autograd         # TrackedTensor, DualTensor, VJP/JVP
 ├── t4a-capi             # C FFI (tensor ops + VJP/JVP + backend loading)
@@ -168,20 +178,25 @@ t4a-view (← strided-view)    t4a-buffer ←── t4a-device
     ↓                              ↓               │
 t4a-tensorops ←────────────────────┘               │
     │  (← strided-kernel, ← t4a-device)           │
-    │  (TensorOps trait, plan-based execution)     │
+    │  ("Tensor BLAS": TensorOps on Storage<T>     │
+    │   + TensorMeta, plan-based execution)        │
     ↓                                              │
-t4a-einsum (absorbs strided-einsum2 +              │
-    │       strided-opteinsum + omeinsum-rs)       │
-    ↓                                              │
-t4a-tensor                                         │
-                   │                               │
-         ┌─────────┼───────────┐                   │
-         ↓         ↓           ↓                   │
-   t4a-linalg  t4a-autograd  t4a-capi             │
-   (← faer,        │          (wraps t4a-device    │
-    ← t4a-device)  │           for library loading)│
-         │         │                               │
-         └─────────┴───────────────────────────────┘
+t4a-tensor (Tensor<T> = DataBuffer + shape         │
+    │       + strides, zero-copy view ops)         │
+    │                                              │
+    ├──────────────────────────────┐               │
+    ↓                              ↓               │
+t4a-einsum                   t4a-linalg            │
+    │  (high-level einsum      (← faer,            │
+    │   on Tensor<T>)           ← t4a-device)      │
+    │                              │               │
+    ├──────────────────────────────┤               │
+    ↓                              ↓               │
+t4a-autograd                 t4a-capi              │
+                              (wraps t4a-device     │
+                               for library loading) │
+                                   │               │
+                                   └───────────────┘
 
 [separate workspace: t4a-structured-rs]
 t4a-blocksparse ← t4a-tensor
@@ -201,9 +216,9 @@ burn-t4a ← t4a-tensor, burn-backend
 | t4a-buffer | New | CPU/GPU buffer abstraction |
 | t4a-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types |
 | t4a-device | **New** | GPU device discovery: `Device` enum, `BackendRegistry`, `TensorLibVtable`, libloading/dlopen |
-| t4a-tensorops | **New** (replaces t4a-backend) | cuTENSOR/hipTensor-compatible `TensorOps` trait (enum-based only); CPU impl uses strided-kernel; GPU dispatch via t4a-device |
-| t4a-einsum | **Absorbs** strided-einsum2 + strided-opteinsum + omeinsum-rs | Merge all einsum; delegates binary contraction to `TensorOps` |
-| t4a-tensor | New | Tensor<T> API over DataBuffer |
+| t4a-tensorops | **New** (replaces t4a-backend) | "Tensor BLAS": low-level `TensorOps` trait on raw Storage + TensorMeta; GPU dispatch via t4a-device |
+| t4a-tensor | New | `Tensor<T>` type + zero-copy view ops + `as_strided_view()` bridge |
+| t4a-einsum | **Absorbs** strided-einsum2 + strided-opteinsum + omeinsum-rs | High-level einsum on `Tensor<T>`; internally delegates to `TensorOps` |
 | t4a-linalg | ndtensors-rs (linalg) | Port SVD/QR/eigen |
 | t4a-autograd | ndtensors-rs (autodiff) | Port TrackedTensor/DualTensor |
 | t4a-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | Port C FFI + backend loading API |
@@ -473,23 +488,8 @@ registry.load_hiptensor("/path/to/libhiptensor.so")?; // AMD
 ```
 
 **Elementwise design**: enum-based only (`UnaryOp`, `BinaryOp`), cuTENSOR-compatible,
-works on CPU/GPU uniformly. No closure-based API in `TensorOps`.
-
-For **custom element-wise closures** (arbitrary user functions not in the enum),
-use strided-kernel directly via `Tensor::as_strided_view()`:
-
-```rust
-// TensorOps: enum-based, works on CPU and GPU
-backend.elementwise_binary(&plan, alpha, &a, gamma, &c, &mut d)?;
-
-// Custom closures: use strided-kernel directly (CPU only)
-let a_view = tensor_a.as_strided_view();
-let b_view = tensor_b.as_strided_view();
-strided_kernel::zip_map2_into(&mut out_view, &a_view, &b_view, |a, b| a * b + 1.0);
-```
-
-strided-kernel provides cache-optimized iteration (dimension fusion, L1 blocking,
-importance-weighted ordering) and is always available as an independent dependency.
+works on CPU/GPU uniformly. No closure-based API in `TensorOps`. For custom
+closures, see `Tensor::as_strided_view()` in the t4a-tensor section below.
 
 **No Metal (Apple GPU) support**: M-series CPUs are fast enough for our
 workloads (tensor network algorithms). Metal lacks a cuTENSOR-equivalent
@@ -509,11 +509,70 @@ When `cblas` is selected, the CBLAS provider is supplied downstream:
 - `cblas-src`: links OpenBLAS or MKL (standalone Rust apps)
 - `cblas-inject`: Julia injects `libblastrampoline` symbols at runtime
 
+### t4a-tensor
+
+`Tensor<T>` is the core data type, defined **before** the einsum engine.
+It wraps a `DataBuffer<T>` with shape/stride metadata and provides
+zero-copy view operations.
+
+```rust
+pub struct Tensor<T: ScalarBase> {
+    buffer: DataBuffer<T>,
+    sizes: SmallVec<[usize; 6]>,
+    strides: SmallVec<[isize; 6]>,
+    storage_offset: usize,
+}
+
+/// Metadata extracted from Tensor, for passing to TensorOps.
+pub struct TensorMeta {
+    pub shape: SmallVec<[usize; 6]>,
+    pub strides: SmallVec<[usize; 6]>,
+}
+
+impl<T: ScalarBase> Tensor<T> {
+    pub fn meta(&self) -> TensorMeta { ... }
+    pub fn storage(&self) -> &DataBuffer<T> { ... }
+    pub fn storage_mut(&mut self) -> &mut DataBuffer<T> { ... }
+}
+```
+
+**Bridge to t4a-view** (CPU path):
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    pub fn as_strided_view(&self) -> StridedArrayView<'_, T, N, Identity>;
+    pub fn as_strided_view_mut(&mut self) -> StridedArrayViewMut<'_, T, N>;
+}
+```
+
+**Zero-copy view operations**: permute, transpose, slice, select, expand, flip, diagonal — all modify metadata only.
+
+For **custom element-wise closures** (arbitrary user functions not in the
+`TensorOps` enum), use strided-kernel directly via `as_strided_view()`:
+
+```rust
+// Custom closures: use strided-kernel directly (CPU only)
+let a_view = tensor_a.as_strided_view();
+let b_view = tensor_b.as_strided_view();
+strided_kernel::zip_map2_into(&mut out_view, &a_view, &b_view, |a, b| a * b + 1.0);
+```
+
 ### t4a-einsum
 
-Merges strided-einsum2 + strided-opteinsum + omeinsum-rs.
+High-level einsum API on `Tensor<T>`. Merges strided-einsum2 +
+strided-opteinsum + omeinsum-rs.
 
-**Delegates binary contraction to `t4a-tensorops`** (`TensorOps::contract`).
+```rust
+/// High-level einsum on Tensor<T>.
+pub fn einsum<T: ScalarBase>(
+    inputs: &[&Tensor<T>],
+    input_labels: &[&[i32]],
+    output_labels: &[i32],
+) -> Result<Tensor<T>>;
+```
+
+Internally extracts `storage()` and `meta()` from each `Tensor<T>` and
+delegates binary contractions to `t4a-tensorops` (`TensorOps::contract`).
+
 The einsum engine handles:
 - N-ary contraction tree optimization (omeco: Greedy, TreeSA)
 - Algebra-aware dispatch (Standard → GEMM, Tropical → naive/SIMD)
@@ -539,34 +598,16 @@ The einsum engine handles:
 - `MaxPlus<f64>` → tropical-gemm (SIMD, future)
 - GPU tensors → cuTENSOR/hipTensor via `TensorOps`
 
-### t4a-tensor
-
+**User API**:
 ```rust
-pub struct Tensor<T: ScalarBase> {
-    buffer: DataBuffer<T>,
-    sizes: SmallVec<[usize; 6]>,
-    strides: SmallVec<[isize; 6]>,
-    storage_offset: usize,
-}
-```
+// High-level (most users)
+let c = einsum(&[&a, &b], &[&modes_a, &modes_b], &modes_c)?;
 
-**Bridge to t4a-view** (CPU path):
-```rust
-impl<T: ScalarBase> Tensor<T> {
-    pub fn as_strided_view(&self) -> StridedArrayView<'_, T, N, Identity>;
-    pub fn as_strided_view_mut(&mut self) -> StridedArrayViewMut<'_, T, N>;
-}
-```
-
-**Zero-copy view operations**: permute, transpose, slice, select, expand, flip, diagonal — all modify metadata only.
-
-**Einsum** (delegates to t4a-einsum):
-```rust
-pub fn einsum<T: ScalarBase>(
-    inputs: &[&Tensor<T>],
-    input_labels: &[&[i32]],
-    output_labels: &[i32],
-) -> Result<Tensor<T>>;
+// Low-level (fine-grained control via t4a-tensorops)
+let plan = backend.create_contraction_plan::<f64>(
+    &a.meta(), &modes_a, &b.meta(), &modes_b, &c.meta(), &modes_c,
+)?;
+backend.contract(&plan, 1.0, a.storage(), b.storage(), 0.0, c.storage_mut())?;
 ```
 
 ---

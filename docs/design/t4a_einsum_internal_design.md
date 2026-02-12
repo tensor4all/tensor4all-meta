@@ -11,12 +11,18 @@
 ## Layered Architecture
 
 ```
-Layer 3: Einsum Engine (t4a-einsum)
+Layer 4: Einsum Engine (t4a-einsum)
+         High-level API on Tensor<T>
          Absorbs strided-einsum2 + strided-opteinsum + omeinsum-rs
          N-ary contraction tree, algebra dispatch, backward
          ↓
+Layer 3: Tensor Type (t4a-tensor)
+         Tensor<T> = DataBuffer + shape + strides
+         Zero-copy view ops, as_strided_view() bridge
+         ↓
 Layer 2: Tensor Operation Protocol (t4a-tensorops)
-         cuTENSOR / hipTensor compatible unified trait
+         "Tensor BLAS": cuTENSOR / hipTensor compatible unified trait
+         TensorOps on raw Storage<T> + TensorMeta
          5 operations: Contraction, Reduction, Permutation,
                        ElementwiseBinary, ElementwiseTrinary
          Plan-based execution
@@ -42,11 +48,14 @@ Foundation: strided-rs (independent workspace, not absorbed)
 
 GiggleLiu proposed that strided-rs should serve as a "tensor-level BLAS" —
 the CPU counterpart to cuTENSOR — with standardized interfaces applicable to
-CPU, GPU, and tropical tensors. We introduce `t4a-tensorops` as a unified
-protocol layer that abstracts over all backends using cuTENSOR-compatible
-operator enums exclusively. Custom closure-based operations (which cannot
-run on GPU) are not part of `TensorOps`; users access strided-kernel
-directly for those.
+CPU, GPU, and tropical tensors. We introduce `t4a-tensorops` as a low-level
+"Tensor BLAS" protocol layer that abstracts over all backends using
+cuTENSOR-compatible operator enums on raw `Storage<T>` + `TensorMeta`.
+`t4a-tensor` defines the `Tensor<T>` type above it, and `t4a-einsum`
+provides a high-level einsum API on `Tensor<T>`, internally delegating
+binary contractions to `t4a-tensorops`. Custom closure-based operations
+(which cannot run on GPU) are not part of `TensorOps`; users access
+strided-kernel directly via `Tensor::as_strided_view()`.
 
 This is motivated by the observation that **cuTENSOR and hipTensor have
 nearly identical APIs** (AMD intentionally mirrors NVIDIA's API). A single
@@ -648,7 +657,11 @@ call strided-kernel directly via `Tensor::as_strided_view()`. See the
 
 ---
 
-## Layer 3: Einsum Engine (t4a-einsum)
+## Layer 4: Einsum Engine (t4a-einsum)
+
+High-level einsum API on `Tensor<T>`. Internally extracts `storage()`
+and `meta()` from each tensor and delegates binary contractions to
+`t4a-tensorops`.
 
 ### N-ary Contraction
 
@@ -657,7 +670,15 @@ For N > 2 inputs, the einsum engine uses contraction tree optimization
 each pairwise contraction through `TensorOps::contract`.
 
 ```rust
-pub fn einsum<B: TensorOps, T: OpScalar>(
+/// High-level API on Tensor<T>.
+pub fn einsum<T: ScalarBase>(
+    inputs: &[&Tensor<T>],
+    input_labels: &[&[i32]],
+    output_labels: &[i32],
+) -> Result<Tensor<T>>;
+
+/// Internal: dispatches to TensorOps backend.
+fn einsum_impl<B: TensorOps, T: OpScalar>(
     backend: &B,
     inputs: &[(&B::Storage<T>, &TensorMeta, &[i32])],
     output_modes: &[i32],
@@ -778,20 +799,25 @@ t4a-view                      t4a-buffer ←── t4a-device
     ↓                              ↓               │
 t4a-tensorops ←────────────────────┘               │
     │  (← strided-kernel, ← t4a-device)           │
-    │  (TensorOps trait, plan-based execution)     │
+    │  ("Tensor BLAS": TensorOps on Storage<T>     │
+    │   + TensorMeta, plan-based execution)        │
     ↓                                              │
-t4a-einsum (N-ary einsum, algebra dispatch,        │
-    │       backward pass)                         │
-    ↓                                              │
-t4a-tensor                                         │
-                   │                               │
-         ┌─────────┼───────────┐                   │
-         ↓         ↓           ↓                   │
-   t4a-linalg  t4a-autograd  t4a-capi             │
-   (← faer,        │          (wraps t4a-device    │
-    ← t4a-device)  │           for library loading)│
-         │         │                               │
-         └─────────┴───────────────────────────────┘
+t4a-tensor (Tensor<T> = DataBuffer + shape         │
+    │       + strides, zero-copy view ops)         │
+    │                                              │
+    ├──────────────────────────────┐               │
+    ↓                              ↓               │
+t4a-einsum                   t4a-linalg            │
+    │  (high-level einsum      (← faer,            │
+    │   on Tensor<T>)           ← t4a-device)      │
+    │                              │               │
+    ├──────────────────────────────┤               │
+    ↓                              ↓               │
+t4a-autograd                 t4a-capi              │
+                              (wraps t4a-device     │
+                               for library loading) │
+                                   │               │
+                                   └───────────────┘
 ```
 
 ---
