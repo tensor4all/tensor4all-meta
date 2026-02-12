@@ -131,7 +131,7 @@ t4a-rs/ (workspace) ── Dense array foundation ──────────
 ├── t4a-device           # Device management (CPU + GPU)
 │                        #   Device enum, BackendRegistry, CpuBackend, GpuBackend
 │                        #   TensorLibVtable, runtime dlopen (libloading)
-│                        #   CPU: per-core thread pools (future), NUMA (future)
+│                        #   CPU: faer/rayon thread pools (future), NUMA (future)
 │                        #   GPU: caller-injected .so paths
 │                        #   Shared by t4a-tensorops, t4a-linalg, t4a-buffer
 ├── t4a-tensorops        # "Tensor BLAS" — low-level cuTENSOR-compatible protocol
@@ -221,7 +221,7 @@ burn-t4a ← t4a-tensor, burn-backend
 | t4a-view | Depends on strided-view | Thin re-export wrapper |
 | t4a-buffer | New | CPU/GPU buffer abstraction |
 | t4a-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types |
-| t4a-device | **New** | Device management: `Device` enum, `BackendRegistry`, `CpuBackend`, `GpuBackend`, `TensorLibVtable`, libloading/dlopen. CPU: future per-core thread pools. |
+| t4a-device | **New** | Device management: `Device` enum, `BackendRegistry`, `CpuBackend`, `GpuBackend`, `TensorLibVtable`, libloading/dlopen. CPU: future faer/rayon thread pools. |
 | t4a-tensorops | **Absorbs** strided-einsum2 | "Tensor BLAS": low-level `TensorOps` trait on raw Storage + TensorMeta; binary contraction pipeline; GPU dispatch via t4a-device |
 | t4a-tensor | New | `Tensor<T>` type + zero-copy view ops + `as_strided_view()` bridge |
 | t4a-einsum | **Absorbs** strided-opteinsum + omeinsum-rs | High-level einsum on `Tensor<T>`; N-ary tree, algebra dispatch, backward; delegates binary contraction to `TensorOps` |
@@ -365,7 +365,7 @@ Also provides:
 
 **Shared device infrastructure** used by `t4a-buffer`, `t4a-tensorops`, and `t4a-linalg`.
 Manages both CPU and GPU backends. CPU backends are also managed here
-(e.g., per-core thread pools, NUMA-aware allocation in the future).
+(e.g., faer/rayon-based per-core thread pools, NUMA-aware allocation in the future).
 
 ```rust
 /// Device identifier.
@@ -383,7 +383,8 @@ pub enum Device {
 /// CPU backend configuration (defined in t4a-device).
 /// TensorOps implementation for CpuBackend lives in t4a-tensorops.
 pub struct CpuBackend {
-    // Future: per-core thread pool, NUMA-aware allocation
+    // Future: faer/rayon-based per-core thread pool, NUMA-aware allocation
+    // faer's Parallelism controls rayon thread pool partitioning
 }
 
 pub struct BackendRegistry {

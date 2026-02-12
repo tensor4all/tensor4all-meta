@@ -33,7 +33,7 @@ Layer 2: Tensor Operation Protocol (t4a-tensorops)
 Shared:  Device Layer (t4a-device)
          Device enum, BackendRegistry, CpuBackend, GpuBackend
          TensorLibVtable, runtime GPU discovery (dlopen)
-         CPU: future per-core thread pools, NUMA
+         CPU: future faer/rayon thread pools, NUMA
          Used by: t4a-buffer, t4a-tensorops, t4a-linalg
          ↓
 Layer 1: Backend Implementations
@@ -282,7 +282,8 @@ the shared library. This avoids:
 /// CPU backend configuration (defined in t4a-device).
 /// TensorOps implementation for CpuBackend lives in t4a-tensorops.
 pub struct CpuBackend {
-    // Future: per-core thread pool, NUMA-aware allocation
+    // Future: faer/rayon-based per-core thread pool, NUMA-aware allocation
+    // faer's Parallelism controls rayon thread pool partitioning
 }
 
 pub struct BackendRegistry {
