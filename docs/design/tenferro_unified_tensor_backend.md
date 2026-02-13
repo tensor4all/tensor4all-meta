@@ -1100,19 +1100,8 @@ Readers should also accept `"real"`/`"imag"` for interoperability.
 When HDF5 2.0.0 native complex types are available, prefer those.
 
 **Memory order**: HDF5 internally stores N-D data in row-major (C) order.
-The `memory_order` attribute records the **writer's logical convention**:
-
-| `memory_order` | Writer | HDF5 dataset shape | Reader action |
-|---------------|--------|-------------------|---------------|
-| `"column_major"` | Julia/Fortran/tenferro | dimensions reversed in HDF5 | h5py: transpose; HDF5.jl: direct |
-| `"row_major"` | Python/C | dimensions as-is in HDF5 | h5py: direct; HDF5.jl: transpose |
-
-Default: `"column_major"` (tenferro and Julia native convention).
-
-In practice, HDF5.jl already handles the dimension reversal transparently
-when writing Julia arrays, so Julia readers see the correct shape. The
-`memory_order` attribute ensures that readers in other languages know
-whether to transpose.
+The `memory_order` attribute records the writer's logical convention
+(`"column_major"` or `"row_major"`). Details are an open issue (see below).
 
 ### Rust API
 
@@ -1135,6 +1124,37 @@ let b: Tensor<f64> = read_tensor(&file, "group/tensor_name")?;
 - Uses `hdf5-rt` (dlopen): no compile-time HDF5 linking required
 - Julia integration: Julia provides `libhdf5` path at runtime (same
   as cuTENSOR/hipTensor injection pattern)
+
+### Open Issues
+
+1. **Memory order and dimension convention**: HDF5 is internally
+   row-major. Column-major writers (Julia, Fortran, tenferro) must
+   choose between:
+   - **Option A**: Follow HDF5.jl — reverse dimensions in HDF5
+     (`[3,4]` Julia → `[4,3]` HDF5). Julia↔Julia round-trip is
+     transparent, but h5py sees reversed shape.
+   - **Option B**: Write dimensions as-is (`[3,4]` → `[3,4]` HDF5).
+     h5py sees correct shape, but raw byte order is column-major
+     inside a row-major container. Requires `memory_order` attribute
+     for correct interpretation.
+   - **Option C**: Always materialize as row-major before writing.
+     All readers see consistent data, but Julia/Fortran writers pay
+     a transpose cost.
+
+2. **Complex number field names**: `"r"`/`"i"` is proposed, but
+   HDF5 2.0.0 will introduce native complex types. Migration strategy
+   (when to switch, backward compat) is TBD.
+
+3. **Structured tensor formats**: How to store `BlockSparseTensor`,
+   `DiagTensor` in HDF5. ITensors.jl uses a `"type"` attribute
+   (`"Dense{Float64}"`, `"BlockSparse{Float64}"`) with type-specific
+   sub-structure. Whether to adopt a similar convention or define a
+   new one is TBD.
+
+4. **ITensors.jl format compatibility**: ITensors.jl stores data as
+   1D flat arrays with separate Index metadata. Our N-D dataset format
+   is intentionally different for broader interoperability. Whether to
+   provide an ITensors.jl compatibility reader/writer is TBD.
 
 ---
 
