@@ -1666,10 +1666,34 @@ impl<T: ScalarBase> Tensor<T> {
    chains independent einsum calls manually. The Tensor-embedded event
    approach handles both cases.
 
+#### Applicability beyond GPU: multi-threaded CPU parallelism
+
+The `CompletionEvent` mechanism is not limited to GPU/accelerator backends.
+It applies equally to **multi-threaded CPU execution**:
+
+- **Contraction tree parallelism**: Independent subtrees of an N-ary einsum
+  can be dispatched to different CPU threads. Each subtree result is a
+  `Tensor` with a `CompletionEvent` that completes when the thread finishes.
+  The parent contraction waits on both child events before proceeding.
+
+- **User-level parallelism**: Independent `einsum` calls can run on separate
+  threads. Passing the resulting `Tensor` (with pending event) to a
+  subsequent `einsum` automatically chains via event dependencies — no
+  explicit synchronization needed.
+
+- **Device model extension**: `Device::Cpu` could be extended in the future
+  (e.g., `Device::Cpu { pool: ThreadPoolId }`) to control which thread pool
+  executes an operation, while the `CompletionEvent` mechanism remains
+  unchanged.
+
+This means the same `einsum` API and `wait()` / `is_ready()` interface
+covers GPU async, CPU multi-thread, and potentially other execution models
+(FPGA, distributed) without modification.
+
 **Current status**: The `event` field is present in the POC `Tensor<T>`
 struct as `Option<CompletionEvent>` (placeholder type) to signal the design
-intent. Actual async execution will be implemented with accelerator
-backends.
+intent. Actual async execution will be implemented with accelerator and
+multi-threaded backends.
 
 ### einsum_into (implemented in POC)
 
