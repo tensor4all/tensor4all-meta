@@ -171,6 +171,7 @@ tenferro-rs/ (future additions) ────────────────
 │
 ├── tenferro-linalg      # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER via device layer)
 ├── tenferro-autograd    # TrackedTensor, DualTensor, VJP/JVP
+├── tenferro-hdf5        # Tensor<T> HDF5 I/O (via hdf5-rt, dlopen)
 ├── tenferro-capi        # C FFI (tensor ops + VJP/JVP + backend loading)
 └── burn-tenferro        # Burn Backend bridge [OPTIONAL, for NN only]
 
@@ -245,6 +246,8 @@ tenferro-prims          tenferro-tensor
 tenferro-  tenferro-     tenferro-
  linalg     autograd       capi
 
+tenferro-hdf5 ← tenferro-tensor, hdf5-rt (dlopen)
+
 [separate crate: tenferro-tropical]
 ← tenferro-algebra, tenferro-prims
 impl TensorPrims<MaxPlus> for CpuBackend (orphan OK)
@@ -270,6 +273,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 | tenferro-linalg | ndtensors-rs (linalg) | Port SVD/QR/eigen [future] |
 | tenferro-autograd | ndtensors-rs (autodiff) | Port TrackedTensor/DualTensor [future] |
 | tenferro-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | Port C FFI + backend loading API [future] |
+| tenferro-hdf5 | New, uses hdf5-rt | Tensor\<T\> HDF5 I/O via runtime library loading [future] |
 | burn-tenferro | New | Burn Backend bridge [future] |
 | **tenferro-structured-rs (separate workspace):** | | |
 | tenferro-blocksparse | ndtensors-rs (blocksparse) | Port with single-buffer layout [future] |
@@ -1035,6 +1039,32 @@ using cuTENSOR_jll
 ccall((:tenferro_backend_load_cutensor, libtenferro), Cint, (Cstring,),
       cuTENSOR_jll.libcutensor_path)
 ```
+
+---
+
+## Future Phase: tenferro-hdf5
+
+HDF5 I/O for `Tensor<T>`, using [`hdf5-rt`](https://github.com/tensor4all/hdf5-rt)
+(runtime library loading via dlopen — same pattern as GPU backends).
+
+```rust
+use tenferro_hdf5::{read_tensor, write_tensor};
+
+// Write tensor to HDF5 file
+let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+write_tensor(&file, "group/dataset", &a)?;
+
+// Read tensor from HDF5 file
+let b: Tensor<f64> = read_tensor(&file, "group/dataset")?;
+```
+
+**Design notes**:
+- Separate crate to avoid mandatory C library dependency
+- Uses `hdf5-rt` (dlopen): no compile-time HDF5 linking required
+- Julia integration: Julia provides `libhdf5` path at runtime (same
+  as cuTENSOR/hipTensor injection pattern)
+- Stores shape, strides, and data type as HDF5 attributes alongside
+  the raw data array
 
 ---
 
