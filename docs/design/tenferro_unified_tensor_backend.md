@@ -1460,17 +1460,31 @@ pub enum MemorySpace {
 // Tensor stores where its data lives:
 pub struct Tensor<T> { ..., memory_space: MemorySpace }
 
-// Compute target is separate, specified at operation time:
-pub enum ComputeTarget {
-    Auto,                          // infer from operands' memory spaces
-    Device(usize),                 // specific GPU
-    Distributed(Vec<usize>),       // split across multiple GPUs
+// Compute target is separate, specified at operation time.
+// Opaque struct with constructors — internal representation is private
+// so new capabilities can be added without breaking existing code.
+pub struct ComputeTarget { /* private fields */ }
+
+impl ComputeTarget {
+    /// Infer optimal device(s) from operands' memory spaces.
+    /// This is the default — most user code never needs to specify a target.
+    pub fn auto() -> Self;
+
+    /// Run on a specific GPU.
+    pub fn gpu(device_id: usize) -> Self;
+
+    // Future additions (non-breaking — no existing code changes):
+    // pub fn gpus(ids: &[usize]) -> Self;          // multi-GPU distribution
+    // pub fn prefer_gpu() -> Self;                  // GPU if available, else CPU
+    // pub fn cpu_and_gpu(threads: usize, gpu: usize) -> Self;  // heterogeneous
 }
 
-// Usage:
-einsum("ij,jk->ik", &[&a, &b])?;                    // Auto
-einsum_on(ComputeTarget::Device(0), "ij,jk->ik", &[&a, &b])?;  // explicit
-einsum_on(ComputeTarget::Distributed(vec![0, 1]), ...)?;         // multi-GPU
+// Usage — future-proof:
+einsum("ij,jk->ik", &[&a, &b])?;                                // Auto (99% of cases)
+einsum_on(ComputeTarget::gpu(0), "ij,jk->ik", &[&a, &b])?;     // explicit GPU
+// When multi-GPU support is added, existing code above still compiles.
+// New code can use:
+// einsum_on(ComputeTarget::gpus(&[0, 1]), "ij,jk->ik", &[&a, &b])?;
 ```
 
 **Open questions**:
