@@ -151,7 +151,7 @@ tenferro-rs/ (workspace) ── 4 POC crates ───────────�
 │                        #   Constructors: zeros, ones, from_slice, from_strided_array
 │                        #   View ops: view(), view_mut(), permute, broadcast,
 │                        #     diagonal, reshape (zero-copy metadata ops)
-│                        #   Data ops: contiguous, is_contiguous
+│                        #   Data ops: contiguous, into_contiguous, is_contiguous
 │                        #   Depends on: tenferro-device, strided-view, strided-traits, num-traits
 │
 └── tenferro-einsum      # High-level einsum on Tensor<T>
@@ -159,8 +159,9 @@ tenferro-rs/ (workspace) ── 4 POC crates ───────────�
                          #   Parenthesized order: einsum("ij,(jk,kl)->il", &[...])
                          #   Subscripts struct (new for integers, parse for strings)
                          #   ContractionTree (optimize, from_pairs)
-                         #   Three API levels: einsum, einsum_with_subscripts,
-                         #     einsum_with_plan
+                         #   Allocating: einsum, einsum_with_subscripts, einsum_with_plan
+                         #   Accumulating: einsum_into, einsum_with_subscripts_into,
+                         #     einsum_with_plan_into (alpha/beta scaling)
                          #   Depends on: tenferro-device, tenferro-prims,
                          #     tenferro-tensor, strided-traits
 ```
@@ -693,6 +694,11 @@ impl<T: ScalarBase> Tensor<T> {
     /// Return a contiguous copy in the given memory order.
     pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
 
+    /// Consume this tensor and return a contiguous version.
+    /// If already contiguous in the requested order, returns self
+    /// without copying or allocating.
+    pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T>;
+
     /// Check if tensor data is contiguous in memory.
     pub fn is_contiguous(&self) -> bool;
 }
@@ -854,8 +860,8 @@ let c = einsum_with_plan(&tree, &[&a, &b]).unwrap();
 - String-first API: `einsum("ij,jk->ik", &[&a, &b])` instead of integer labels as primary
 - Parenthesized contraction order in string notation
 - `Subscripts::parse()` handles string-to-integer conversion
-- Three API levels (`einsum`, `einsum_with_subscripts`, `einsum_with_plan`) instead of `einsum`/`einsum_into`/`einsum_owned_into` variants
-- No `einsum_into` or `einsum_owned_into` (accumulation, buffer reuse) yet -- future optimization
+- Six API functions: three allocating (`einsum`, `einsum_with_subscripts`, `einsum_with_plan`) and three accumulating (`einsum_into`, `einsum_with_subscripts_into`, `einsum_with_plan_into`) with BLAS-style `alpha`/`beta` scaling
+- `Tensor::into_contiguous(self)` consuming variant avoids allocation when already contiguous
 - No mixed-type inputs: all inputs and output must be the same type `T`
 
 ---
@@ -1552,12 +1558,15 @@ einsum_on(ComputeTarget::Gpu { device_id: 0 }, "ij,jk->ik", &[&a, &b])?; // spec
   [`rsmpi-rt`](https://github.com/tensor4all/rsmpi-rt)-based
   node-level distribution in tensor4all-rs?
 
-### einsum_into and einsum_owned_into (future optimization)
+### einsum_into (implemented in POC)
 
-The POC provides only allocating `einsum` variants. Future optimization will add:
+The POC includes accumulating `einsum_*_into` variants alongside the allocating versions:
 
-- **`einsum_into`** -- writes into a caller-provided output buffer, supports accumulation
+- **`einsum_into`**, **`einsum_with_subscripts_into`**, **`einsum_with_plan_into`** --
+  write into a caller-provided output buffer with BLAS-style accumulation
   (`output = alpha * einsum(...) + beta * output`). Avoids output allocation in hot loops.
+
+**Not yet implemented** (future optimization):
 - **`einsum_owned_into`** -- consumes input tensors, reuses their buffers as intermediate
   workspace when reference count is 1 (buffer pool pattern from strided-opteinsum).
   Maximum performance for N-ary contraction trees.

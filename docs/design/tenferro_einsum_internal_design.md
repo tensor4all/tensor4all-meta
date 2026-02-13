@@ -655,9 +655,45 @@ The three levels form a progressive optimization ladder:
 | `einsum_with_subscripts` | String parsing | Same pattern, varying shapes |
 | `einsum_with_plan` | Parsing + tree optimization | Hot loops, fixed shapes |
 
-**Future API extensions**: `einsum_into` and `einsum_owned_into` are not in
-the POC but are planned for accumulation (`C = alpha * einsum + beta * C`)
-and buffer reuse optimizations.
+Each allocating function has an accumulating counterpart that writes into
+a pre-allocated output buffer with BLAS-style scaling:
+
+```rust
+/// output = alpha * einsum(operands) + beta * output
+pub fn einsum_into<T: ScalarBase + HasAlgebra>(
+    subscripts: &str,
+    operands: &[&Tensor<T>],
+    alpha: T,
+    beta: T,
+    output: &mut Tensor<T>,
+) -> Result<()>;
+
+pub fn einsum_with_subscripts_into<T: ScalarBase + HasAlgebra>(
+    subscripts: &Subscripts,
+    operands: &[&Tensor<T>],
+    alpha: T,
+    beta: T,
+    output: &mut Tensor<T>,
+) -> Result<()>;
+
+pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
+    tree: &ContractionTree,
+    operands: &[&Tensor<T>],
+    alpha: T,
+    beta: T,
+    output: &mut Tensor<T>,
+) -> Result<()>;
+```
+
+| Level | Avoids | Use case |
+|-------|--------|----------|
+| `einsum_into` | Nothing | One-off contractions with accumulation |
+| `einsum_with_subscripts_into` | String parsing | Same pattern, varying shapes, with accumulation |
+| `einsum_with_plan_into` | Parsing + tree optimization | Hot loops with pre-allocated output buffer |
+
+The `_into` variants are critical for hot-loop performance: they eliminate
+output allocation per call and enable accumulation semantics (`beta != 0`)
+that directly map to the underlying `TensorPrims::execute` alpha/beta pattern.
 
 ### Subscripts
 
