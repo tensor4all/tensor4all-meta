@@ -1175,14 +1175,14 @@ use mdarray::Array;
 
 impl<T: ScalarBase> From<&Tensor<T>> for Array<T, Dyn> {
     fn from(tensor: &Tensor<T>) -> Self {
-        let t = tensor.contiguous(MemoryOrder::ColumnMajor);
+        let t = tensor.contiguous(MemoryOrder::RowMajor);  // mdarray is row-major
         Array::from_slice(t.as_slice(), t.dims())
     }
 }
 
 impl<T: ScalarBase> From<&Array<T, Dyn>> for Tensor<T> {
     fn from(array: &Array<T, Dyn>) -> Self {
-        Tensor::from_slice(array.as_slice(), array.shape(), MemoryOrder::ColumnMajor).unwrap()
+        Tensor::from_slice(array.as_slice(), array.shape(), MemoryOrder::RowMajor).unwrap()
     }
 }
 ```
@@ -1210,8 +1210,8 @@ impl<T: ScalarBase> From<&ArrayD<T>> for Tensor<T> {
 
 **Design notes**:
 - Each bridge crate depends only on `tenferro-tensor` + the target library
-- Memory order is handled automatically: mdarray uses column-major,
-  ndarray uses row-major
+- Memory order is handled automatically: both mdarray and ndarray use
+  row-major; tenferro defaults to column-major, so conversions transpose
 - `contiguous()` call ensures data is laid out correctly before copy
 - No feature flags on `tenferro-tensor` — dependencies are fully isolated
 
