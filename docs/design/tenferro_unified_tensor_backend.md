@@ -1738,7 +1738,7 @@ pub struct TensorView<'a, T: ScalarBase> {
     strides: Vec<isize>,
     offset: isize,
     device: Device,
-    // No event — wait() is called when creating the view.
+    event: Option<&'a CompletionEvent>,  // Propagated from source (borrowed)
 }
 ```
 
@@ -1831,6 +1831,52 @@ let d = einsum_owned("ij,jk->ik", vec![a, b])?;
 | Runtime overhead | Zero | Atomic refcount on clone/drop |
 | Rust idiom | `String`/`&str`, `Vec`/`&[T]` | `Arc<T>` |
 | Misuse detection | Compile error | Silent fallback to allocation |
+
+#### Coherence with async execution (CompletionEvent propagation)
+
+TensorView must propagate `CompletionEvent` from the source Tensor to
+preserve accelerator pipelines. Without propagation, creating a view
+would force a CPU wait, breaking GPU-to-GPU operation chaining:
+
+```
+// BAD: wait on view creation breaks pipeline
+GPU: [== einsum A ==]              [== einsum B ==]
+CPU:                  [wait][permute]
+```
+
+With event propagation through TensorView:
+
+```
+// GOOD: event propagates, no CPU wait
+GPU: [== einsum A ==][== einsum B ==]
+CPU: [permute (metadata only)]
+```
+
+**Design rule — when to wait vs. propagate:**
+
+| Operation | Event handling | Rationale |
+|-----------|--------------|-----------|
+| `permute`, `broadcast`, `diagonal`, `view()` | **Propagate** event as `&'a CompletionEvent` | Metadata-only; data not accessed |
+| `einsum` (taking TensorView operands) | **Detect** operand events → set up stream dependency | Accelerator-to-accelerator chaining |
+| `to_tensor`, `contiguous`, `conj` | **Wait**, then read data | CPU must access data |
+| `view_mut` | **Wait**, then grant `&mut` | Exclusive CPU access required |
+
+Example: GPU pipeline preserved through views:
+
+```rust
+let a = einsum_gpu("ij,jk->ik", &[x.view(), y.view()])?;
+//  → GPU submit, a.event = Some(event_1), returns immediately
+
+let at = a.permute(&[1, 0])?;
+//  → at.event = Some(&event_1) — no CPU wait, metadata only
+
+let b = einsum_gpu("ij,jk->ik", &[at, z.view()])?;
+//  → detects at.event → sets up stream dependency on event_1
+//  → GPU submit, b.event = Some(event_2), returns immediately
+
+// CPU data access triggers synchronization
+let data = b.to_tensor();  // wait(event_2), then copy
+```
 
 The Arc approach remains viable if lifetime ergonomics prove too burdensome
 in practice. Switching from TensorView to Arc is backward-compatible for
