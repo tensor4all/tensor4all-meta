@@ -31,6 +31,15 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 - **Algebra-parameterized dispatch**: `TensorPrims<A>` is parameterized by algebra (e.g., `Standard`, `MaxPlus`). The `HasAlgebra` trait on scalar types enables automatic algebra inference: `Tensor<f64>` → `Standard`, `Tensor<MaxPlus<f64>>` → `MaxPlus`. Users can extend the system by defining new algebras in their own crates (orphan rule compatible).
 - **Runtime GPU discovery**: GPU vendor libraries (cuTENSOR, hipTensor) are loaded at runtime via `dlopen`. The caller (Julia, Python) provides the `.so` path. No Cargo feature flags for GPU vendor selection.
 - **Plan-based execution**: All operations follow the cuTENSOR pattern of `PrimDescriptor` → plan → execute. Plans cache expensive analysis (GPU kernel selection, CPU fusability checks) for reuse. Extended operations (contract, elementwise_mul) are dynamically queried via `has_extension_for::<T>()`.
+- **Opaque structs for extensible types**: Public types that users may inspect and that are likely to gain new variants in the future use **opaque structs with constructors and query methods** instead of enums. This ensures that adding new variants (e.g., new memory types, new compute targets) is a non-breaking change — existing user code compiles without modification. Types that are internal to the engine or only constructed-and-passed by users (never matched on) may remain enums.
+
+  | Type | Pattern | Rationale |
+  |------|---------|-----------|
+  | `MemorySpace` | Opaque struct | Users inspect where data lives; new memory types expected (GPU cluster, RDMA, ...) |
+  | `ComputeTarget` | Opaque struct | Users specify where to compute; new targets expected (multi-GPU, heterogeneous, ...) |
+  | `OpDescriptor` | Enum | Engine-internal; matched only inside tenferro-prims/tenferro-einsum |
+  | `Extension` | Enum | Constructed and passed by users, never matched on |
+  | `ReduceOp` | Enum | Small closed set of mathematical operations |
 
 ---
 
