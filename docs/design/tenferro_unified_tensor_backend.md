@@ -1426,6 +1426,53 @@ The current design targets single-GPU execution. For large-scale tensor
 network computations, distributing contractions across multiple GPUs
 is desirable.
 
+**Architectural issue — Device vs Memory Space**:
+
+The current `Device` enum conflates two distinct concepts:
+
+1. **Memory space**: Where the tensor's data buffer physically resides
+   (CPU RAM, GPU 0 VRAM, GPU 1 VRAM, ...)
+2. **Compute device**: Where the operation is executed
+
+With NVLink P2P (up to 1.8 TB/s on Blackwell), a GPU can directly
+access another GPU's memory without copying. This means:
+- Tensor A in GPU 0 VRAM + Tensor B in GPU 1 VRAM → contraction can
+  run on GPU 0 (P2P read B), on GPU 1 (P2P read A), or distributed
+  across both.
+- The `Tensor` should specify the **memory space** where its buffer
+  resides, not the compute device.
+- Computation should **default** to the optimal device(s) inferred
+  from the operands' memory spaces (e.g., if both tensors are on
+  GPU 0, run on GPU 0).
+- The user can **explicitly override** the compute device(s).
+
+```rust
+// Current design (conflates memory and compute):
+pub enum Device { Cpu, Cuda { device_id: usize }, Hip { device_id: usize } }
+
+// Possible future design:
+pub enum MemorySpace {
+    CpuRam,
+    GpuVram { device_id: usize },  // specific GPU's VRAM
+    // Unified { ... },            // CUDA unified memory (future)
+}
+
+// Tensor stores where its data lives:
+pub struct Tensor<T> { ..., memory_space: MemorySpace }
+
+// Compute target is separate, specified at operation time:
+pub enum ComputeTarget {
+    Auto,                          // infer from operands' memory spaces
+    Device(usize),                 // specific GPU
+    Distributed(Vec<usize>),       // split across multiple GPUs
+}
+
+// Usage:
+einsum("ij,jk->ik", &[&a, &b])?;                    // Auto
+einsum_on(ComputeTarget::Device(0), "ij,jk->ik", &[&a, &b])?;  // explicit
+einsum_on(ComputeTarget::Distributed(vec![0, 1]), ...)?;         // multi-GPU
+```
+
 **Open questions**:
 - **Batch-level parallelism**: Distribute independent batch slices of
   `batched_gemm` across GPUs (simplest, no inter-GPU communication
@@ -1435,10 +1482,8 @@ is desirable.
   then reduce). Requires inter-GPU communication (NCCL/RCCL).
 - **Contraction tree parallelism**: In N-ary einsum, independent
   sub-trees can execute on different GPUs concurrently.
-- **API design**: Should multi-GPU be transparent (auto-partitioning)
-  or explicit (`Device::Cuda { device_id }` per tensor)?
-- **Memory management**: Tensors may need to be moved or replicated
-  across GPU memories. How does this interact with `DataBuffer<T>`?
+- **P2P capability detection**: Not all GPU pairs support P2P (depends
+  on NVLink/PCIe topology). Need runtime query for P2P availability.
 - **Interaction with MPI**: For multi-node multi-GPU (e.g., 4 nodes ×
   4 GPUs), how does GPU-level distribution interact with
   [`rsmpi-rt`](https://github.com/tensor4all/rsmpi-rt)-based
