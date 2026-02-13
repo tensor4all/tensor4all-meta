@@ -1681,10 +1681,14 @@ It applies equally to **multi-threaded CPU execution**:
   subsequent `einsum` automatically chains via event dependencies — no
   explicit synchronization needed.
 
-- **Device model extension**: `Device::Cpu` could be extended in the future
-  (e.g., `Device::Cpu { pool: ThreadPoolId }`) to control which thread pool
-  executes an operation, while the `CompletionEvent` mechanism remains
-  unchanged.
+- **Device model extension**: `Device::Cpu` will be extended to carry a
+  `device_id` (e.g., `Cpu { device_id: usize }`) matching the pattern of
+  `Cuda` and `Hip` variants. `device_id: 0` represents the default global
+  thread pool (all cores). Higher IDs can map to Rayon `ThreadPool`
+  instances bound to specific core sets via `core_affinity`, enabling
+  NUMA-aware and cache-local execution. Constructor functions
+  (`Device::cpu()`, `Device::cuda(id)`, `Device::hip(id)`) provide
+  ergonomic defaults. The `CompletionEvent` mechanism remains unchanged.
 
 This means the same `einsum` API and `wait()` / `is_ready()` interface
 covers GPU async, CPU multi-thread, and potentially other execution models
