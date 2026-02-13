@@ -2,7 +2,7 @@
 
 This document compares the contraction and permutation algorithm optimizations in
 **strided-rs** (strided-einsum2 + strided-opteinsum) and **omeinsum-rs**, to guide
-the "best of both" merge into **tenferro-tensorops** (binary contraction pipeline)
+the "best of both" merge into **tenferro-prims** (binary contraction pipeline)
 and **tenferro-einsum** (N-ary engine, algebra dispatch).
 
 ## 1. Binary Contraction Pipeline
@@ -204,7 +204,7 @@ No GPU support currently. The design document (tenferro unified backend) plans:
 ### Recommendation
 
 Adopt omeinsum-rs's cuTENSOR integration pattern into **tenferro-device** (vtable,
-plan caching) and **tenferro-tensorops** (`TensorOps` GPU impl):
+plan caching) and **tenferro-prims** (`TensorOps` GPU impl):
 - `TensorOps` trait wraps cuTENSOR's direct-contraction API via tenferro-device vtable.
 - Plan caching for repeated contractions (in tenferro-device).
 - Dispatch priority: GPU TensorOps > CPU TensorOps (GEMM) > naive loop.
@@ -229,7 +229,7 @@ plan caching) and **tenferro-tensorops** (`TensorOps` GPU impl):
 ### Recommendation
 
 - Adopt the `Algebra` trait design for semiring extensibility (→ tenferro-algebra).
-- Keep `BgemmBackend<T>` for pluggable GEMM backends (→ tenferro-tensorops).
+- Keep `BgemmBackend<T>` for pluggable GEMM backends (→ tenferro-prims).
 - Support `TypeId`-based dispatch for performance-critical hot paths (→ tenferro-einsum).
 - Argmax tracking as an opt-in feature (→ tenferro-algebra).
 
@@ -240,15 +240,15 @@ plan caching) and **tenferro-tensorops** (`TensorOps` GPU impl):
   `impl TensorOps<MaxPlus> for CpuBackend`. Being external proves the
   extensibility pattern (orphan rule: MaxPlus is local to tenferro-tropical).
 
-## 7. Summary: Best-of-Both for tenferro-tensorops + tenferro-einsum
+## 7. Summary: Best-of-Both for tenferro-prims + tenferro-einsum
 
-> strided-einsum2 (binary contraction pipeline) → **tenferro-tensorops**
+> strided-einsum2 (binary contraction pipeline) → **tenferro-prims**
 > strided-opteinsum + omeinsum-rs (N-ary engine) → **tenferro-einsum**
 
 ### TensorOps<A> Architecture
 
 GiggleLiu proposed a **universal set** of primitive operations for
-`tenferro-tensorops` that synthesizes the best of both codebases.
+`tenferro-prims` that synthesizes the best of both codebases.
 The converged design uses a single `TensorOps<A>` trait parameterized
 by algebra `A`, with a cuTENSOR-compatible plan-based execution model
 (`OpDescriptor → plan → execute`) and dynamic extension queries:
@@ -294,7 +294,7 @@ Leibniz rule.
 4. **`permute`** — `StridedView::permute()` + physical copy.
    (→ `TensorOps::permute`)
 5. **Cache-optimized kernels** — `reduce_axis()` uses blocked, dimension-fused
-   iteration from strided-kernel. (→ tenferro-tensorops via strided-kernel)
+   iteration from strided-kernel. (→ tenferro-prims via strided-kernel)
 
 ### From strided-rs (adopt into extended ops)
 
@@ -332,7 +332,7 @@ Leibniz rule.
 ### New (neither codebase)
 
 1. **`TensorOps<A>` algebra-parameterized trait** — core universal set +
-   dynamically-queried extended ops, plan-based execution. (→ tenferro-tensorops)
+   dynamically-queried extended ops, plan-based execution. (→ tenferro-prims)
 2. **`anti_trace` / `anti_diag`** — AD adjoint operations for trace and
    diagonal. (→ core ops in `TensorOps<A>`)
 3. **`tenferro-tropical` as separate crate** — proves extensibility of

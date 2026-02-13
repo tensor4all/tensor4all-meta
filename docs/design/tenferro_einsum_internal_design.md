@@ -1,7 +1,7 @@
 # tenferro-einsum Internal Design
 
 > This document details the internal architecture of the tenferro einsum
-> subsystem, covering the tensor operation protocol layer (`tenferro-tensorops`),
+> subsystem, covering the tensor operation protocol layer (`tenferro-prims`),
 > the einsum engine (`tenferro-einsum`), and backend implementations for CPU
 > and GPU.
 >
@@ -25,7 +25,7 @@ Layer 3: Tensor Type (tenferro-tensor)
          Zero-copy view ops: permute, broadcast, diagonal, reshape
          view()/view_mut() bridge to strided-rs
          ↓
-Layer 2: Tensor Operation Protocol (tenferro-tensorops)
+Layer 2: Tensor Operation Protocol (tenferro-prims)
          "Tensor BLAS": TensorOps<A> parameterized by algebra A
          cuTENSOR pattern: OpDescriptor → plan → execute
          Core ops: batched_gemm, reduce, trace, permute,
@@ -38,7 +38,7 @@ Layer 2: Tensor Operation Protocol (tenferro-tensorops)
          ↓
 Shared:  Device Layer (tenferro-device)
          Device enum (Cpu, Cuda, Hip), Error, Result
-         Used by: tenferro-tensorops, tenferro-tensor, tenferro-einsum
+         Used by: tenferro-prims, tenferro-tensor, tenferro-einsum
 
 Foundation: strided-rs (independent workspace, not absorbed)
          strided-traits -> strided-view -> strided-kernel
@@ -55,7 +55,7 @@ of primitive operations (`batched_gemm`, `trace`, `diag`, `permute`, `repeat`,
 set** of optimized composites (`contract`, `elementwise_mul`) that backends
 may optionally provide for better performance.
 
-We introduce `tenferro-tensorops` as a low-level "Tensor BLAS" protocol layer
+We introduce `tenferro-prims` as a low-level "Tensor BLAS" protocol layer
 with a **unified `TensorOps<A>` trait** parameterized by algebra `A`:
 
 1. **Core operations** (universal set): `batched_gemm`, `reduce`, `trace`,
@@ -83,23 +83,23 @@ The core operations form **adjoint pairs** for clean AD support:
 
 `tenferro-tensor` defines the `Tensor<T>` type above it, and `tenferro-einsum`
 provides a high-level einsum API on `Tensor<T>`, internally delegating
-operations to `tenferro-tensorops`. Custom closure-based operations
+operations to `tenferro-prims`. Custom closure-based operations
 (which cannot run on GPU) are not part of `TensorOps`; users access
 strided-kernel directly via `Tensor::view()`.
 
 **POC status**: The [tenferro-rs POC](https://github.com/tensor4all/tenferro-rs/)
-implements the four-crate structure (`tenferro-device`, `tenferro-tensorops`,
+implements the four-crate structure (`tenferro-device`, `tenferro-prims`,
 `tenferro-tensor`, `tenferro-einsum`) with stub implementations. The `TensorOps`
 trait and public einsum API are defined. `CpuBackend` is the only backend; GPU
 backends, `BackendRegistry`, and `TensorLibVtable` are future work.
 
 ---
 
-## Layer 2: tenferro-tensorops
+## Layer 2: tenferro-prims
 
 ### Unified TensorOps<A> Architecture
 
-`tenferro-tensorops` uses a **single trait** `TensorOps<A>` parameterized by
+`tenferro-prims` uses a **single trait** `TensorOps<A>` parameterized by
 algebra `A`, with a cuTENSOR-compatible plan-based execution model:
 
 ```
@@ -281,7 +281,7 @@ let b_view = tensor_b.view();
 strided_kernel::zip_map2_into(&mut out_view, &a_view, &b_view, |a, b| a * b + 1.0);
 ```
 
-This keeps `tenferro-tensorops` purely cuTENSOR/hipTensor-compatible.
+This keeps `tenferro-prims` purely cuTENSOR/hipTensor-compatible.
 strided-kernel (in the independent strided-rs workspace) provides
 cache-optimized iteration for arbitrary closures: dimension fusion,
 L1 blocking, importance-weighted ordering, SIMD auto-vectorization.
@@ -362,7 +362,7 @@ are stubs (`todo!()`).
 #### GEMM Backend Selection (Compile-Time, Future)
 
 ```toml
-# tenferro-tensorops/Cargo.toml (planned)
+# tenferro-prims/Cargo.toml (planned)
 [features]
 default = ["faer"]
 faer = ["dep:faer"]
@@ -384,7 +384,7 @@ downstream user:
 - **`cblas-src`**: Links OpenBLAS or MKL (standalone Rust apps)
 - **`cblas-inject`**: Julia injects `libblastrampoline` symbols at runtime
 
-`tenferro-tensorops` depends only on `cblas-sys` function signatures and is
+`tenferro-prims` depends only on `cblas-sys` function signatures and is
 agnostic to the CBLAS provider.
 
 #### CPU Contraction Plan (Future, for Contract extended op)
@@ -607,7 +607,7 @@ pub struct PlanCache {
 ## Layer 4: Einsum Engine (tenferro-einsum)
 
 High-level einsum API on `Tensor<T>`. Internally extracts `view()` from
-each tensor and delegates binary contractions to `tenferro-tensorops`.
+each tensor and delegates binary contractions to `tenferro-prims`.
 
 ### Public API
 
@@ -931,7 +931,7 @@ tenferro-algebra
         │
         ├──────────────────────────────┐
         ↓                              ↓
-tenferro-tensorops              tenferro-tensor
+tenferro-prims              tenferro-tensor
     (TensorOps<A> trait,            (Tensor<T> = DataBuffer
      OpDescriptor enum,              + dims + strides + offset,
      CpuBackend,                     zero-copy view ops:
@@ -947,7 +947,7 @@ tenferro-tensorops              tenferro-tensor
                  einsum_with_plan,
                  Subscripts, ContractionTree)
                 (depends on: tenferro-device,
-                 tenferro-tensorops,
+                 tenferro-prims,
                  tenferro-tensor,
                  strided-traits)
 ```

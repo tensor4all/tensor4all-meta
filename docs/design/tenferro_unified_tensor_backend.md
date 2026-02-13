@@ -5,7 +5,7 @@
 
 > **Companion documents**:
 > - [Einsum Algorithm Comparison](./einsum_algorithm_comparison.md) — strided-rs vs omeinsum-rs optimization comparison
-> - [tenferro Einsum Internal Design](./tenferro_einsum_internal_design.md) — detailed internal design of tenferro-tensorops and tenferro-einsum
+> - [tenferro Einsum Internal Design](./tenferro_einsum_internal_design.md) — detailed internal design of tenferro-prims and tenferro-einsum
 
 ## Context
 
@@ -18,7 +18,7 @@ Four independent Rust projects exist in tensor4all:
 These have significant overlap (3 einsum implementations, 3 scalar trait definitions, 3 dense storage types) yet critical gaps. The goal is to unify into a coherent, reusable tensor backend library **tenferro-\*** that:
 
 1. Integrates selected strided-rs add-on crates (`strided-einsum2`, `strided-opteinsum`) and omeinsum-rs components into `tenferro-*` (while keeping `strided-traits/view/kernel` as external foundational dependencies)
-2. Provides unified CPU/GPU dispatch via a **cuTENSOR/hipTensor-compatible protocol** (`tenferro-tensorops`)
+2. Provides unified CPU/GPU dispatch via a **cuTENSOR/hipTensor-compatible protocol** (`tenferro-prims`)
 3. Supports both NVIDIA and AMD GPUs via **runtime library loading** (no compile-time vendor lock-in)
 4. Supports complex numbers natively
 5. Supports custom scalar types (tropical semiring, etc.) with pluggable backends
@@ -27,7 +27,7 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 
 **Key design principles**:
 - **strided-rs as foundation**: The general-purpose strided array crates (`strided-traits`, `strided-view`, `strided-kernel`) remain in an independent `strided-rs` workspace. They have no BLAS dependency and can be used standalone. `tenferro-rs` depends on them but does not absorb them.
-- **cuTENSOR/hipTensor-compatible protocol**: `tenferro-tensorops` defines a unified `TensorOps<A>` trait parameterized by algebra `A`, with a cuTENSOR-compatible describe → plan → execute pattern for all operations. CPU, NVIDIA, and AMD backends implement the same trait.
+- **cuTENSOR/hipTensor-compatible protocol**: `tenferro-prims` defines a unified `TensorOps<A>` trait parameterized by algebra `A`, with a cuTENSOR-compatible describe → plan → execute pattern for all operations. CPU, NVIDIA, and AMD backends implement the same trait.
 - **Algebra-parameterized dispatch**: `TensorOps<A>` is parameterized by algebra (e.g., `Standard`, `MaxPlus`). The `HasAlgebra` trait on scalar types enables automatic algebra inference: `Tensor<f64>` → `Standard`, `Tensor<MaxPlus<f64>>` → `MaxPlus`. Users can extend the system by defining new algebras in their own crates (orphan rule compatible).
 - **Runtime GPU discovery**: GPU vendor libraries (cuTENSOR, hipTensor) are loaded at runtime via `dlopen`. The caller (Julia, Python) provides the `.so` path. No Cargo feature flags for GPU vendor selection.
 - **Plan-based execution**: All operations follow the cuTENSOR pattern of `OpDescriptor` → plan → execute. Plans cache expensive analysis (GPU kernel selection, CPU fusability checks) for reuse. Extended operations (contract, elementwise_mul) are dynamically queried via `has_extension_for::<T>()`.
@@ -62,7 +62,7 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
-│ Layer 2: Tensor Operation Protocol (tenferro-tensorops) [POC]│
+│ Layer 2: Tensor Operation Protocol (tenferro-prims) [POC]│
 │   TensorOps<A> trait — parameterized by algebra A            │
 │   cuTENSOR pattern: OpDescriptor → plan → execute            │
 │   Core ops: batched_gemm, reduce, trace, permute,            │
@@ -133,7 +133,7 @@ tenferro-rs/ (workspace) ── 4 POC crates ───────────�
 │                        #   Minimal algebra foundation for TensorOps<A>
 │                        #   Depends on: strided-traits
 │
-├── tenferro-tensorops   # TensorOps<A> trait — parameterized by algebra A
+├── tenferro-prims   # TensorOps<A> trait — parameterized by algebra A
 │                        #   OpDescriptor enum (describe → plan → execute)
 │                        #   Core ops: batched_gemm, reduce, trace, permute,
 │                        #     anti_trace, anti_diag
@@ -160,7 +160,7 @@ tenferro-rs/ (workspace) ── 4 POC crates ───────────�
                          #   ContractionTree (optimize, from_pairs)
                          #   Three API levels: einsum, einsum_with_subscripts,
                          #     einsum_with_plan
-                         #   Depends on: tenferro-device, tenferro-tensorops,
+                         #   Depends on: tenferro-device, tenferro-prims,
                          #     tenferro-tensor, strided-traits
 ```
 
@@ -213,7 +213,7 @@ tenferro-algebra (← strided-traits)
     │
     ├────────────────────┐
     ↓                    ↓
-tenferro-tensorops   tenferro-tensor
+tenferro-prims   tenferro-tensor
     │  (← strided-view,     │  (← strided-view,
     │   ← strided-traits)   │   ← strided-traits,
     │                        │   ← num-traits)
@@ -234,7 +234,7 @@ tenferro-algebra (HasAlgebra, Semiring, Standard)
     │
     ├────────────────────────────┐
     ↓                            ↓
-tenferro-tensorops          tenferro-tensor
+tenferro-prims          tenferro-tensor
     │                            │
     └──────────┬─────────────────┘
                ↓
@@ -246,7 +246,7 @@ tenferro-  tenferro-     tenferro-
  linalg     autograd       capi
 
 [separate crate: tenferro-tropical]
-← tenferro-algebra, tenferro-tensorops
+← tenferro-algebra, tenferro-prims
 impl TensorOps<MaxPlus> for CpuBackend (orphan OK)
 
 [separate workspace: tenferro-structured-rs]
@@ -263,7 +263,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 | tenferro crate | Origin | What changes |
 |----------------|--------|--------------|
 | tenferro-device | **New** (POC) | Device enum, Error/Result types (thiserror) |
-| tenferro-tensorops | **New** (POC), will absorb strided-einsum2 | TensorOps\<A\> trait (algebra-parameterized), OpDescriptor, CpuBackend |
+| tenferro-prims | **New** (POC), will absorb strided-einsum2 | TensorOps\<A\> trait (algebra-parameterized), OpDescriptor, CpuBackend |
 | tenferro-tensor | **New** (POC) | Tensor\<T\>, DataBuffer\<T\>, MemoryOrder, zero-copy view ops |
 | tenferro-einsum | **New** (POC), will absorb strided-opteinsum + omeinsum-rs | Subscripts, ContractionTree, einsum/einsum_with_subscripts/einsum_with_plan |
 | tenferro-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types [future] |
@@ -379,7 +379,7 @@ pub trait Semiring {
 `tenferro-tropical` crate, not here. This separation proves that the algebra
 extension mechanism works for external crates.
 
-### tenferro-tensorops
+### tenferro-prims
 
 The central protocol layer. Defines `TensorOps<A>` parameterized by algebra `A`,
 with a cuTENSOR-compatible describe → plan → execute pattern.
@@ -575,7 +575,7 @@ einsum("ij,jk->ik", &[&a, &b])?;  // MyAlgebra auto-inferred
 **Usage examples**:
 
 ```rust
-use tenferro_tensorops::{CpuBackend, TensorOps, OpDescriptor, ReduceOp, Standard};
+use tenferro_prims::{CpuBackend, TensorOps, OpDescriptor, ReduceOp, Standard};
 use strided_view::StridedArray;
 
 // Plan + execute: GEMM
@@ -1196,7 +1196,7 @@ Users extend the system at the appropriate level:
 | Level | What to implement | Result |
 |-------|-------------------|--------|
 | `ScalarBase` only | Basic trait bounds | Einsum via naive loop, map/reduce work |
-| `ScalarBase` + custom GEMM | Custom `batched_gemm` in tenferro-tensorops | Einsum decomposes to diag → trace → permute → custom batched_gemm |
+| `ScalarBase` + custom GEMM | Custom `batched_gemm` in tenferro-prims | Einsum decomposes to diag → trace → permute → custom batched_gemm |
 | Full `TensorOps` | Custom backend implementation | Complete control over all core operations |
 | Full `TensorOps<A>` with extensions | Custom backend with extended ops (contract, elementwise_mul) | Maximum performance (has_extension_for returns true) |
 
@@ -1223,7 +1223,7 @@ This happens **after tenferro core is stable**.
 
 ### After POC (Phase 1 core):
 ```bash
-cd tenferro-rs && cargo test -p tenferro-device -p tenferro-tensorops \
+cd tenferro-rs && cargo test -p tenferro-device -p tenferro-prims \
     -p tenferro-tensor -p tenferro-einsum
 ```
 - Unit tests for all Tensor operations
@@ -1262,15 +1262,15 @@ cd tenferro-rs && cargo test -p tenferro-device -p tenferro-tensorops \
 |---|---|---|
 | ScalarBase trait | `strided-rs/strided-traits/src/scalar.rs` | Stays in strided-rs; used by tenferro via dependency |
 | ElementOp | `strided-rs/strided-traits/src/element_op.rs` | Stays in strided-rs; used by tenferro via dependency |
-| StridedArray/View | `strided-rs/strided-view/src/` | Stays in strided-rs; used directly in tenferro-tensor (DataBuffer), tenferro-tensorops (TensorOps), tenferro-device (StridedError) |
-| map/reduce kernels | `strided-rs/strided-kernel/src/` | Stays in strided-rs; tenferro-tensorops will depend on it |
-| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | **Absorbed** into tenferro-tensorops `TensorOpsExt::contract` (CPU contraction) [future] |
-| BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | **Absorbed** into tenferro-tensorops `TensorOps::batched_gemm` [future] |
-| reduce_trace_axes | `strided-rs/strided-einsum2/src/trace.rs` | **Absorbed** into tenferro-tensorops `TensorOps::trace` [future] |
+| StridedArray/View | `strided-rs/strided-view/src/` | Stays in strided-rs; used directly in tenferro-tensor (DataBuffer), tenferro-prims (TensorOps), tenferro-device (StridedError) |
+| map/reduce kernels | `strided-rs/strided-kernel/src/` | Stays in strided-rs; tenferro-prims will depend on it |
+| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | **Absorbed** into tenferro-prims `TensorOpsExt::contract` (CPU contraction) [future] |
+| BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | **Absorbed** into tenferro-prims `TensorOps::batched_gemm` [future] |
+| reduce_trace_axes | `strided-rs/strided-einsum2/src/trace.rs` | **Absorbed** into tenferro-prims `TensorOps::trace` [future] |
 | diagonal_view | `strided-rs/strided-view/src/view.rs` | Stays in strided-rs; used by `Tensor::diagonal()` [future] |
 | opteinsum | `strided-rs/strided-opteinsum/src/lib.rs` | **Absorbed** into tenferro-einsum [future] |
 | Algebra traits | `omeinsum-rs/src/algebra/` | **Absorbed** into tenferro-algebra [future] |
-| Backend trait | `omeinsum-rs/src/backend/traits.rs` | **Absorbed** into tenferro-tensorops (evolved into TensorOps) |
+| Backend trait | `omeinsum-rs/src/backend/traits.rs` | **Absorbed** into tenferro-prims (evolved into TensorOps) |
 | cuTENSOR wrapper | `omeinsum-rs/src/backend/cuda/cutensor/` | **Absorbed** into tenferro-device (GPU vtable) [future] |
 | PlanCache | `omeinsum-rs/src/backend/cuda/cutensor/contract.rs` | **Absorbed** into tenferro-device [future] |
 | faer bridge | `ndtensors-rs/.../faer_interop.rs` | tenferro-linalg [future] |
