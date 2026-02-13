@@ -1420,6 +1420,30 @@ JAX / PyTorch -> Python wrapper -> ctypes FFI -> tenferro-capi -> Rust
 - JAX: `jax.custom_vjp` + `jax.pure_callback()`
 - PyTorch: `torch.autograd.Function` with custom forward/backward
 
+### Multi-GPU distributed contraction
+
+The current design targets single-GPU execution. For large-scale tensor
+network computations, distributing contractions across multiple GPUs
+is desirable.
+
+**Open questions**:
+- **Batch-level parallelism**: Distribute independent batch slices of
+  `batched_gemm` across GPUs (simplest, no inter-GPU communication
+  during GEMM).
+- **Tensor splitting**: Split a large contraction into sub-problems
+  across GPUs (e.g., split the contracted dimension `k` across devices,
+  then reduce). Requires inter-GPU communication (NCCL/RCCL).
+- **Contraction tree parallelism**: In N-ary einsum, independent
+  sub-trees can execute on different GPUs concurrently.
+- **API design**: Should multi-GPU be transparent (auto-partitioning)
+  or explicit (`Device::Cuda { device_id }` per tensor)?
+- **Memory management**: Tensors may need to be moved or replicated
+  across GPU memories. How does this interact with `DataBuffer<T>`?
+- **Interaction with MPI**: For multi-node multi-GPU (e.g., 4 nodes ×
+  4 GPUs), how does GPU-level distribution interact with
+  [`rsmpi-rt`](https://github.com/tensor4all/rsmpi-rt)-based
+  node-level distribution in tensor4all-rs?
+
 ### einsum_into and einsum_owned_into (future optimization)
 
 The POC provides only allocating `einsum` variants. Future optimization will add:
