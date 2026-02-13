@@ -67,12 +67,12 @@ Simpler matricization pipeline:
 
 | Aspect | strided-rs | omeinsum-rs | Recommendation (→ crate) |
 |--------|-----------|-------------|--------------------------|
-| Copy avoidance | Fusability check (`try_fuse_group`) | Always copy | **Adopt** fusability check (→ `TensorOpsExt::contract` CPU impl) |
-| Element-wise bypass | `zip_map2_into` for Hadamard | Goes through GEMM | **Adopt** as `TensorOpsExt::elementwise_mul` |
-| Trace pre-reduction | Before GEMM, with conj materialization | After classification, as sum-over | **Adopt** as `TensorOps::trace` (core universal set) |
+| Copy avoidance | Fusability check (`try_fuse_group`) | Always copy | **Adopt** fusability check (→ `PrimDescriptor::Contract` CPU impl) |
+| Element-wise bypass | `zip_map2_into` for Hadamard | Goes through GEMM | **Adopt** as `PrimDescriptor::ElementwiseMul` |
+| Trace pre-reduction | Before GEMM, with conj materialization | After classification, as sum-over | **Adopt** as `TensorPrims::trace` (core universal set) |
 | Owned-input optimization | Transfers ownership → zero-copy | Always allocates new buffer | **Adopt** ownership transfer (→ tenferro-einsum) |
-| Backend requirements | Compile-time `BackendConfig` trait | Hardcoded | **Adopt** trait-based config (→ `TensorOps::batched_gemm` CPU impl) |
-| Tropical dispatch | Not supported | `TypeId` runtime dispatch | **Adopt** omeinsum approach (→ `TensorOps::batched_gemm` dispatch) |
+| Backend requirements | Compile-time `BackendConfig` trait | Hardcoded | **Adopt** trait-based config (→ `TensorPrims::batched_gemm` CPU impl) |
+| Tropical dispatch | Not supported | `TypeId` runtime dispatch | **Adopt** omeinsum approach (→ `TensorPrims::batched_gemm` dispatch) |
 | Batch placement | ~~Batch-first `[batch, lo, sum]`~~ Fixed to batch-last | Batch-last `[left, contracted, batch]` | Both now batch-last |
 
 ## 2. N-ary Einsum (Contraction Tree)
@@ -118,7 +118,7 @@ Simpler matricization pipeline:
 | Root writes into user output | Yes (`execute_nested_into`) | No | **Adopt** direct root write (→ tenferro-einsum) |
 | Contraction optimizer | omeco greedy | omeco greedy + TreeSA | **Adopt** both optimizers (→ tenferro-einsum) |
 | Unoptimized fallback | 3+ child → inline optimize | Left-to-right pairwise | Either acceptable |
-| Operation decomposition | Explicit diag→trace→permute→GEMM | Monolithic contract + general unary loop | **Adopt** strided-rs explicit decomposition via core `TensorOps` |
+| Operation decomposition | Explicit diag→trace→permute→GEMM | Monolithic contract + general unary loop | **Adopt** strided-rs explicit decomposition via core `TensorPrims` |
 
 ## 3. Single-Tensor Operations
 
@@ -154,11 +154,11 @@ Single function `execute_unary_naive()`:
 
 | Aspect | strided-rs | omeinsum-rs | Recommendation (→ crate) |
 |--------|-----------|-------------|--------------------------|
-| Full trace fast path | Yes (single loop, no alloc) | No | **Adopt** as `TensorOps::trace` (core universal set) |
-| Partial trace fast path | Yes (single loop, no alloc) | No | **Adopt** via `diag` + `TensorOps::reduce` decomposition |
-| General reduce | `reduce_axis()` per axis | Nested loop | **Adopt** as `TensorOps::reduce` (core universal set) |
+| Full trace fast path | Yes (single loop, no alloc) | No | **Adopt** as `TensorPrims::trace` (core universal set) |
+| Partial trace fast path | Yes (single loop, no alloc) | No | **Adopt** via `diag` + `TensorPrims::reduce` decomposition |
+| General reduce | `reduce_axis()` per axis | Nested loop | **Adopt** as `TensorPrims::reduce` (core universal set) |
 | Broadcast/repeat | Stride-0 view + copy | Not needed (einsum semantics) | **Adopt** as zero-copy `Tensor::broadcast` + `repeat` adjoint pair with `reduce` |
-| Anti-diagonal (i→ii) | `single_tensor.rs` duplicate | Not implemented | **Adopt** as `TensorOps::anti_diag` (AD adjoint of diag) |
+| Anti-diagonal (i→ii) | `single_tensor.rs` duplicate | Not implemented | **Adopt** as `TensorPrims::anti_diag` (AD adjoint of diag) |
 
 ## 4. Permutation Strategy
 
@@ -191,7 +191,7 @@ groups).
 ### strided-rs
 
 No GPU support currently. The design document (tenferro unified backend) plans:
-- cuTENSOR/hipTensor for einsum (via `TensorOps` trait, runtime dlopen).
+- cuTENSOR/hipTensor for einsum (via `TensorPrims` trait, runtime dlopen).
 
 ### omeinsum-rs
 
@@ -204,10 +204,10 @@ No GPU support currently. The design document (tenferro unified backend) plans:
 ### Recommendation
 
 Adopt omeinsum-rs's cuTENSOR integration pattern into **tenferro-device** (vtable,
-plan caching) and **tenferro-prims** (`TensorOps` GPU impl):
-- `TensorOps` trait wraps cuTENSOR's direct-contraction API via tenferro-device vtable.
+plan caching) and **tenferro-prims** (`TensorPrims` GPU impl):
+- `TensorPrims` trait wraps cuTENSOR's direct-contraction API via tenferro-device vtable.
 - Plan caching for repeated contractions (in tenferro-device).
-- Dispatch priority: GPU TensorOps > CPU TensorOps (GEMM) > naive loop.
+- Dispatch priority: GPU TensorPrims > CPU TensorPrims (GEMM) > naive loop.
 
 ## 6. Algebra Extensibility
 
@@ -237,7 +237,7 @@ plan caching) and **tenferro-prims** (`TensorOps` GPU impl):
 - `tenferro-algebra` (POC): `HasAlgebra` trait (T → A mapping), `Semiring` trait,
   `Standard` type. Minimal foundation.
 - `tenferro-tropical` (separate crate): `MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`,
-  `impl TensorOps<MaxPlus> for CpuBackend`. Being external proves the
+  `impl TensorPrims<MaxPlus> for CpuBackend`. Being external proves the
   extensibility pattern (orphan rule: MaxPlus is local to tenferro-tropical).
 
 ## 7. Summary: Best-of-Both for tenferro-prims + tenferro-einsum
@@ -245,13 +245,13 @@ plan caching) and **tenferro-prims** (`TensorOps` GPU impl):
 > strided-einsum2 (binary contraction pipeline) → **tenferro-prims**
 > strided-opteinsum + omeinsum-rs (N-ary engine) → **tenferro-einsum**
 
-### TensorOps<A> Architecture
+### TensorPrims<A> Architecture
 
 GiggleLiu proposed a **universal set** of primitive operations for
 `tenferro-prims` that synthesizes the best of both codebases.
-The converged design uses a single `TensorOps<A>` trait parameterized
+The converged design uses a single `TensorPrims<A>` trait parameterized
 by algebra `A`, with a cuTENSOR-compatible plan-based execution model
-(`OpDescriptor → plan → execute`) and dynamic extension queries:
+(`PrimDescriptor → plan → execute`) and dynamic extension queries:
 
 **Core ops (universal set, required for all backends)**:
 
@@ -265,7 +265,7 @@ by algebra `A`, with a cuTENSOR-compatible plan-based execution model
 | 6 | `anti_diag` | **New** (AD) | — | — | write-to-diagonal loop | custom kernel |
 
 Note: `diag` and `repeat` are zero-copy stride tricks on `Tensor<T>`,
-not in `TensorOps` (no computation needed).
+not in `TensorPrims` (no computation needed).
 
 **Extended ops (optional, dynamically queried via `has_extension_for`)**:
 
@@ -275,7 +275,7 @@ not in `TensorOps` (no computation needed).
 | 2 | `elementwise_mul` | strided-rs | Hadamard product bypass (strided-rs's `zip_map2_into`) |
 
 **Dispatch rule**: If `has_extension_for::<T>(Extension::Contract)` returns
-`true` → use the fused operation via `OpDescriptor::Contract`. Otherwise →
+`true` → use the fused operation via `PrimDescriptor::Contract`. Otherwise →
 `tenferro-einsum` decomposes into core ops:
 `diag → trace/reduce → permute → batched_gemm → permute`.
 
@@ -286,13 +286,13 @@ Leibniz rule.
 ### From strided-rs (adopt into core ops)
 
 1. **`batched_gemm`** — raw batched GEMM, the core computation.
-   (→ `TensorOps::batched_gemm`)
+   (→ `TensorPrims::batched_gemm`)
 2. **`trace`** — `reduce_trace_axes()` for summing paired dimensions.
-   (→ `TensorOps::trace`)
+   (→ `TensorPrims::trace`)
 3. **`reduce`** — `reduce_axis()` for summing unpaired dimensions.
-   (→ `TensorOps::reduce`)
+   (→ `TensorPrims::reduce`)
 4. **`permute`** — `StridedView::permute()` + physical copy.
-   (→ `TensorOps::permute`)
+   (→ `TensorPrims::permute`)
 5. **Cache-optimized kernels** — `reduce_axis()` uses blocked, dimension-fused
    iteration from strided-kernel. (→ tenferro-prims via strided-kernel)
 
@@ -312,7 +312,7 @@ Leibniz rule.
 4. **Permutation-only detection** — metadata-only transformation in
    contraction tree.
 5. **Single-tensor fast paths** — full trace and partial trace zero-allocation
-   loops (now decomposed into `TensorOps::trace`).
+   loops (now decomposed into `TensorPrims::trace`).
 6. **Direct root write** — final contraction writes into user's output buffer.
 
 ### From omeinsum-rs (adopt)
@@ -320,7 +320,7 @@ Leibniz rule.
 1. **Algebra trait** — semiring-generic `zero()`, `add()`, `mul()` interface.
    (→ tenferro-algebra: HasAlgebra, Semiring, Standard)
 2. **Tropical-gemm dispatch** — `TypeId`-based runtime specialization for SIMD
-   tropical kernels. (→ tenferro-tropical: `TensorOps<MaxPlus> for CpuBackend`)
+   tropical kernels. (→ tenferro-tropical: `TensorPrims<MaxPlus> for CpuBackend`)
 3. **Argmax tracking** — tropical backward pass support. (→ tenferro-tropical)
 4. **cuTENSOR integration** — direct contraction without reshape-to-GEMM,
    plan caching. (→ Contract extended op on GPU + tenferro-device)
@@ -331,10 +331,10 @@ Leibniz rule.
 
 ### New (neither codebase)
 
-1. **`TensorOps<A>` algebra-parameterized trait** — core universal set +
+1. **`TensorPrims<A>` algebra-parameterized trait** — core universal set +
    dynamically-queried extended ops, plan-based execution. (→ tenferro-prims)
 2. **`anti_trace` / `anti_diag`** — AD adjoint operations for trace and
-   diagonal. (→ core ops in `TensorOps<A>`)
+   diagonal. (→ core ops in `TensorPrims<A>`)
 3. **`tenferro-tropical` as separate crate** — proves extensibility of
    algebra-parameterized design. (→ tenferro-tropical)
 4. **Adjoint pair documentation** — clean VJP/JVP rules for each primitive.
