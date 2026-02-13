@@ -31,15 +31,7 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 - **Algebra-parameterized dispatch**: `TensorPrims<A>` is parameterized by algebra (e.g., `Standard`, `MaxPlus`). The `HasAlgebra` trait on scalar types enables automatic algebra inference: `Tensor<f64>` → `Standard`, `Tensor<MaxPlus<f64>>` → `MaxPlus`. Users can extend the system by defining new algebras in their own crates (orphan rule compatible).
 - **Runtime GPU discovery**: GPU vendor libraries (cuTENSOR, hipTensor) are loaded at runtime via `dlopen`. The caller (Julia, Python) provides the `.so` path. No Cargo feature flags for GPU vendor selection.
 - **Plan-based execution**: All operations follow the cuTENSOR pattern of `PrimDescriptor` → plan → execute. Plans cache expensive analysis (GPU kernel selection, CPU fusability checks) for reuse. Extended operations (contract, elementwise_mul) are dynamically queried via `has_extension_for::<T>()`.
-- **Opaque structs for extensible types**: Public types that users may inspect and that are likely to gain new variants in the future use **opaque structs with constructors and query methods** instead of enums. This ensures that adding new variants (e.g., new memory types, new compute targets) is a non-breaking change — existing user code compiles without modification. Types that are internal to the engine or only constructed-and-passed by users (never matched on) may remain enums.
-
-  | Type | Pattern | Rationale |
-  |------|---------|-----------|
-  | `MemorySpace` | Opaque struct | Users inspect where data lives; new memory types expected (GPU cluster, RDMA, ...) |
-  | `ComputeTarget` | Opaque struct | Users specify where to compute; new targets expected (multi-GPU, heterogeneous, ...) |
-  | `OpDescriptor` | Enum | Engine-internal; matched only inside tenferro-prims/tenferro-einsum |
-  | `Extension` | Enum | Constructed and passed by users, never matched on |
-  | `ReduceOp` | Enum | Small closed set of mathematical operations |
+- **Enums for all variant types**: All types with variants (`MemorySpace`, `ComputeTarget`, `OpDescriptor`, etc.) use Rust enums. This preserves exhaustive `match` checking — when a new variant is added, the compiler identifies every call site that needs updating. New variants constitute a semver breaking change (major version bump), managed through Cargo's version resolution. This is preferred over opaque structs because the cost of hidden unhandled variants (runtime bugs) outweighs the cost of explicit version migration (compile-time errors).
 
 ---
 
@@ -1460,51 +1452,30 @@ access another GPU's memory without copying. This means:
 pub enum Device { Cpu, Cuda { device_id: usize }, Hip { device_id: usize } }
 
 // Possible future design:
-// Opaque struct — new memory types can be added without breaking user code.
-pub struct MemorySpace { /* private fields */ }
-
-impl MemorySpace {
-    pub fn cpu() -> Self;                        // CPU RAM
-    pub fn gpu(device_id: usize) -> Self;        // specific GPU VRAM
-    pub fn unified() -> Self;                    // CUDA/HIP managed memory (auto page migration)
-    // Future (non-breaking):
-    // pub fn gpu_cluster(ids: &[usize]) -> Self;  // NVLink domain
-    // pub fn remote(node: &str) -> Self;           // RDMA / network-attached
-
-    // Query methods (instead of match):
-    pub fn is_cpu(&self) -> bool;
-    pub fn is_gpu(&self) -> bool;
-    pub fn gpu_device_id(&self) -> Option<usize>;
+pub enum MemorySpace {
+    CpuRam,
+    GpuVram { device_id: usize },
+    UnifiedRam,                    // CUDA/HIP managed memory (auto page migration)
+    // Future variants (semver breaking change):
+    // GpuCluster { device_ids: Vec<usize> },  // NVLink domain
 }
 
 // Tensor stores where its data lives:
 pub struct Tensor<T> { ..., memory_space: MemorySpace }
 
 // Compute target is separate, specified at operation time.
-// Opaque struct with constructors — internal representation is private
-// so new capabilities can be added without breaking existing code.
-pub struct ComputeTarget { /* private fields */ }
-
-impl ComputeTarget {
-    /// Infer optimal device(s) from operands' memory spaces.
-    /// This is the default — most user code never needs to specify a target.
-    pub fn auto() -> Self;
-
-    /// Run on a specific GPU.
-    pub fn gpu(device_id: usize) -> Self;
-
-    // Future additions (non-breaking — no existing code changes):
-    // pub fn gpus(ids: &[usize]) -> Self;          // multi-GPU distribution
-    // pub fn prefer_gpu() -> Self;                  // GPU if available, else CPU
-    // pub fn cpu_and_gpu(threads: usize, gpu: usize) -> Self;  // heterogeneous
+pub enum ComputeTarget {
+    Auto,                          // infer from operands' memory spaces (default)
+    Gpu { device_id: usize },     // specific GPU
+    // Future variants (semver breaking change, compiler catches all match sites):
+    // Gpus { device_ids: Vec<usize> },          // multi-GPU distribution
+    // CpuAndGpu { threads: usize, gpu: usize }, // heterogeneous
 }
 
-// Usage — future-proof:
-einsum("ij,jk->ik", &[&a, &b])?;                                // Auto (99% of cases)
-einsum_on(ComputeTarget::gpu(0), "ij,jk->ik", &[&a, &b])?;     // explicit GPU
-// When multi-GPU support is added, existing code above still compiles.
-// New code can use:
-// einsum_on(ComputeTarget::gpus(&[0, 1]), "ij,jk->ik", &[&a, &b])?;
+// Usage:
+einsum("ij,jk->ik", &[&a, &b])?;                                       // Auto
+einsum_on(ComputeTarget::Auto, "ij,jk->ik", &[&a, &b])?;              // explicit Auto
+einsum_on(ComputeTarget::Gpu { device_id: 0 }, "ij,jk->ik", &[&a, &b])?; // specific GPU
 ```
 
 **Open questions**:
