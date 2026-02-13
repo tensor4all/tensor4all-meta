@@ -639,6 +639,7 @@ pub struct Tensor<T: ScalarBase> {
     strides: Vec<isize>,
     offset: isize,
     device: Device,
+    event: Option<CompletionEvent>,  // None = ready, Some = pending accelerator work
 }
 ```
 
@@ -710,6 +711,14 @@ impl<T: ScalarBase> Tensor<T> {
     /// For real types (f32, f64), returns a copy unchanged.
     /// For complex types (Complex32, Complex64), negates the imaginary part.
     pub fn conj(&self) -> Tensor<T>;
+
+    /// Wait for any pending accelerator computation to complete.
+    /// No-op for CPU tensors or already-completed operations.
+    pub fn wait(&self);
+
+    /// Check if data is ready without blocking.
+    /// Always returns true for CPU tensors.
+    pub fn is_ready(&self) -> bool;
 }
 ```
 
@@ -1566,6 +1575,101 @@ einsum_on(ComputeTarget::Gpu { device_id: 0 }, "ij,jk->ik", &[&a, &b])?; // spec
   4 GPUs), how does GPU-level distribution interact with
   [`rsmpi-rt`](https://github.com/tensor4all/rsmpi-rt)-based
   node-level distribution in tensor4all-rs?
+
+### GPU/CPU overlap and asynchronous execution
+
+The current `TensorPrims::execute` API is synchronous — it blocks until
+the operation completes. For GPU backends, this leaves the CPU idle during
+GPU computation:
+
+```
+GPU: [== einsum A ==][== einsum B ==]
+CPU: [    idle       ][    idle       ]
+```
+
+With asynchronous execution, the CPU could prepare the next operands or
+perform independent computation while the GPU is busy:
+
+```
+GPU: [== einsum A ==][== einsum B ==][== einsum C ==]
+CPU:                  [prepare B     ][prepare C     ]
+```
+
+#### Chosen approach: Tensor embeds async state
+
+Rather than introducing separate `einsum` / `einsum_async` functions, the
+`Tensor<T>` struct itself carries an optional `CompletionEvent` that tracks
+pending accelerator computation. This follows the PyTorch model where
+accelerator tensors are always potentially async:
+
+```rust
+pub struct Tensor<T: ScalarBase> {
+    buffer: DataBuffer<T>,
+    dims: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+    device: Device,
+    event: Option<CompletionEvent>,  // None = ready, Some = pending accelerator work
+}
+```
+
+This enables transparent accelerator-to-accelerator operation chaining
+without CPU synchronization:
+
+```rust
+// Accelerator operations return immediately with event attached
+let c = einsum("ij,jk->ik", &[&a_gpu, &b_gpu])?;
+//  → GPU submit, c.event = Some(event_1), returns immediately
+
+let d = einsum("ij,jk->ik", &[&c, &e_gpu])?;
+//  → detects c.event → sets up stream dependency → no CPU wait
+//  → GPU submit, d.event = Some(event_2), returns immediately
+
+// CPU data access triggers implicit synchronization
+println!("{:?}", d.view());  // view() calls wait() internally
+```
+
+The `einsum` API does not change — the same function handles both sync
+(CPU) and async (accelerator) execution transparently. For CPU tensors,
+`event` is always `None` with zero overhead.
+
+Key methods:
+
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    /// Wait for any pending accelerator computation to complete.
+    /// No-op for CPU tensors or already-completed operations.
+    pub fn wait(&self) { ... }
+
+    /// Check if data is ready without blocking.
+    pub fn is_ready(&self) -> bool { ... }
+
+    // Existing methods that access data auto-sync:
+    // view(), view_mut(), conj(), contiguous() — all call wait() internally
+}
+```
+
+#### Alternatives considered
+
+1. **Separate `einsum_async` function**: Rejected — splits the API
+   unnecessarily. A single `einsum` that works for both sync and async
+   is simpler.
+
+2. **Trait-based (`TensorArg` trait with `wait()`)**: More extensible
+   (could also support lazy expressions), but adds API complexity
+   (`&[&dyn TensorArg<T>]` or generics explosion). Can be introduced
+   later if needed — implementing the trait for `Tensor<T>` is backward
+   compatible.
+
+3. **Contraction tree-level pipelining only**: Useful as an internal
+   optimization within N-ary einsum, but does not help when the user
+   chains independent einsum calls manually. The Tensor-embedded event
+   approach handles both cases.
+
+**Current status**: The `event` field is present in the POC `Tensor<T>`
+struct as `Option<CompletionEvent>` (placeholder type) to signal the design
+intent. Actual async execution will be implemented with accelerator
+backends.
 
 ### einsum_into (implemented in POC)
 
