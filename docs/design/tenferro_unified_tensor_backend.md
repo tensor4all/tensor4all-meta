@@ -1047,24 +1047,74 @@ ccall((:tenferro_backend_load_cutensor, libtenferro), Cint, (Cstring,),
 HDF5 I/O for `Tensor<T>`, using [`hdf5-rt`](https://github.com/tensor4all/hdf5-rt)
 (runtime library loading via dlopen — same pattern as GPU backends).
 
+The primary goal is to define a **common HDF5 file format** that Rust,
+Julia, and Python implementations all follow, enabling cross-language
+interoperability.
+
+### File Format Specification
+
+A tensor is stored as an HDF5 group with the following structure:
+
+```
+/group/tensor_name/          (HDF5 Group)
+├── data                     (HDF5 Dataset: raw array, column-major)
+├── @format_version          (Attribute: string, e.g. "1.0")
+├── @dtype                   (Attribute: string, e.g. "float64", "complex128")
+├── @shape                   (Attribute: int array, e.g. [3, 4, 5])
+└── @memory_order            (Attribute: string, "column_major" or "row_major")
+```
+
+**Data type encoding**:
+
+| dtype string | Rust type | Julia type | NumPy dtype |
+|-------------|-----------|------------|-------------|
+| `float32` | `f32` | `Float32` | `np.float32` |
+| `float64` | `f64` | `Float64` | `np.float64` |
+| `complex64` | `Complex<f32>` | `ComplexF32` | `np.complex64` |
+| `complex128` | `Complex<f64>` | `ComplexF64` | `np.complex128` |
+| `int32` | `i32` | `Int32` | `np.int32` |
+| `int64` | `i64` | `Int64` | `np.int64` |
+
+**Complex number storage**: HDF5 has no native complex type (until
+HDF5 2.0.0, which is adding one). Complex numbers are stored as an
+HDF5 compound type. The field naming varies across ecosystems:
+
+| Library | Field names |
+|---------|------------|
+| h5py (Python) | `"r"`, `"i"` |
+| HDF5.jl (Julia) | reads both; writes `"r"`, `"i"` |
+| Octave | `"real"`, `"imag"` |
+
+**tenferro convention**: Use `"r"` and `"i"` (h5py/HDF5.jl compatible).
+Readers should also accept `"real"`/`"imag"` for interoperability.
+When HDF5 2.0.0 native complex types are available, prefer those.
+
+**Memory order**: Data is always stored contiguously. The `memory_order`
+attribute records whether the stored layout is column-major (Fortran/Julia)
+or row-major (C/NumPy). Readers must transpose if their native order
+differs.
+
+### Rust API
+
 ```rust
 use tenferro_hdf5::{read_tensor, write_tensor};
 
 // Write tensor to HDF5 file
 let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
-write_tensor(&file, "group/dataset", &a)?;
+write_tensor(&file, "group/tensor_name", &a)?;
 
 // Read tensor from HDF5 file
-let b: Tensor<f64> = read_tensor(&file, "group/dataset")?;
+let b: Tensor<f64> = read_tensor(&file, "group/tensor_name")?;
 ```
 
-**Design notes**:
+### Design Notes
+
+- **Format first**: The file format spec is the primary deliverable.
+  Rust, Julia, and Python I/O libraries are implementations of that spec.
 - Separate crate to avoid mandatory C library dependency
 - Uses `hdf5-rt` (dlopen): no compile-time HDF5 linking required
 - Julia integration: Julia provides `libhdf5` path at runtime (same
   as cuTENSOR/hipTensor injection pattern)
-- Stores shape, strides, and data type as HDF5 attributes alongside
-  the raw data array
 
 ---
 
