@@ -173,6 +173,8 @@ tenferro-rs/ (future additions) ────────────────
 ├── tenferro-linalg      # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER via device layer)
 ├── tenferro-autograd    # TrackedTensor, DualTensor, VJP/JVP
 ├── tenferro-hdf5        # Tensor<T> HDF5 I/O (via hdf5-rt, dlopen)
+├── tenferro-mdarray     # Tensor<T> ←→ mdarray conversion (memory copy)
+├── tenferro-ndarray     # Tensor<T> ←→ ndarray conversion (memory copy)
 ├── tenferro-capi        # C FFI (tensor ops + VJP/JVP + backend loading)
 └── burn-tenferro        # Burn Backend bridge [OPTIONAL, for NN only]
 
@@ -1156,6 +1158,62 @@ let b: Tensor<f64> = read_tensor(&file, "group/tensor_name")?;
    1D flat arrays with separate Index metadata. Our N-D dataset format
    is intentionally different for broader interoperability. Whether to
    provide an ITensors.jl compatibility reader/writer is TBD.
+
+---
+
+## Future Phase: tenferro-mdarray / tenferro-ndarray (Bridge Crates)
+
+Separate bridge crates for converting between `Tensor<T>` and other
+Rust array libraries. Conversions involve memory copies (not zero-copy),
+which is acceptable since these are used at ecosystem boundaries, not
+in hot loops.
+
+```rust
+// tenferro-mdarray crate
+use tenferro_tensor::Tensor;
+use mdarray::Array;
+
+impl<T: ScalarBase> From<&Tensor<T>> for Array<T, Dyn> {
+    fn from(tensor: &Tensor<T>) -> Self {
+        let t = tensor.contiguous(MemoryOrder::ColumnMajor);
+        Array::from_slice(t.as_slice(), t.dims())
+    }
+}
+
+impl<T: ScalarBase> From<&Array<T, Dyn>> for Tensor<T> {
+    fn from(array: &Array<T, Dyn>) -> Self {
+        Tensor::from_slice(array.as_slice(), array.shape(), MemoryOrder::ColumnMajor).unwrap()
+    }
+}
+```
+
+```rust
+// tenferro-ndarray crate
+use tenferro_tensor::Tensor;
+use ndarray::ArrayD;
+
+impl<T: ScalarBase> From<&Tensor<T>> for ArrayD<T> {
+    fn from(tensor: &Tensor<T>) -> Self {
+        let t = tensor.contiguous(MemoryOrder::RowMajor);  // ndarray is row-major
+        ArrayD::from_shape_vec(t.dims().to_vec(), t.as_slice().to_vec()).unwrap()
+    }
+}
+
+impl<T: ScalarBase> From<&ArrayD<T>> for Tensor<T> {
+    fn from(array: &ArrayD<T>) -> Self {
+        // ndarray may not be contiguous; make contiguous first
+        let standard = array.as_standard_layout();
+        Tensor::from_slice(standard.as_slice().unwrap(), array.shape(), MemoryOrder::RowMajor).unwrap()
+    }
+}
+```
+
+**Design notes**:
+- Each bridge crate depends only on `tenferro-tensor` + the target library
+- Memory order is handled automatically: mdarray uses column-major,
+  ndarray uses row-major
+- `contiguous()` call ensures data is laid out correctly before copy
+- No feature flags on `tenferro-tensor` — dependencies are fully isolated
 
 ---
 
