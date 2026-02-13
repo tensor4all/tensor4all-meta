@@ -151,7 +151,7 @@ tenferro-rs/ (workspace) ── 5 POC crates ───────────�
 │                        #   Constructors: zeros, ones, from_slice, from_strided_array
 │                        #   View ops: view(), view_mut(), permute, broadcast,
 │                        #     diagonal, reshape (zero-copy metadata ops)
-│                        #   Data ops: contiguous, into_contiguous, is_contiguous
+│                        #   Data ops: contiguous, into_contiguous, is_contiguous, conj
 │                        #   Depends on: tenferro-device, strided-view, strided-traits, num-traits
 │
 └── tenferro-einsum      # High-level einsum on Tensor<T>
@@ -704,6 +704,12 @@ impl<T: ScalarBase> Tensor<T> {
 
     /// Check if tensor data is contiguous in memory.
     pub fn is_contiguous(&self) -> bool;
+
+    /// Return a tensor with complex-conjugated elements.
+    ///
+    /// For real types (f32, f64), returns a copy unchanged.
+    /// For complex types (Complex32, Complex64), negates the imaginary part.
+    pub fn conj(&self) -> Tensor<T>;
 }
 ```
 
