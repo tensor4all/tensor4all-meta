@@ -1,0 +1,1186 @@
+# tenferro: Unified Tensor Backend Design Plan
+
+> **POC implementation**: The initial proof-of-concept (4 core crates) is at
+> <https://github.com/tensor4all/tenferro-rs/>.
+
+> **Companion documents**:
+> - [Einsum Algorithm Comparison](./einsum_algorithm_comparison.md) — strided-rs vs omeinsum-rs optimization comparison
+> - [tenferro Einsum Internal Design](./tenferro_einsum_internal_design.md) — detailed internal design of tenferro-tensorops and tenferro-einsum
+
+## Context
+
+Four independent Rust projects exist in tensor4all:
+- **strided-rs**: Cache-optimized strided array kernels (view, map/reduce, einsum)
+- **omeinsum-rs**: Einsum with tropical algebra, gradient support, GPU dispatch
+- **ndtensors-rs**: Tensor types with storage hierarchy, linear algebra, autograd
+- **tensor4all-rs**: Tensor network algorithms (TCI, Quantics, MPS) with ad-hoc tensor backend
+
+These have significant overlap (3 einsum implementations, 3 scalar trait definitions, 3 dense storage types) yet critical gaps. The goal is to unify into a coherent, reusable tensor backend library **tenferro-\*** that:
+
+1. Integrates selected strided-rs add-on crates (`strided-einsum2`, `strided-opteinsum`) and omeinsum-rs components into `tenferro-*` (while keeping `strided-traits/view/kernel` as external foundational dependencies)
+2. Provides unified CPU/GPU dispatch via a **cuTENSOR/hipTensor-compatible protocol** (`tenferro-tensorops`)
+3. Supports both NVIDIA and AMD GPUs via **runtime library loading** (no compile-time vendor lock-in)
+4. Supports complex numbers natively
+5. Supports custom scalar types (tropical semiring, etc.) with pluggable backends
+6. Exposes VJP/JVP through C API for Julia ChainRules.jl
+7. Can optionally bridge to Burn for NN workloads
+
+**Key design principles**:
+- **strided-rs as foundation**: The general-purpose strided array crates (`strided-traits`, `strided-view`, `strided-kernel`) remain in an independent `strided-rs` workspace. They have no BLAS dependency and can be used standalone. `tenferro-rs` depends on them but does not absorb them.
+- **cuTENSOR/hipTensor-compatible protocol**: `tenferro-tensorops` defines a unified `TensorOps` trait mirroring cuTENSOR's operation categories (contraction, reduction, permutation, elementwise binary). CPU, NVIDIA, and AMD backends implement the same trait.
+- **Runtime GPU discovery**: GPU vendor libraries (cuTENSOR, hipTensor) are loaded at runtime via `dlopen`. The caller (Julia, Python) provides the `.so` path. No Cargo feature flags for GPU vendor selection.
+- **Plan-based execution**: Contractions follow the cuTENSOR pattern of descriptor + plan + execute. Plans cache expensive analysis (GPU kernel selection, CPU fusability checks) for reuse. Other operations (elementwise binary, reduce, permute) are plan-free in the POC.
+
+---
+
+## Layered Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 5: Application                                         │
+│   tensor4all-rs (TCI, Quantics, MPS algorithms)              │
+│   Julia / Python (C API via tenferro-capi) [future]          │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│ Layer 4: Einsum Engine (tenferro-einsum)          [POC]      │
+│   High-level API on Tensor<T>: einsum(), string notation     │
+│   Subscripts (integer labels + string parse)                 │
+│   ContractionTree (optimize, from_pairs)                     │
+│   Three API levels: einsum, einsum_with_subscripts,          │
+│                     einsum_with_plan                          │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│ Layer 3: Tensor Type (tenferro-tensor)             [POC]     │
+│   Tensor<T> = DataBuffer + dims + strides + offset + device  │
+│   Zero-copy view ops: permute, broadcast, diagonal, reshape  │
+│   Bridge to strided-rs via view() / view_mut()               │
+│   DataBuffer<T> enum: Cpu(StridedArray<T>)                   │
+│   MemoryOrder (ColumnMajor, RowMajor) for allocation only    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│ Layer 2: Tensor Operation Protocol (tenferro-tensorops) [POC]│
+│   cuTENSOR / hipTensor compatible TensorOps trait            │
+│   4 operations: Contraction, Reduction, Permutation,         │
+│                 ElementwiseBinary                             │
+│   Plan-based contraction (ContractionDescriptor → Plan)      │
+│   Plan-free: elementwise_binary, reduce, permute             │
+│   CpuBackend, associated functions (not methods)             │
+│   Uses StridedView<T> / StridedViewMut<T> directly           │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│ Shared Infrastructure: Device Layer (tenferro-device) [POC]  │
+│   Device enum (Cpu, Cuda{device_id}, Hip{device_id})         │
+│   Error types (thiserror): ShapeMismatch, RankMismatch,      │
+│     DeviceError, InvalidArgument, Strided                    │
+│   Result<T> type alias                                       │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│ Layer 1: Backend Implementations                    [future] │
+│                                                              │
+│  ┌─────────────────┐  ┌──────────────┐  ┌──────────────┐    │
+│  │ CPU              │  │ NVIDIA       │  │ AMD          │    │
+│  │                  │  │              │  │              │    │
+│  │ Contraction:     │  │ cuTENSOR     │  │ hipTensor    │    │
+│  │  strided-einsum2 │  │ (dlopen)     │  │ (dlopen)     │    │
+│  │  fusability      │  │              │  │              │    │
+│  │  trace reduction │  │ Common vtable│  │              │    │
+│  │  EW bypass       │  │ (1:1 API)    │  │              │    │
+│  │                  │  │              │  │              │    │
+│  │ GEMM (feature):  │  │              │  │              │    │
+│  │  faer (default)  │  │              │  │              │    │
+│  │  cblas (opt-in)  │  │              │  │              │    │
+│  │                  │  │              │  │              │    │
+│  │ Elementwise:     │  │              │  │              │    │
+│  │  strided-kernel  │  │              │  │              │    │
+│  │  cache-opt       │  │              │  │              │    │
+│  └─────────────────┘  └──────────────┘  └──────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Crate Structure
+
+### POC Crates (implemented in tenferro-rs)
+
+```
+strided-rs/ (independent workspace) ── Foundation crates stay as-is ───────
+│  General-purpose strided array library. No BLAS dependency.
+│  Can be used standalone by projects other than tenferro.
+│
+├── strided-traits       # ScalarBase, ElementOp traits
+├── strided-view         # StridedArray, StridedView, StridedViewMut (zero-copy strided views)
+└── strided-kernel       # Cache-optimized map/reduce/broadcast kernels
+
+tenferro-rs/ (workspace) ── 4 POC crates ─────────────────────
+│  Depends on strided-rs.
+│
+├── tenferro-device      # Device enum (Cpu, Cuda{device_id}, Hip{device_id})
+│                        #   Error (thiserror): ShapeMismatch, RankMismatch,
+│                        #     DeviceError, InvalidArgument, Strided
+│                        #   Result<T> type alias
+│                        #   Depends on: strided-view (for StridedError), thiserror
+│
+├── tenferro-tensorops   # TensorOps trait — cuTENSOR-compatible protocol
+│                        #   ContractionDescriptor (Vec<u32> modes)
+│                        #   ContractionPlan<T>, ReduceOp enum (Sum, Max, Min)
+│                        #   4 operations: contraction (plan-based),
+│                        #     elementwise_binary, reduce, permute (plan-free)
+│                        #   CpuBackend (associated functions, not methods)
+│                        #   Operates on StridedView<T> / StridedViewMut<T> directly
+│                        #   Depends on: tenferro-device, strided-view, strided-traits
+│
+├── tenferro-tensor      # Tensor<T> = DataBuffer + dims + strides + offset + device
+│                        #   DataBuffer<T> enum: Cpu(StridedArray<T>)
+│                        #   MemoryOrder: ColumnMajor, RowMajor (allocation-time only)
+│                        #   Constructors: zeros, ones, from_slice, from_strided_array
+│                        #   View ops: view(), view_mut(), permute, broadcast,
+│                        #     diagonal, reshape (zero-copy metadata ops)
+│                        #   Data ops: contiguous, is_contiguous
+│                        #   Depends on: tenferro-device, strided-view, strided-traits, num-traits
+│
+└── tenferro-einsum      # High-level einsum on Tensor<T>
+                         #   String notation: einsum("ij,jk->ik", &[&a, &b])
+                         #   Parenthesized order: einsum("ij,(jk,kl)->il", &[...])
+                         #   Subscripts struct (new for integers, parse for strings)
+                         #   ContractionTree (optimize, from_pairs)
+                         #   Three API levels: einsum, einsum_with_subscripts,
+                         #     einsum_with_plan
+                         #   Depends on: tenferro-device, tenferro-tensorops,
+                         #     tenferro-tensor, strided-traits
+```
+
+### Future Crates (not in POC)
+
+```
+tenferro-rs/ (future additions) ──────────────────────────────
+│
+├── tenferro-algebra     # Semiring/Algebra traits, tropical types (MaxPlus, MinPlus, MaxMul)
+│                        #   Argmax tracking for tropical backward pass
+├── tenferro-linalg      # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER via device layer)
+├── tenferro-autograd    # TrackedTensor, DualTensor, VJP/JVP
+├── tenferro-capi        # C FFI (tensor ops + VJP/JVP + backend loading)
+└── burn-tenferro        # Burn Backend bridge [OPTIONAL, for NN only]
+
+tenferro-structured-rs/ (future separate workspace) ── Structured tensor types ──
+│
+├── tenferro-blocksparse # BlockSparseTensor (single DataBuffer + block offsets)
+├── tenferro-diag        # DiagTensor (1D Tensor of diagonal elements)
+└── tenferro-graded      # GradedTensor (future: quantum number sectors)
+
+tensor4all-rs/ (workspace) ── Tensor network algorithms ────
+│
+├── TCI, Quantics, MPS, ...
+└── depends on tenferro-rs + tenferro-structured-rs
+```
+
+### Dependency Graph (POC)
+
+```
+strided-rs (independent workspace):
+strided-traits → strided-view → strided-kernel
+
+tenferro-rs (workspace, depends on strided-rs):
+
+tenferro-device (← strided-view for StridedError, ← thiserror)
+    │
+    ├────────────────────┐
+    ↓                    ↓
+tenferro-tensorops   tenferro-tensor
+    │  (← strided-view,     │  (← strided-view,
+    │   ← strided-traits)   │   ← strided-traits,
+    │                        │   ← num-traits)
+    │                        │
+    └──────────┬─────────────┘
+               ↓
+          tenferro-einsum
+              (← strided-traits)
+```
+
+### Future Dependency Graph (full vision)
+
+```
+tenferro-device
+    │
+    ├────────────────────────────┐
+    ↓                            ↓
+tenferro-tensorops          tenferro-tensor
+    │                            │
+    └──────────┬─────────────────┘
+               ↓
+          tenferro-einsum
+               │
+    ┌──────────┼──────────────┐
+    ↓          ↓              ↓
+tenferro-  tenferro-     tenferro-
+ linalg     autograd       capi
+
+[separate workspace: tenferro-structured-rs]
+tenferro-blocksparse ← tenferro-tensor
+tenferro-diag        ← tenferro-tensor
+tenferro-graded      ← tenferro-blocksparse (future)
+
+[optional]
+burn-tenferro ← tenferro-tensor, burn-backend
+```
+
+### Origin of Each Crate
+
+| tenferro crate | Origin | What changes |
+|----------------|--------|--------------|
+| tenferro-device | **New** (POC) | Device enum, Error/Result types (thiserror) |
+| tenferro-tensorops | **New** (POC), will absorb strided-einsum2 | TensorOps trait, ContractionDescriptor/Plan, CpuBackend |
+| tenferro-tensor | **New** (POC) | Tensor\<T\>, DataBuffer\<T\>, MemoryOrder, zero-copy view ops |
+| tenferro-einsum | **New** (POC), will absorb strided-opteinsum + omeinsum-rs | Subscripts, ContractionTree, einsum/einsum_with_subscripts/einsum_with_plan |
+| tenferro-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types [future] |
+| tenferro-linalg | ndtensors-rs (linalg) | Port SVD/QR/eigen [future] |
+| tenferro-autograd | ndtensors-rs (autodiff) | Port TrackedTensor/DualTensor [future] |
+| tenferro-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | Port C FFI + backend loading API [future] |
+| burn-tenferro | New | Burn Backend bridge [future] |
+| **tenferro-structured-rs (separate workspace):** | | |
+| tenferro-blocksparse | ndtensors-rs (blocksparse) | Port with single-buffer layout [future] |
+| tenferro-diag | ndtensors-rs (diag) | Port DiagTensor [future] |
+| tenferro-graded | New (future) | Quantum number graded tensors [future] |
+
+---
+
+## Compile-Time vs Runtime Decision Summary
+
+| Choice | Mechanism | Rationale |
+|--------|-----------|-----------|
+| GPU vendor (cuTENSOR/hipTensor) | **Runtime** (dlopen) [future] | Single binary for all platforms; Julia/Python inject .so path |
+| CPU GEMM (faer/cblas) | **Compile-time** (Cargo feature) [future] | Fundamentally different linking (pure Rust vs C ABI) |
+| Elementwise ops | **Enum-based only** | cuTENSOR-compatible operator enums; custom closures via strided-kernel directly |
+| libloading dependency | **Always ON** (in tenferro-device) [future] | Lightweight, no overhead when GPU absent, no feature gate needed |
+| .so path for GPU libs | **Caller-injected** [future] | Rust does not search; Julia/Python provide exact path |
+
+---
+
+## Phase 1: Dense Array Foundation (POC)
+
+### tenferro-device
+
+The device crate provides shared infrastructure used across all tenferro crates.
+
+```rust
+/// Compute device on which tensor data resides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Device {
+    Cpu,
+    Cuda { device_id: usize },
+    Hip { device_id: usize },
+}
+
+impl fmt::Display for Device {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Device::Cpu => write!(f, "cpu"),
+            Device::Cuda { device_id } => write!(f, "cuda:{device_id}"),
+            Device::Hip { device_id } => write!(f, "hip:{device_id}"),
+        }
+    }
+}
+```
+
+**Error types** using `thiserror`:
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("shape mismatch: expected {expected:?}, got {got:?}")]
+    ShapeMismatch { expected: Vec<usize>, got: Vec<usize> },
+
+    #[error("rank mismatch: expected {expected}, got {got}")]
+    RankMismatch { expected: usize, got: usize },
+
+    #[error("device error: {0}")]
+    DeviceError(String),
+
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+
+    #[error(transparent)]
+    Strided(#[from] strided_view::StridedError),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+```
+
+**Dependencies**: `strided-view` (for `StridedError`), `thiserror`.
+
+**Note**: `BackendRegistry`, `GpuBackend`, and `TensorLibVtable` are **not** in the POC. They are planned for future GPU support (see [GPU Strategy](#gpu-strategy) section below).
+
+### tenferro-tensorops
+
+The central protocol layer. Defines a `TensorOps` trait with 4 operation categories.
+The POC uses **associated functions** (not `&self` methods) and operates directly on
+`StridedView<T>` / `StridedViewMut<T>` (no `Storage<T>` or `TensorMeta` abstractions).
+
+> **Detailed design**: See [tenferro Einsum Internal Design](./tenferro_einsum_internal_design.md)
+> for the full internal design including CPU contraction pipeline details.
+
+**Key types**:
+
+```rust
+/// Describes a tensor contraction in terms of index modes.
+/// Modes are u32 labels (cuTENSOR-compatible).
+#[derive(Debug, Clone)]
+pub struct ContractionDescriptor {
+    pub modes_a: Vec<u32>,
+    pub modes_b: Vec<u32>,
+    pub modes_c: Vec<u32>,
+}
+
+/// Pre-computed execution plan for a tensor contraction.
+pub struct ContractionPlan<T: ScalarBase> {
+    _marker: PhantomData<T>,
+}
+
+/// Reduction operation kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReduceOp {
+    Sum,
+    Max,
+    Min,
+}
+```
+
+**TensorOps trait** (POC version -- 4 operations, associated functions):
+
+```rust
+pub trait TensorOps {
+    // === Contraction (plan-based) ===
+    fn plan_contraction<T: ScalarBase>(
+        desc: &ContractionDescriptor,
+        dims_a: &[usize],
+        dims_b: &[usize],
+        dims_c: &[usize],
+    ) -> Result<ContractionPlan<T>>;
+
+    fn contract<T: ScalarBase>(
+        plan: &ContractionPlan<T>,
+        alpha: T,
+        a: &StridedView<T>,
+        b: &StridedView<T>,
+        beta: T,
+        c: &mut StridedViewMut<T>,
+    ) -> Result<()>;
+
+    // === Element-wise binary (plan-free) ===
+    fn elementwise_binary<T: ScalarBase>(
+        alpha: T,
+        a: &StridedView<T>,
+        modes_a: &[u32],
+        beta: T,
+        c: &mut StridedViewMut<T>,
+        modes_c: &[u32],
+    ) -> Result<()>;
+
+    // === Reduction (plan-free) ===
+    fn reduce<T: ScalarBase>(
+        alpha: T,
+        a: &StridedView<T>,
+        modes_a: &[u32],
+        beta: T,
+        c: &mut StridedViewMut<T>,
+        modes_c: &[u32],
+        op: ReduceOp,
+    ) -> Result<()>;
+
+    // === Permutation (plan-free) ===
+    fn permute<T: ScalarBase>(
+        alpha: T,
+        a: &StridedView<T>,
+        modes_a: &[u32],
+        b: &mut StridedViewMut<T>,
+        modes_b: &[u32],
+    ) -> Result<()>;
+}
+```
+
+**CpuBackend**:
+
+```rust
+pub struct CpuBackend;
+
+impl TensorOps for CpuBackend {
+    fn plan_contraction<T: ScalarBase>(...) -> Result<ContractionPlan<T>> { ... }
+    fn contract<T: ScalarBase>(...) -> Result<()> { ... }
+    fn elementwise_binary<T: ScalarBase>(...) -> Result<()> { ... }
+    fn reduce<T: ScalarBase>(...) -> Result<()> { ... }
+    fn permute<T: ScalarBase>(...) -> Result<()> { ... }
+}
+```
+
+**Key differences from original design**:
+- Only 4 operations (no `ElementwiseTrinary`)
+- Associated functions, not methods with `&self` -- no associated types on the trait
+- Uses `StridedView<T>` / `StridedViewMut<T>` directly (not `Storage<T>` + `TensorMeta`)
+- `ContractionDescriptor` uses `Vec<u32>` for modes (not `&[i32]`)
+- Only contraction is plan-based; other operations are plan-free
+- `ReduceOp` is its own enum (`Sum`, `Max`, `Min`), not an alias for `BinaryOp`
+
+**Usage examples**:
+
+```rust
+use tenferro_tensorops::{ContractionDescriptor, CpuBackend, TensorOps};
+use strided_view::StridedArray;
+
+// Matrix multiplication: C_{m,n} = A_{m,k} * B_{k,n}
+let a = StridedArray::<f64>::col_major(&[3, 4]);
+let b = StridedArray::<f64>::col_major(&[4, 5]);
+let mut c = StridedArray::<f64>::col_major(&[3, 5]);
+
+let desc = ContractionDescriptor {
+    modes_a: vec![0, 1],   // m=0, k=1
+    modes_b: vec![1, 2],   // k=1, n=2
+    modes_c: vec![0, 2],   // m=0, n=2
+};
+
+let plan = CpuBackend::plan_contraction::<f64>(&desc, &[3, 4], &[4, 5], &[3, 5]).unwrap();
+CpuBackend::contract(&plan, 1.0, &a.view(), &b.view(), 0.0, &mut c.view_mut()).unwrap();
+
+// Reduction: c_i = sum_j A_{i,j}
+CpuBackend::reduce(
+    1.0, &a.view(), &[0, 1],
+    0.0, &mut c_vec.view_mut(), &[0],
+    ReduceOp::Sum,
+).unwrap();
+
+// Permutation (transpose): B_{j,i} = A_{i,j}
+CpuBackend::permute(
+    1.0, &a.view(), &[0, 1],
+    &mut b.view_mut(), &[1, 0],
+).unwrap();
+```
+
+**No Metal (Apple GPU) support**: M-series CPUs are fast enough for our
+workloads (tensor network algorithms). Metal lacks a cuTENSOR-equivalent
+tensor contraction library, requiring reshape+matmul decomposition that
+would be slow for high-rank tensors. Not worth the implementation cost.
+
+### tenferro-tensor
+
+`Tensor<T>` is the core data type. It wraps a `DataBuffer<T>` with
+shape/stride metadata and provides zero-copy view operations.
+
+```rust
+/// Memory ordering for new allocations only.
+/// Not stored on the tensor — strides fully describe the layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryOrder {
+    ColumnMajor,  // First dimension has stride 1 (Fortran/Julia)
+    RowMajor,     // Last dimension has stride 1 (C/NumPy)
+}
+
+/// Owned data buffer, device-aware.
+pub enum DataBuffer<T> {
+    Cpu(StridedArray<T>),
+    // Future: Cuda(CudaBuffer<T>), Hip(HipBuffer<T>)
+}
+
+/// Multi-dimensional dense tensor.
+pub struct Tensor<T: ScalarBase> {
+    buffer: DataBuffer<T>,
+    dims: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+    device: Device,
+}
+```
+
+**Constructors**:
+
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    pub fn zeros(dims: &[usize], device: Device, order: MemoryOrder) -> Self;
+    pub fn ones(dims: &[usize], device: Device, order: MemoryOrder) -> Self;
+    pub fn from_slice(data: &[T], dims: &[usize], order: MemoryOrder) -> Result<Self>;
+    pub fn from_strided_array(array: StridedArray<T>) -> Self;
+}
+```
+
+**Metadata**:
+
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    pub fn dims(&self) -> &[usize];
+    pub fn strides(&self) -> &[isize];
+    pub fn ndim(&self) -> usize;
+    pub fn len(&self) -> usize;
+    pub fn is_empty(&self) -> bool;
+    pub fn device(&self) -> &Device;
+}
+```
+
+**View operations** (zero-copy, modify only metadata):
+
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    /// Immutable strided view for use with TensorOps or strided-kernel.
+    pub fn view(&self) -> StridedView<'_, T>;
+
+    /// Mutable strided view.
+    pub fn view_mut(&mut self) -> StridedViewMut<'_, T>;
+
+    /// Permute (reorder) dimensions. Zero-copy.
+    pub fn permute(&self, perm: &[usize]) -> Result<Tensor<T>>;
+
+    /// Broadcast to a larger shape. Zero-copy via stride 0.
+    pub fn broadcast(&self, target_dims: &[usize]) -> Result<Tensor<T>>;
+
+    /// Extract diagonal view by merging pairs of axes. Zero-copy stride trick.
+    pub fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>>;
+
+    /// Reshape. Requires contiguous data.
+    pub fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>>;
+}
+```
+
+**Data operations**:
+
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    /// Return a contiguous copy in the given memory order.
+    pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
+
+    /// Check if tensor data is contiguous in memory.
+    pub fn is_contiguous(&self) -> bool;
+}
+```
+
+**Key differences from original design**:
+- `DataBuffer<T>` is an enum in `tenferro-tensor` (not a separate crate, no `Arc` wrapping)
+- Fields: `dims` (`Vec<usize>`), `strides` (`Vec<isize>`), `offset` (`isize`) -- no `SmallVec`
+- `MemoryOrder` is only used at allocation time, **not stored** on the tensor
+- Bridge to strided-rs via `view()` / `view_mut()` (not `as_strided_view()`)
+- No `TensorMeta` struct -- not needed since `TensorOps` uses `StridedView` directly
+- No type casting methods yet (future work)
+
+**Creating and using tensors**:
+
+```rust
+use tenferro_tensor::{Tensor, MemoryOrder};
+use tenferro_device::Device;
+
+// Create tensors
+let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+let m = Tensor::<f64>::from_slice(&data, &[2, 3], MemoryOrder::ColumnMajor).unwrap();
+
+// Zero-copy transpose
+let mt = m.permute(&[1, 0]).unwrap();
+assert_eq!(mt.dims(), &[3, 2]);
+
+// Broadcasting (zero-copy via stride 0)
+let col = Tensor::<f64>::ones(&[3, 1], Device::Cpu, MemoryOrder::ColumnMajor);
+let expanded = col.broadcast(&[3, 4]).unwrap();
+assert_eq!(expanded.dims(), &[3, 4]);
+
+// Get strided views for low-level operations
+let view = a.view();
+let mut b = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+let view_mut = b.view_mut();
+```
+
+For **custom element-wise closures** (arbitrary user functions not in the
+`TensorOps` enum), use strided-kernel directly via `view()`:
+
+```rust
+// Custom closures: use strided-kernel directly (CPU only)
+let a_view = tensor_a.view();
+let b_view = tensor_b.view();
+strided_kernel::zip_map2_into(&mut out.view_mut(), &a_view, &b_view, |a, b| a * b + 1.0);
+```
+
+### tenferro-einsum
+
+High-level einsum API on `Tensor<T>`. Supports string notation with
+parenthesized contraction order, integer label notation, and pre-optimized
+contraction trees.
+
+**Subscripts**:
+
+```rust
+/// Einsum subscripts using integer labels (omeinsum-rs compatible).
+#[derive(Debug, Clone)]
+pub struct Subscripts {
+    pub inputs: Vec<Vec<u32>>,
+    pub output: Vec<u32>,
+}
+
+impl Subscripts {
+    /// Create from integer label arrays.
+    pub fn new(inputs: &[&[u32]], output: &[u32]) -> Self;
+
+    /// Parse from string notation: "ij,jk->ik"
+    /// Supports parenthesized order: "ij,(jk,kl)->il"
+    pub fn parse(notation: &str) -> Result<Self>;
+}
+```
+
+**ContractionTree**:
+
+```rust
+pub struct ContractionTree { /* internal */ }
+
+impl ContractionTree {
+    /// Automatically optimize contraction order (cost-based heuristic).
+    pub fn optimize(subscripts: &Subscripts, shapes: &[&[usize]]) -> Result<Self>;
+
+    /// Manually specify pairwise contraction sequence.
+    pub fn from_pairs(
+        subscripts: &Subscripts,
+        shapes: &[&[usize]],
+        pairs: &[(usize, usize)],
+    ) -> Result<Self>;
+}
+```
+
+**Three API levels**:
+
+```rust
+/// Level 1: String notation — parse + optimize + execute.
+pub fn einsum<T: ScalarBase>(
+    subscripts: &str,
+    operands: &[&Tensor<T>],
+) -> Result<Tensor<T>>;
+
+/// Level 2: Pre-built subscripts — optimize + execute.
+pub fn einsum_with_subscripts<T: ScalarBase>(
+    subscripts: &Subscripts,
+    operands: &[&Tensor<T>],
+) -> Result<Tensor<T>>;
+
+/// Level 3: Pre-optimized tree — execute only.
+pub fn einsum_with_plan<T: ScalarBase>(
+    tree: &ContractionTree,
+    operands: &[&Tensor<T>],
+) -> Result<Tensor<T>>;
+```
+
+| Level | Parsing | Optimization | Execution | Use case |
+|-------|---------|-------------|-----------|----------|
+| `einsum` | Yes | Yes | Yes | One-off, convenience |
+| `einsum_with_subscripts` | Cached | Yes | Yes | Same pattern, varying shapes |
+| `einsum_with_plan` | Cached | Cached | Yes | Hot loops, same shapes |
+
+**User examples**:
+
+```rust
+use tenferro_einsum::einsum;
+use tenferro_tensor::{Tensor, MemoryOrder};
+use tenferro_device::Device;
+
+let col = MemoryOrder::ColumnMajor;
+let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+
+// Matrix multiplication
+let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+
+// Trace
+let tr = einsum("ii->", &[&a]).unwrap();
+
+// Batch matrix multiplication
+let ba = Tensor::<f64>::zeros(&[10, 3, 4], Device::Cpu, col);
+let bb = Tensor::<f64>::zeros(&[10, 4, 5], Device::Cpu, col);
+let bc = einsum("bij,bjk->bik", &[&ba, &bb]).unwrap();
+
+// Explicit contraction order via parentheses
+let d = einsum("ij,(jk,kl)->il", &[&a, &b, &c]).unwrap();
+
+// Integer label notation (for programmatic use)
+use tenferro_einsum::{einsum_with_subscripts, Subscripts};
+let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+let c = einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
+
+// Pre-optimized tree (hot loops)
+use tenferro_einsum::ContractionTree;
+let tree = ContractionTree::optimize(&subs, &[&[2, 2], &[2, 2]]).unwrap();
+let c = einsum_with_plan(&tree, &[&a, &b]).unwrap();
+```
+
+**Key differences from original design**:
+- String-first API: `einsum("ij,jk->ik", &[&a, &b])` instead of integer labels as primary
+- Parenthesized contraction order in string notation
+- `Subscripts::parse()` handles string-to-integer conversion
+- Three API levels (`einsum`, `einsum_with_subscripts`, `einsum_with_plan`) instead of `einsum`/`einsum_into`/`einsum_owned_into` variants
+- No `einsum_into` or `einsum_owned_into` (accumulation, buffer reuse) yet -- future optimization
+- No mixed-type inputs: all inputs and output must be the same type `T`
+
+---
+
+## Future Phase: tenferro-algebra
+
+Semiring/Algebra abstraction from omeinsum-rs, as a standalone crate:
+
+```rust
+pub trait Semiring: ScalarBase {
+    fn sem_zero() -> Self;
+    fn sem_one() -> Self;
+    fn sem_add(self, rhs: Self) -> Self;
+    fn sem_mul(self, rhs: Self) -> Self;
+}
+
+pub struct Standard<T>(pub T);    // sem_add = +, sem_mul = *
+pub struct MaxPlus<T>(pub T);     // sem_add = max, sem_mul = +
+pub struct MinPlus<T>(pub T);     // sem_add = min, sem_mul = +
+pub struct MaxMul<T>(pub T);      // sem_add = max, sem_mul = *
+```
+
+Also provides:
+- Argmax tracking for tropical backward pass
+- Algebra trait extending Semiring with optional backward/gradient support
+
+---
+
+## Future Phase: tenferro-linalg
+
+All decomposition functions:
+1. Call `tensor.contiguous(MemoryOrder::ColumnMajor)` (faer is column-major)
+2. Create `faer::MatRef` from raw pointer + strides
+3. Call faer's decomposition
+4. Wrap result back into Tensor
+
+**Operations**: svd, svd_truncated, qr, qr_positive, ql, eigen_hermitian, eigen, polar, matrix_exp.
+
+**N-D tensor decomposition**: specify left_dims for "row" side, reshape to 2D, decompose, reshape back.
+
+**Trait bound**: `T: Scalar + faer::ComplexField` (enforced here, not in strided-traits/tenferro-tensor).
+
+**GPU path**: cuSOLVER/rocSOLVER via runtime-loaded vendor library (same dlopen pattern).
+
+**Existing code to reuse**:
+- `ndtensors-rs/crates/ndtensors/src/backend/faer_interop.rs` -- faer bridge pattern
+- `ndtensors-rs/crates/ndtensors/src/linalg/` -- SVD, QR implementations
+
+---
+
+## Future Phase: tenferro-autograd (Primary AD System)
+
+This is the **default** AD system for tenferro users. Burn's autodiff is only for NN workloads.
+
+### Reverse-Mode (Backward)
+
+```rust
+pub struct TrackedTensor<T: Scalar> {
+    tensor: Tensor<T>,
+    node: Option<NodeRef>,
+    requires_grad: bool,
+}
+
+pub fn backward<T: Scalar>(loss: &TrackedTensor<T>) -> Result<Gradients<T>>;
+```
+
+### Forward-Mode (JVP)
+
+```rust
+pub struct DualTensor<T: Scalar> {
+    primal: Tensor<T>,
+    tangent: Option<Tensor<T>>,
+}
+```
+
+### Contraction VJP/JVP
+
+Both VJP and JVP delegate to `TensorOps`, so they work on CPU and GPU uniformly.
+
+```rust
+pub fn contract_vjp<T: Scalar>(
+    a: &Tensor<T>, labels_a: &[u32],
+    b: &Tensor<T>, labels_b: &[u32],
+    grad_output: &Tensor<T>,
+) -> Result<(Tensor<T>, Tensor<T>)>;
+
+pub fn dual_contract<T: Scalar>(
+    a: &DualTensor<T>, labels_a: &[u32],
+    b: &DualTensor<T>, labels_b: &[u32],
+) -> Result<DualTensor<T>>;
+```
+
+**Existing code to reuse**:
+- `ndtensors-rs/crates/ndtensors/src/autodiff/` -- backward pass, graph, TrackedTensor
+- `ndtensors-rs/crates/ndtensors/src/contract/naive.rs:222` -- contract_vjp
+- `ndtensors-rs/crates/ndtensors/src/autodiff/ops/dual_contract.rs` -- JVP
+
+**Verification**:
+- Numerical gradient checks (finite difference vs AD)
+- Forward-mode vs reverse-mode consistency
+- Complex-valued contraction gradients (Wirtinger calculus)
+
+---
+
+## Future Phase: tenferro-capi (C FFI for ChainRules.jl)
+
+### Backend Loading API
+
+Wraps the device layer's `BackendRegistry` as C functions:
+
+```c
+// Load GPU vendor library at runtime
+int tenferro_backend_load_cutensor(const char* libcutensor_path);
+int tenferro_backend_load_hiptensor(const char* libhiptensor_path);
+
+// Query available devices
+int tenferro_backend_device_count(void);
+int tenferro_backend_device_type(int device_id);  // 0=CPU, 1=CUDA, 2=HIP
+```
+
+### ChainRules.jl Integration
+
+Julia's ChainRules.jl defines:
+- `rrule(f, args...)` -> `(result, pullback)` -- reverse-mode rule
+- `frule((Dself, Dargs...), f, args...)` -> `(result, Dresult)` -- forward-mode rule
+
+tenferro-capi exposes the VJP/JVP primitives that Julia wraps as ChainRules rules:
+
+```c
+// Opaque types
+typedef struct tenferro_tensor_f64 tenferro_tensor_f64;
+typedef struct tenferro_tensor_c64 tenferro_tensor_c64;
+
+// Core tensor lifecycle
+tenferro_tensor_f64* tenferro_tensor_f64_from_data(
+    const double* data, const size_t* shape, size_t ndim);
+void tenferro_tensor_f64_release(tenferro_tensor_f64* tensor);
+
+// Contraction
+tenferro_tensor_f64* tenferro_contract_f64(
+    const tenferro_tensor_f64* a, const uint32_t* labels_a,
+    const tenferro_tensor_f64* b, const uint32_t* labels_b,
+    int* status);
+
+// VJP (for rrule pullback)
+int tenferro_contract_vjp_f64(
+    const tenferro_tensor_f64* a, const uint32_t* labels_a, size_t ndim_a,
+    const tenferro_tensor_f64* b, const uint32_t* labels_b, size_t ndim_b,
+    const tenferro_tensor_f64* grad_c,
+    tenferro_tensor_f64** grad_a_out,
+    tenferro_tensor_f64** grad_b_out);
+
+// JVP (for frule)
+tenferro_tensor_f64* tenferro_contract_jvp_f64(
+    const tenferro_tensor_f64* a, const uint32_t* labels_a, size_t ndim_a,
+    const tenferro_tensor_f64* b, const uint32_t* labels_b, size_t ndim_b,
+    const tenferro_tensor_f64* da,   // nullable (zero tangent)
+    const tenferro_tensor_f64* db,   // nullable (zero tangent)
+    int* status);
+```
+
+**Uses integer labels** (`u32`), not string notation, for C API ergonomics.
+
+Julia example:
+```julia
+using cuTENSOR_jll
+
+# Load GPU backend via jll-managed path
+ccall((:tenferro_backend_load_cutensor, libtenferro), Cint, (Cstring,),
+      cuTENSOR_jll.libcutensor_path)
+```
+
+---
+
+## Future Phase: tenferro-structured-rs (separate workspace)
+
+Structured tensor types built on top of `Tensor<T>`. These live in a
+**separate workspace** so they can be used by projects other than
+tensor4all-rs without pulling in application-level dependencies.
+
+### tenferro-diag
+
+```rust
+pub struct DiagTensor<T: ScalarBase> {
+    diag: Tensor<T>,
+    full_sizes: Vec<usize>,
+}
+```
+
+### tenferro-blocksparse
+
+Follows the **ITensors.jl/NDTensors pattern**: all blocks in a **single contiguous `DataBuffer`** with block offset mapping.
+
+```rust
+pub struct BlockSparseTensor<T: ScalarBase> {
+    buffer: DataBuffer<T>,
+    block_offsets: HashMap<BlockIndex, usize>,
+    block_sizes: HashMap<BlockIndex, Vec<usize>>,
+    full_sizes: Vec<usize>,
+}
+```
+
+### tenferro-graded (future)
+
+Quantum number graded tensors. BlockSparseTensor with sector-labeled
+block indices and fusion-rule-constrained block structure.
+
+---
+
+## Future Phase: burn-tenferro (Optional Burn Backend for NN)
+
+**Only needed when**: Users want Burn's NN modules with tenferro tensors.
+
+| Burn Method | tenferro Implementation |
+|---|---|
+| `float_add` | `TensorOps::elementwise_binary` |
+| `float_matmul` | `TensorOps::contract` |
+| `float_exp/sin/...` | `TensorOps::permute` with unary op on identity permutation |
+| `float_reshape/permute/slice` | Metadata-only (zero-copy) |
+| `float_sum/sum_dim` | `TensorOps::reduce` (ReduceOp::Sum) |
+
+---
+
+## GPU Strategy
+
+### Runtime Library Loading (Not Compile-Time Features)
+
+GPU support is entirely runtime-based. A single compiled binary supports
+CPU, NVIDIA, and AMD:
+
+```
+Build once -> Ship one binary
+                |
+            Runtime:
+            |-- libcutensor.so found? -> NVIDIA GPU enabled
+            |-- libhiptensor.so found? -> AMD GPU enabled
+            +-- Neither? -> CPU only (no error, graceful fallback)
+```
+
+No `#[cfg(feature = "cuda")]` or `#[cfg(feature = "hip")]` in the
+codebase (except for GPU-specific buffer allocation internals).
+
+### cuTENSOR / hipTensor API Compatibility
+
+AMD intentionally mirrors NVIDIA's API. The mapping is 1:1:
+
+| cuTENSOR | hipTensor |
+|----------|-----------|
+| `cutensorCreate` | `hiptensorCreate` |
+| `cutensorCreateTensorDescriptor` | `hiptensorCreateTensorDescriptor` |
+| `cutensorCreateContraction` | `hiptensorCreateContraction` |
+| `cutensorCreatePermutation` | `hiptensorCreatePermutation` |
+| `cutensorCreateElementwiseBinary` | `hiptensorCreateElementwiseBinary` |
+| `cutensorCreateReduction` | `hiptensorCreateReduction` |
+| `cutensorCreatePlan` | `hiptensorCreatePlan` |
+| `cutensorContract` | `hiptensorContract` |
+
+This enables a single `TensorLibVtable` struct populated from either library.
+
+### GPU Backend Design (Future)
+
+When GPU support is added, the `tenferro-device` crate will be extended with:
+
+```rust
+/// BackendRegistry manages all devices (CPU + GPU).
+pub struct BackendRegistry {
+    cpu: CpuBackend,
+    gpu: Option<GpuBackend>,
+}
+
+impl BackendRegistry {
+    pub fn new() -> Self;  // CPU only
+    pub fn load_cutensor(&mut self, path: &str) -> Result<()>;
+    pub fn load_hiptensor(&mut self, path: &str) -> Result<()>;
+    pub fn available_devices(&self) -> Vec<Device>;
+}
+
+/// GPU vtable abstracting over cuTENSOR / hipTensor.
+struct TensorLibVtable {
+    create_handle: Symbol<unsafe extern "C" fn(*mut *mut c_void) -> i32>,
+    contract: Symbol<unsafe extern "C" fn(/* ... */) -> i32>,
+    // ...
+}
+
+pub struct GpuBackend {
+    vtable: TensorLibVtable,
+    handle: *mut c_void,
+    _lib: Library,  // prevent unloading
+}
+```
+
+`libloading` will be an unconditional dependency (lightweight, no overhead when GPU absent).
+
+### GPU Plan Caching
+
+Plans are expensive to create on GPU. A `PlanCache` avoids re-creation
+for repeated contraction patterns:
+
+```rust
+pub struct PlanCache {
+    cache: HashMap<PlanCacheKey, GpuPlan>,
+    capacity: usize,
+}
+```
+
+Cache key: `(shapes, strides, modes, dtype)`.
+
+### No Metal (Apple GPU) Support
+
+M-series CPUs are fast enough for tensor network workloads (TCI, Quantics,
+MPS algorithms). Metal is not supported because:
+
+1. **No cuTENSOR equivalent** -- Apple has no dedicated N-dimensional tensor
+   contraction library. Contraction must be decomposed into reshape + matmul,
+   which is slow for high-rank tensors (rank-8+ common in tensor networks).
+2. **Incompatible API paradigm** -- MPSGraph uses graph-based execution
+   (Objective-C), not the operation-level C API used by cuTENSOR/hipTensor.
+   Cannot share the dlopen vtable abstraction.
+3. **Implementation cost vs benefit** -- The primary use case (tensor networks)
+   runs well on CPU. GPU acceleration benefits come from NVIDIA/AMD HPC
+   clusters, not Apple laptops.
+
+---
+
+## Custom Scalar Type Support
+
+Users extend the system at the appropriate level:
+
+| Level | What to implement | Result |
+|-------|-------------------|--------|
+| `ScalarBase` only | Basic trait bounds | Einsum via naive loop, map/reduce work |
+| `ScalarBase` + custom GEMM | Custom backend in tenferro-tensorops | Einsum uses custom GEMM (permute -> reshape -> bgemm) |
+| Full `TensorOps` | Custom backend implementation | Complete control over all operations |
+
+**Algebra-aware dispatch** (future, in tenferro-einsum):
+- `Standard<f64/f32/Complex>` -> faer or CBLAS GEMM
+- `Standard<i32/i64>` -> naive loop
+- `MaxPlus<f64>` -> tropical-gemm (SIMD, future)
+- GPU tensors -> cuTENSOR/hipTensor via `TensorOps`
+
+---
+
+## Migration Strategy (tensor4all-rs)
+
+1. Replace `tensor4all-tensorbackend::Storage` with tenferro types
+2. Replace `DenseStorage<T>` (mdarray-based) with `Tensor<T>`
+3. Adapt `TensorLike` trait to use tenferro Tensor
+4. Remove mdarray dependency from tensor4all-rs core
+
+This happens **after tenferro core is stable**.
+
+---
+
+## Verification Plan
+
+### After POC (Phase 1 core):
+```bash
+cd tenferro-rs && cargo test -p tenferro-device -p tenferro-tensorops \
+    -p tenferro-tensor -p tenferro-einsum
+```
+- Unit tests for all Tensor operations
+- Zero-copy verification: assert same buffer pointer after view ops
+- **TensorOps conformance tests**: verify CpuBackend passes the same
+  test suite that GPU backends will use
+- Integer type einsum test (i32, i64 via naive backend)
+- Benchmark: tenferro einsum vs current tensor4all-rs mdarray-einsum
+
+### After future phases:
+
+**tenferro-algebra**:
+- Tropical semiring contraction test (tenferro-algebra + naive backend)
+- Custom type extensibility tests: `ModInt<P>` test type through
+  all three dispatch tiers
+
+**tenferro-linalg**:
+- Cross-validate SVD/QR results against ndtensors-rs
+- Complex SVD test
+
+**tenferro-autograd**:
+- Numerical gradient checks (finite difference vs reverse-mode AD)
+- Forward-mode vs reverse-mode consistency
+- Complex-valued gradient test (Wirtinger calculus)
+
+**tenferro-capi**:
+- Round-trip test: Julia -> C API -> Rust -> C API -> Julia
+- Backend loading test: `tenferro_backend_load_cutensor` / `tenferro_backend_load_hiptensor`
+- ChainRules.jl integration test with Zygote.jl
+
+---
+
+## Key Files Reference
+
+| Component | Source | Destination |
+|---|---|---|
+| ScalarBase trait | `strided-rs/strided-traits/src/scalar.rs` | Stays in strided-rs; used by tenferro via dependency |
+| ElementOp | `strided-rs/strided-traits/src/element_op.rs` | Stays in strided-rs; used by tenferro via dependency |
+| StridedArray/View | `strided-rs/strided-view/src/` | Stays in strided-rs; used directly in tenferro-tensor (DataBuffer), tenferro-tensorops (TensorOps), tenferro-device (StridedError) |
+| map/reduce kernels | `strided-rs/strided-kernel/src/` | Stays in strided-rs; tenferro-tensorops will depend on it |
+| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | **Absorbed** into tenferro-tensorops (CPU contraction) [future] |
+| BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | **Absorbed** into tenferro-tensorops (GEMM dispatch) [future] |
+| opteinsum | `strided-rs/strided-opteinsum/src/lib.rs` | **Absorbed** into tenferro-einsum [future] |
+| Algebra traits | `omeinsum-rs/src/algebra/` | **Absorbed** into tenferro-algebra [future] |
+| Backend trait | `omeinsum-rs/src/backend/traits.rs` | **Absorbed** into tenferro-tensorops (evolved into TensorOps) |
+| cuTENSOR wrapper | `omeinsum-rs/src/backend/cuda/cutensor/` | **Absorbed** into tenferro-device (GPU vtable) [future] |
+| PlanCache | `omeinsum-rs/src/backend/cuda/cutensor/contract.rs` | **Absorbed** into tenferro-device [future] |
+| faer bridge | `ndtensors-rs/.../faer_interop.rs` | tenferro-linalg [future] |
+| contract_vjp | `ndtensors-rs/.../contract/naive.rs` | tenferro-autograd [future] |
+| TrackedTensor | `ndtensors-rs/.../autodiff/tensor.rs` | tenferro-autograd [future] |
+| C API patterns | `tensor4all-rs/crates/tensor4all-capi/src/` | tenferro-capi [future] |
+
+---
+
+## Future Considerations
+
+### Complex-valued differentiation rules for linear algebra
+
+Complex SVD, QR, eigen decompositions require non-trivial backward rules (Wirtinger calculus). Key references:
+
+- **[BackwardsLinalg.jl](https://github.com/GiggleLiu/BackwardsLinalg.jl)**: Reference implementations for complex backward rules.
+- **[MatrixFactorizations.jl](https://github.com/JuliaLinearAlgebra/MatrixFactorizations.jl)**: Extended factorizations with ChainRules.jl integration.
+
+### JAX / PyTorch integration via C-FFI
+
+tenferro-capi supports integration with JAX and PyTorch via ctypes:
+
+```
+JAX / PyTorch -> Python wrapper -> ctypes FFI -> tenferro-capi -> Rust
+```
+
+- JAX: `jax.custom_vjp` + `jax.pure_callback()`
+- PyTorch: `torch.autograd.Function` with custom forward/backward
+
+### einsum_into and einsum_owned_into (future optimization)
+
+The POC provides only allocating `einsum` variants. Future optimization will add:
+
+- **`einsum_into`** -- writes into a caller-provided output buffer, supports accumulation
+  (`output = alpha * einsum(...) + beta * output`). Avoids output allocation in hot loops.
+- **`einsum_owned_into`** -- consumes input tensors, reuses their buffers as intermediate
+  workspace when reference count is 1 (buffer pool pattern from strided-opteinsum).
+  Maximum performance for N-ary contraction trees.
+
+### Insights from ITensor Julia ecosystem
+
+| Aspect | ITensor Julia | tenferro | Notes |
+|---|---|---|---|
+| Sparse storage | DOK-of-Arrays | Single DataBuffer + offset map | tenferro is GPU-friendly |
+| Axis fusion | FusionStyle dispatch | Not yet designed | Critical for quantum number tensors |
+
+### Relationship with mdarray / mdarray-linalg
+
+| | mdarray / mdarray-linalg | tenferro-* |
+|---|---|---|
+| Role | **numpy equivalent** -- general-purpose multidimensional array | **PyTorch equivalent** -- high-performance tensor library |
+| Memory | Owned `Array<T, D>` | `DataBuffer<T>` (CPU/GPU) |
+| GPU | No | cuTENSOR, hipTensor (no Metal) |
+| Autodiff | No | tenferro-autograd (VJP/JVP) [future] |
+| Dispatch | Direct function calls | `TensorOps` trait (backend selection) |
+
+Both are needed. mdarray is a foundational array library; tenferro builds a
+richer tensor ecosystem with GPU support and automatic differentiation.
+
+tenferro-linalg and mdarray-linalg are **parallel** (both call faer directly),
+not serial:
+
+```
+faer (SVD, QR, eigen)
+    ^                ^
+tenferro-linalg  mdarray-linalg-faer
+(Tensor<T>       (Array<T, D>
+ -> MatRef)       -> MatRef)
+```

@@ -2,8 +2,8 @@
 
 This document compares the contraction and permutation algorithm optimizations in
 **strided-rs** (strided-einsum2 + strided-opteinsum) and **omeinsum-rs**, to guide
-the "best of both" merge into **t4a-tensorops** (binary contraction pipeline)
-and **t4a-einsum** (N-ary engine, algebra dispatch).
+the "best of both" merge into **tenferro-tensorops** (binary contraction pipeline)
+and **tenferro-einsum** (N-ary engine, algebra dispatch).
 
 ## 1. Binary Contraction Pipeline
 
@@ -67,12 +67,12 @@ Simpler matricization pipeline:
 
 | Aspect | strided-rs | omeinsum-rs | Recommendation (→ crate) |
 |--------|-----------|-------------|--------------------------|
-| Copy avoidance | Fusability check (`try_fuse_group`) | Always copy | **Adopt** fusability check (→ t4a-tensorops) |
-| Element-wise bypass | `zip_map2_into` for Hadamard | Goes through GEMM | **Adopt** element-wise bypass (→ t4a-tensorops) |
-| Trace pre-reduction | Before GEMM, with conj materialization | After classification, as sum-over | **Adopt** strided-rs approach (→ t4a-tensorops) |
-| Owned-input optimization | Transfers ownership → zero-copy | Always allocates new buffer | **Adopt** ownership transfer (→ t4a-einsum) |
-| Backend requirements | Compile-time `BackendConfig` trait | Hardcoded | **Adopt** trait-based config (→ t4a-tensorops) |
-| Tropical dispatch | Not supported | `TypeId` runtime dispatch | **Adopt** omeinsum approach (→ t4a-einsum) |
+| Copy avoidance | Fusability check (`try_fuse_group`) | Always copy | **Adopt** fusability check (→ tenferro-tensorops) |
+| Element-wise bypass | `zip_map2_into` for Hadamard | Goes through GEMM | **Adopt** element-wise bypass (→ tenferro-tensorops) |
+| Trace pre-reduction | Before GEMM, with conj materialization | After classification, as sum-over | **Adopt** strided-rs approach (→ tenferro-tensorops) |
+| Owned-input optimization | Transfers ownership → zero-copy | Always allocates new buffer | **Adopt** ownership transfer (→ tenferro-einsum) |
+| Backend requirements | Compile-time `BackendConfig` trait | Hardcoded | **Adopt** trait-based config (→ tenferro-tensorops) |
+| Tropical dispatch | Not supported | `TypeId` runtime dispatch | **Adopt** omeinsum approach (→ tenferro-einsum) |
 | Batch placement | ~~Batch-first `[batch, lo, sum]`~~ Fixed to batch-last | Batch-last `[left, contracted, batch]` | Both now batch-last |
 
 ## 2. N-ary Einsum (Contraction Tree)
@@ -112,11 +112,11 @@ Simpler matricization pipeline:
 
 | Aspect | strided-rs | omeinsum-rs | Recommendation (→ crate) |
 |--------|-----------|-------------|--------------------------|
-| Borrowed-view passthrough | Yes (Leaf → borrow) | No (Leaf → Arc clone) | **Adopt** borrowed views (→ t4a-einsum) |
-| Permutation-only detection | Yes (metadata-only) | No | **Adopt** permutation detection (→ t4a-einsum) |
-| Buffer pool | HashMap by size | None | **Adopt** as opt-in option (→ t4a-einsum) |
-| Root writes into user output | Yes (`execute_nested_into`) | No | **Adopt** direct root write (→ t4a-einsum) |
-| Contraction optimizer | omeco greedy | omeco greedy + TreeSA | **Adopt** both optimizers (→ t4a-einsum) |
+| Borrowed-view passthrough | Yes (Leaf → borrow) | No (Leaf → Arc clone) | **Adopt** borrowed views (→ tenferro-einsum) |
+| Permutation-only detection | Yes (metadata-only) | No | **Adopt** permutation detection (→ tenferro-einsum) |
+| Buffer pool | HashMap by size | None | **Adopt** as opt-in option (→ tenferro-einsum) |
+| Root writes into user output | Yes (`execute_nested_into`) | No | **Adopt** direct root write (→ tenferro-einsum) |
+| Contraction optimizer | omeco greedy | omeco greedy + TreeSA | **Adopt** both optimizers (→ tenferro-einsum) |
 | Unoptimized fallback | 3+ child → inline optimize | Left-to-right pairwise | Either acceptable |
 
 ## 3. Single-Tensor Operations
@@ -153,9 +153,9 @@ Single function `execute_unary_naive()`:
 
 | Aspect | strided-rs | omeinsum-rs | Recommendation (→ crate) |
 |--------|-----------|-------------|--------------------------|
-| Full trace fast path | Yes (single loop, no alloc) | No | **Adopt** trace fast path (→ t4a-einsum) |
-| Partial trace fast path | Yes (single loop, no alloc) | No | **Adopt** partial trace fast path (→ t4a-einsum) |
-| General reduce | `reduce_axis()` per axis | Nested loop | strided-rs (→ t4a-tensorops via strided-kernel) |
+| Full trace fast path | Yes (single loop, no alloc) | No | **Adopt** trace fast path (→ tenferro-einsum) |
+| Partial trace fast path | Yes (single loop, no alloc) | No | **Adopt** partial trace fast path (→ tenferro-einsum) |
+| General reduce | `reduce_axis()` per axis | Nested loop | strided-rs (→ tenferro-tensorops via strided-kernel) |
 | Broadcast/repeat | Stride-0 view + copy | Not needed (einsum semantics) | Conditional |
 
 ## 4. Permutation Strategy
@@ -188,7 +188,7 @@ groups).
 
 ### strided-rs
 
-No GPU support currently. The design document (t4a unified backend) plans:
+No GPU support currently. The design document (tenferro unified backend) plans:
 - cuTENSOR/hipTensor for einsum (via `TensorOps` trait, runtime dlopen).
 
 ### omeinsum-rs
@@ -201,10 +201,10 @@ No GPU support currently. The design document (t4a unified backend) plans:
 
 ### Recommendation
 
-Adopt omeinsum-rs's cuTENSOR integration pattern into **t4a-device** (vtable,
-plan caching) and **t4a-tensorops** (`TensorOps` GPU impl):
-- `TensorOps` trait wraps cuTENSOR's direct-contraction API via t4a-device vtable.
-- Plan caching for repeated contractions (in t4a-device).
+Adopt omeinsum-rs's cuTENSOR integration pattern into **tenferro-device** (vtable,
+plan caching) and **tenferro-tensorops** (`TensorOps` GPU impl):
+- `TensorOps` trait wraps cuTENSOR's direct-contraction API via tenferro-device vtable.
+- Plan caching for repeated contractions (in tenferro-device).
 - Dispatch priority: GPU TensorOps > CPU TensorOps (GEMM) > naive loop.
 
 ## 6. Algebra Extensibility
@@ -226,59 +226,59 @@ plan caching) and **t4a-tensorops** (`TensorOps` GPU impl):
 
 ### Recommendation
 
-- Adopt the `Algebra` trait design for semiring extensibility (→ t4a-algebra).
-- Keep `BgemmBackend<T>` for pluggable GEMM backends (→ t4a-tensorops).
-- Support `TypeId`-based dispatch for performance-critical hot paths (→ t4a-einsum).
-- Argmax tracking as an opt-in feature (→ t4a-algebra).
+- Adopt the `Algebra` trait design for semiring extensibility (→ tenferro-algebra).
+- Keep `BgemmBackend<T>` for pluggable GEMM backends (→ tenferro-tensorops).
+- Support `TypeId`-based dispatch for performance-critical hot paths (→ tenferro-einsum).
+- Argmax tracking as an opt-in feature (→ tenferro-algebra).
 
-## 7. Summary: Best-of-Both for t4a-tensorops + t4a-einsum
+## 7. Summary: Best-of-Both for tenferro-tensorops + tenferro-einsum
 
-> strided-einsum2 (binary contraction pipeline) → **t4a-tensorops**
-> strided-opteinsum + omeinsum-rs (N-ary engine) → **t4a-einsum**
+> strided-einsum2 (binary contraction pipeline) → **tenferro-tensorops**
+> strided-opteinsum + omeinsum-rs (N-ary engine) → **tenferro-einsum**
 
 ### From strided-rs (adopt)
 
 1. **Fusability checking** (`try_fuse_group`) — avoid unnecessary copies when
-   dimension groups are already contiguous. (→ t4a-tensorops)
-2. **Element-wise bypass** — skip GEMM for Hadamard products. (→ t4a-tensorops)
+   dimension groups are already contiguous. (→ tenferro-tensorops)
+2. **Element-wise bypass** — skip GEMM for Hadamard products. (→ tenferro-tensorops)
 3. **Trace pre-reduction** — sum trace axes before GEMM with integrated conj
-   materialization. (→ t4a-tensorops)
+   materialization. (→ tenferro-tensorops)
 4. **Owned-input optimization** — transfer ownership to avoid allocation.
-   (→ t4a-einsum)
+   (→ tenferro-einsum)
 5. **Buffer pool** (opt-in) — reuse intermediate buffers across pairwise
-    contractions. Opt-in because it increases peak memory usage. (→ t4a-einsum)
+    contractions. Opt-in because it increases peak memory usage. (→ tenferro-einsum)
 6. **Borrowed-view passthrough** — Leaf nodes return borrows, not clones.
-   (→ t4a-einsum)
+   (→ tenferro-einsum)
 7. **Permutation-only detection** — metadata-only transformation in
-   contraction tree. (→ t4a-einsum)
+   contraction tree. (→ tenferro-einsum)
 8. **Single-tensor fast paths** — full trace and partial trace zero-allocation
-   loops. (→ t4a-einsum)
+   loops. (→ tenferro-einsum)
 9. **Direct root write** — final contraction writes into user's output buffer.
-   (→ t4a-einsum)
+   (→ tenferro-einsum)
 10. **Cache-optimized kernels** — `reduce_axis()` uses blocked, dimension-fused
-    iteration from strided-kernel. (→ t4a-tensorops via strided-kernel)
+    iteration from strided-kernel. (→ tenferro-tensorops via strided-kernel)
 
 ### From omeinsum-rs (adopt)
 
 1. **Algebra trait** — semiring-generic `zero()`, `add()`, `mul()` interface.
-   (→ t4a-algebra)
+   (→ tenferro-algebra)
 2. **Tropical-gemm dispatch** — `TypeId`-based runtime specialization for SIMD
-   tropical kernels. (→ t4a-einsum)
-3. **Argmax tracking** — tropical backward pass support. (→ t4a-algebra)
+   tropical kernels. (→ tenferro-einsum)
+3. **Argmax tracking** — tropical backward pass support. (→ tenferro-algebra)
 4. **cuTENSOR integration** — direct contraction without reshape-to-GEMM,
-   plan caching. (→ t4a-device + t4a-tensorops)
+   plan caching. (→ tenferro-device + tenferro-tensorops)
 5. **TreeSA optimizer** — simulated annealing for better contraction orders
-   (in addition to greedy). (→ t4a-einsum)
+   (in addition to greedy). (→ tenferro-einsum)
 6. **Column-major + batch-last layout** — both codebases now use batch-last
    (strided-rs bug fixed in PR #87).
 
 ### Neither (new)
 
 1. **Plan-based `TensorOps` trait** — unified protocol across CPU/GPU.
-   (→ t4a-tensorops)
-2. **Two-tier backend** — `BgemmBackend<T>` (CPU GEMM) in t4a-tensorops +
-   GPU `TensorOps` via t4a-device vtable.
+   (→ tenferro-tensorops)
+2. **Two-tier backend** — `BgemmBackend<T>` (CPU GEMM) in tenferro-tensorops +
+   GPU `TensorOps` via tenferro-device vtable.
 3. **Global + per-call override** — `einsum()` uses global default,
-   `einsum_with()` accepts explicit config. (→ t4a-einsum)
+   `einsum_with()` accepts explicit config. (→ tenferro-einsum)
 4. **Custom scalar extensibility tests** — `ModInt<P>` test type to verify
    all three dispatch tiers.
