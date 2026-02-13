@@ -1053,16 +1053,26 @@ interoperability.
 
 ### File Format Specification
 
-A tensor is stored as an HDF5 group with the following structure:
+A tensor is stored as an HDF5 **N-dimensional dataset** with metadata
+attributes. The dataset shape directly represents the tensor's logical
+shape — no flattening to 1D.
 
 ```
-/group/tensor_name/          (HDF5 Group)
-├── data                     (HDF5 Dataset: raw array, column-major)
+/group/tensor_name           (HDF5 Dataset: N-D array, shape = tensor shape)
 ├── @format_version          (Attribute: string, e.g. "1.0")
 ├── @dtype                   (Attribute: string, e.g. "float64", "complex128")
-├── @shape                   (Attribute: int array, e.g. [3, 4, 5])
 └── @memory_order            (Attribute: string, "column_major" or "row_major")
 ```
+
+**N-D dataset** (not 1D flat array): The HDF5 dataset's shape matches
+the tensor's logical shape (e.g., a `[3, 4, 5]` tensor is stored as a
+3×4×5 dataset). This enables direct reading by h5py (`f['tensor'][:]`
+→ NumPy array) and HDF5.jl (`read(f, "tensor")` → Julia array) without
+custom deserialization logic.
+
+Note: ITensors.jl stores data as a 1D flat array with separate Index
+metadata. We deliberately choose N-D datasets for broader interoperability
+at the cost of ITensors.jl format compatibility.
 
 **Data type encoding**:
 
@@ -1089,10 +1099,20 @@ HDF5 compound type. The field naming varies across ecosystems:
 Readers should also accept `"real"`/`"imag"` for interoperability.
 When HDF5 2.0.0 native complex types are available, prefer those.
 
-**Memory order**: Data is always stored contiguously. The `memory_order`
-attribute records whether the stored layout is column-major (Fortran/Julia)
-or row-major (C/NumPy). Readers must transpose if their native order
-differs.
+**Memory order**: HDF5 internally stores N-D data in row-major (C) order.
+The `memory_order` attribute records the **writer's logical convention**:
+
+| `memory_order` | Writer | HDF5 dataset shape | Reader action |
+|---------------|--------|-------------------|---------------|
+| `"column_major"` | Julia/Fortran/tenferro | dimensions reversed in HDF5 | h5py: transpose; HDF5.jl: direct |
+| `"row_major"` | Python/C | dimensions as-is in HDF5 | h5py: direct; HDF5.jl: transpose |
+
+Default: `"column_major"` (tenferro and Julia native convention).
+
+In practice, HDF5.jl already handles the dimension reversal transparently
+when writing Julia arrays, so Julia readers see the correct shape. The
+`memory_order` attribute ensures that readers in other languages know
+whether to transpose.
 
 ### Rust API
 
