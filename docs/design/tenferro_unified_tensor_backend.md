@@ -1451,10 +1451,21 @@ access another GPU's memory without copying. This means:
 pub enum Device { Cpu, Cuda { device_id: usize }, Hip { device_id: usize } }
 
 // Possible future design:
-pub enum MemorySpace {
-    CpuRam,
-    GpuVram { device_id: usize },  // specific GPU's VRAM
-    UnifiedRam,                    // CUDA/HIP managed memory (auto page migration)
+// Opaque struct — new memory types can be added without breaking user code.
+pub struct MemorySpace { /* private fields */ }
+
+impl MemorySpace {
+    pub fn cpu() -> Self;                        // CPU RAM
+    pub fn gpu(device_id: usize) -> Self;        // specific GPU VRAM
+    pub fn unified() -> Self;                    // CUDA/HIP managed memory (auto page migration)
+    // Future (non-breaking):
+    // pub fn gpu_cluster(ids: &[usize]) -> Self;  // NVLink domain
+    // pub fn remote(node: &str) -> Self;           // RDMA / network-attached
+
+    // Query methods (instead of match):
+    pub fn is_cpu(&self) -> bool;
+    pub fn is_gpu(&self) -> bool;
+    pub fn gpu_device_id(&self) -> Option<usize>;
 }
 
 // Tensor stores where its data lives:
