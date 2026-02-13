@@ -88,8 +88,8 @@ operations to `tenferro-prims`. Custom closure-based operations
 strided-kernel directly via `Tensor::view()`.
 
 **POC status**: The [tenferro-rs POC](https://github.com/tensor4all/tenferro-rs/)
-implements the four-crate structure (`tenferro-device`, `tenferro-prims`,
-`tenferro-tensor`, `tenferro-einsum`) with stub implementations. The `TensorPrims`
+implements the five-crate structure (`tenferro-device`, `tenferro-algebra`,
+`tenferro-prims`, `tenferro-tensor`, `tenferro-einsum`) with stub implementations. The `TensorPrims`
 trait and public einsum API are defined. `CpuBackend` is the only backend; GPU
 backends, `BackendRegistry`, and `TensorLibVtable` are future work.
 
@@ -945,7 +945,7 @@ are in the core `TensorPrims` trait, ensuring GPU support for backward passes.
 
 ## Crate Dependency Graph
 
-The POC has four crates with the following dependency structure:
+The POC has five crates with the following dependency structure:
 
 ```
 strided-rs (independent workspace):
@@ -953,39 +953,50 @@ strided-traits -> strided-view -> strided-kernel
 
 tenferro-rs (workspace, depends on strided-rs):
 
-tenferro-device
-    (Device enum, Error, Result)
-    (depends on: strided-view for StridedError)
-        │
-        ├──────────────────────────────┐
-        ↓                              ↓
-tenferro-algebra
-    (HasAlgebra trait,
-     Semiring trait,
-     Standard type)
-    (depends on: strided-traits)
-        │
-        ├──────────────────────────────┐
-        ↓                              ↓
-tenferro-prims              tenferro-tensor
-    (TensorPrims<A> trait,            (Tensor<T> = DataBuffer
-     PrimDescriptor enum,              + dims + strides + offset,
-     CpuBackend,                     zero-copy view ops:
-     Extension, ReduceOp)           permute, broadcast, diagonal)
-    (depends on: tenferro-device,   (depends on: tenferro-device,
-     tenferro-algebra,               strided-view, strided-traits,
-     strided-view, strided-traits)   num-traits)      │
+tenferro-device              tenferro-algebra
+  (Device enum, Error,         (HasAlgebra trait,
+   Result)                      Semiring trait,
+  (depends on: strided-view     Standard type)
+   for StridedError,           (depends on: strided-traits,
+   thiserror)                   num-complex)
         │                              │
-        └──────────┬───────────────────┘
-                   ↓
-            tenferro-einsum
-                (einsum, einsum_with_subscripts,
-                 einsum_with_plan,
-                 Subscripts, ContractionTree)
-                (depends on: tenferro-device,
-                 tenferro-prims,
-                 tenferro-tensor,
-                 strided-traits)
+        ├──────────────┐       ┌───────┤
+        │              ↓       ↓       │
+        │         tenferro-prims       │
+        │           (TensorPrims<A>,   │
+        │            PrimDescriptor,   │
+        │            CpuBackend,       │
+        │            Extension,        │
+        │            ReduceOp)         │
+        │           (depends on:       │
+        │            tenferro-device,  │
+        │            tenferro-algebra, │
+        │            strided-view,     │
+        │            strided-traits)   │
+        │              │               │
+        ↓              │               │
+   tenferro-tensor     │               │
+     (Tensor<T> =      │               │
+      DataBuffer       │               │
+      + dims/strides/  │               │
+      offset, view ops)│               │
+     (depends on:      │               │
+      tenferro-device, │               │
+      strided-view,    │               │
+      strided-traits,  │               │
+      num-traits)      │               │
+        │              │               │
+        └──────┬───────┘       ┌───────┘
+               ↓               ↓
+          tenferro-einsum
+            (einsum, einsum_with_subscripts,
+             einsum_with_plan,
+             Subscripts, ContractionTree)
+            (depends on: tenferro-device,
+             tenferro-algebra,
+             tenferro-prims,
+             tenferro-tensor,
+             strided-traits)
 ```
 
 Future crates (not in POC):

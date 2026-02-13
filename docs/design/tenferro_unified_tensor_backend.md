@@ -120,7 +120,7 @@ strided-rs/ (independent workspace) ── Foundation crates stay as-is ──�
 ├── strided-view         # StridedArray, StridedView, StridedViewMut (zero-copy strided views)
 └── strided-kernel       # Cache-optimized map/reduce/broadcast kernels
 
-tenferro-rs/ (workspace) ── 4 POC crates ─────────────────────
+tenferro-rs/ (workspace) ── 5 POC crates ─────────────────────
 │  Depends on strided-rs.
 │
 ├── tenferro-device      # Device enum (Cpu, Cuda{device_id}, Hip{device_id})
@@ -132,7 +132,7 @@ tenferro-rs/ (workspace) ── 4 POC crates ───────────�
 ├── tenferro-algebra     # HasAlgebra trait, Semiring trait, Standard type
 │                        #   HasAlgebra: maps T → A (f64 → Standard, etc.)
 │                        #   Minimal algebra foundation for TensorPrims<A>
-│                        #   Depends on: strided-traits
+│                        #   Depends on: strided-traits, num-complex
 │
 ├── tenferro-prims   # TensorPrims<A> trait — parameterized by algebra A
 │                        #   PrimDescriptor enum (describe → plan → execute)
@@ -162,8 +162,8 @@ tenferro-rs/ (workspace) ── 4 POC crates ───────────�
                          #   Allocating: einsum, einsum_with_subscripts, einsum_with_plan
                          #   Accumulating: einsum_into, einsum_with_subscripts_into,
                          #     einsum_with_plan_into (alpha/beta scaling)
-                         #   Depends on: tenferro-device, tenferro-prims,
-                         #     tenferro-tensor, strided-traits
+                         #   Depends on: tenferro-device, tenferro-algebra,
+                         #     tenferro-prims, tenferro-tensor, strided-traits
 ```
 
 ### Future Crates (not in POC)
@@ -210,23 +210,26 @@ strided-traits → strided-view → strided-kernel
 
 tenferro-rs (workspace, depends on strided-rs):
 
-tenferro-device (← strided-view for StridedError, ← thiserror)
-    │
-    ↓
-tenferro-algebra (← strided-traits)
-    │  HasAlgebra trait, Semiring trait, Standard type
-    │
-    ├────────────────────┐
-    ↓                    ↓
-tenferro-prims   tenferro-tensor
-    │  (← strided-view,     │  (← strided-view,
-    │   ← strided-traits)   │   ← strided-traits,
-    │                        │   ← num-traits)
-    │                        │
-    └──────────┬─────────────┘
-               ↓
-          tenferro-einsum
-              (← strided-traits)
+tenferro-device              tenferro-algebra
+  (← strided-view,            (← strided-traits,
+   ← thiserror)                ← num-complex)
+    │                            │
+    ├────────────┐       ┌───────┤
+    │            ↓       ↓       │
+    │       tenferro-prims       │
+    │         (← strided-view,   │
+    │          ← strided-traits) │
+    │            │               │
+    ↓            │               │
+tenferro-tensor  │               │
+  (← strided-view,              │
+   ← strided-traits,            │
+   ← num-traits)                │
+    │            │               │
+    └──────┬─────┘       ┌───────┘
+           ↓             ↓
+      tenferro-einsum
+        (← strided-traits)
 ```
 
 ### Future Dependency Graph (full vision)
@@ -796,19 +799,19 @@ impl ContractionTree {
 
 ```rust
 /// Level 1: String notation — parse + optimize + execute.
-pub fn einsum<T: ScalarBase>(
+pub fn einsum<T: ScalarBase + HasAlgebra>(
     subscripts: &str,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>>;
 
 /// Level 2: Pre-built subscripts — optimize + execute.
-pub fn einsum_with_subscripts<T: ScalarBase>(
+pub fn einsum_with_subscripts<T: ScalarBase + HasAlgebra>(
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>>;
 
 /// Level 3: Pre-optimized tree — execute only.
-pub fn einsum_with_plan<T: ScalarBase>(
+pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>>;
