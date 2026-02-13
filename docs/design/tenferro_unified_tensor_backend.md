@@ -1454,7 +1454,7 @@ pub enum Device { Cpu, Cuda { device_id: usize }, Hip { device_id: usize } }
 pub enum MemorySpace {
     CpuRam,
     GpuVram { device_id: usize },  // specific GPU's VRAM
-    // Unified { ... },            // CUDA unified memory (future)
+    UnifiedRam,                    // CUDA/HIP managed memory (auto page migration)
 }
 
 // Tensor stores where its data lives:
