@@ -27,9 +27,10 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 
 **Key design principles**:
 - **strided-rs as foundation**: The general-purpose strided array crates (`strided-traits`, `strided-view`, `strided-kernel`) remain in an independent `strided-rs` workspace. They have no BLAS dependency and can be used standalone. `tenferro-rs` depends on them but does not absorb them.
-- **cuTENSOR/hipTensor-compatible protocol**: `tenferro-tensorops` defines a unified `TensorOps` trait mirroring cuTENSOR's operation categories (contraction, reduction, permutation, elementwise binary). CPU, NVIDIA, and AMD backends implement the same trait.
+- **cuTENSOR/hipTensor-compatible protocol**: `tenferro-tensorops` defines a unified `TensorOps<A>` trait parameterized by algebra `A`, with a cuTENSOR-compatible describe → plan → execute pattern for all operations. CPU, NVIDIA, and AMD backends implement the same trait.
+- **Algebra-parameterized dispatch**: `TensorOps<A>` is parameterized by algebra (e.g., `Standard`, `MaxPlus`). The `HasAlgebra` trait on scalar types enables automatic algebra inference: `Tensor<f64>` → `Standard`, `Tensor<MaxPlus<f64>>` → `MaxPlus`. Users can extend the system by defining new algebras in their own crates (orphan rule compatible).
 - **Runtime GPU discovery**: GPU vendor libraries (cuTENSOR, hipTensor) are loaded at runtime via `dlopen`. The caller (Julia, Python) provides the `.so` path. No Cargo feature flags for GPU vendor selection.
-- **Plan-based execution**: Contractions follow the cuTENSOR pattern of descriptor + plan + execute. Plans cache expensive analysis (GPU kernel selection, CPU fusability checks) for reuse. Other operations (elementwise binary, reduce, permute) are plan-free in the POC.
+- **Plan-based execution**: All operations follow the cuTENSOR pattern of `OpDescriptor` → plan → execute. Plans cache expensive analysis (GPU kernel selection, CPU fusability checks) for reuse. Extended operations (contract, elementwise_mul) are dynamically queried via `has_extension_for::<T>()`.
 
 ---
 
@@ -62,12 +63,13 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
 │ Layer 2: Tensor Operation Protocol (tenferro-tensorops) [POC]│
-│   cuTENSOR / hipTensor compatible TensorOps trait            │
-│   4 operations: Contraction, Reduction, Permutation,         │
-│                 ElementwiseBinary                             │
-│   Plan-based contraction (ContractionDescriptor → Plan)      │
-│   Plan-free: elementwise_binary, reduce, permute             │
-│   CpuBackend, associated functions (not methods)             │
+│   TensorOps<A> trait — parameterized by algebra A            │
+│   cuTENSOR pattern: OpDescriptor → plan → execute            │
+│   Core ops: batched_gemm, reduce, trace, permute,            │
+│     anti_trace, anti_diag                                    │
+│   Extended ops (dynamic query): contract, elementwise_mul    │
+│   HasAlgebra trait: T → A automatic inference                │
+│   CpuBackend: impl TensorOps<Standard>                      │
 │   Uses StridedView<T> / StridedViewMut<T> directly           │
 └──────────────────────┬──────────────────────────────────────┘
                        │
@@ -126,14 +128,21 @@ tenferro-rs/ (workspace) ── 4 POC crates ───────────�
 │                        #   Result<T> type alias
 │                        #   Depends on: strided-view (for StridedError), thiserror
 │
-├── tenferro-tensorops   # TensorOps trait — cuTENSOR-compatible protocol
-│                        #   ContractionDescriptor (Vec<u32> modes)
-│                        #   ContractionPlan<T>, ReduceOp enum (Sum, Max, Min)
-│                        #   4 operations: contraction (plan-based),
-│                        #     elementwise_binary, reduce, permute (plan-free)
-│                        #   CpuBackend (associated functions, not methods)
+├── tenferro-algebra     # HasAlgebra trait, Semiring trait, Standard type
+│                        #   HasAlgebra: maps T → A (f64 → Standard, etc.)
+│                        #   Minimal algebra foundation for TensorOps<A>
+│                        #   Depends on: strided-traits
+│
+├── tenferro-tensorops   # TensorOps<A> trait — parameterized by algebra A
+│                        #   OpDescriptor enum (describe → plan → execute)
+│                        #   Core ops: batched_gemm, reduce, trace, permute,
+│                        #     anti_trace, anti_diag
+│                        #   Extended ops (dynamic query): contract, elementwise_mul
+│                        #   Associated type Plan<T> (no type erasure)
+│                        #   CpuBackend: impl TensorOps<Standard>
 │                        #   Operates on StridedView<T> / StridedViewMut<T> directly
-│                        #   Depends on: tenferro-device, strided-view, strided-traits
+│                        #   Depends on: tenferro-device, tenferro-algebra,
+│                        #     strided-view, strided-traits
 │
 ├── tenferro-tensor      # Tensor<T> = DataBuffer + dims + strides + offset + device
 │                        #   DataBuffer<T> enum: Cpu(StridedArray<T>)
@@ -160,12 +169,21 @@ tenferro-rs/ (workspace) ── 4 POC crates ───────────�
 ```
 tenferro-rs/ (future additions) ──────────────────────────────
 │
-├── tenferro-algebra     # Semiring/Algebra traits, tropical types (MaxPlus, MinPlus, MaxMul)
-│                        #   Argmax tracking for tropical backward pass
 ├── tenferro-linalg      # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER via device layer)
 ├── tenferro-autograd    # TrackedTensor, DualTensor, VJP/JVP
 ├── tenferro-capi        # C FFI (tensor ops + VJP/JVP + backend loading)
 └── burn-tenferro        # Burn Backend bridge [OPTIONAL, for NN only]
+
+tenferro-tropical/ (separate crate — proves extensibility) ──
+│  Tropical algebra types and TensorOps implementations.
+│  Being external proves that user-defined algebras can extend
+│  the system via the same pattern (orphan rule compatible).
+│
+├── MaxPlus<T>, MinPlus<T>, MaxMul<T> types
+├── impl HasAlgebra for MaxPlus<T> { type Algebra = MaxPlus; }
+├── impl TensorOps<MaxPlus> for CpuBackend   ← orphan OK
+├── tropical-gemm SIMD kernels
+└── argmax tracking for tropical backward pass
 
 tenferro-structured-rs/ (future separate workspace) ── Structured tensor types ──
 │
@@ -189,6 +207,10 @@ tenferro-rs (workspace, depends on strided-rs):
 
 tenferro-device (← strided-view for StridedError, ← thiserror)
     │
+    ↓
+tenferro-algebra (← strided-traits)
+    │  HasAlgebra trait, Semiring trait, Standard type
+    │
     ├────────────────────┐
     ↓                    ↓
 tenferro-tensorops   tenferro-tensor
@@ -207,6 +229,9 @@ tenferro-tensorops   tenferro-tensor
 ```
 tenferro-device
     │
+    ↓
+tenferro-algebra (HasAlgebra, Semiring, Standard)
+    │
     ├────────────────────────────┐
     ↓                            ↓
 tenferro-tensorops          tenferro-tensor
@@ -219,6 +244,10 @@ tenferro-tensorops          tenferro-tensor
     ↓          ↓              ↓
 tenferro-  tenferro-     tenferro-
  linalg     autograd       capi
+
+[separate crate: tenferro-tropical]
+← tenferro-algebra, tenferro-tensorops
+impl TensorOps<MaxPlus> for CpuBackend (orphan OK)
 
 [separate workspace: tenferro-structured-rs]
 tenferro-blocksparse ← tenferro-tensor
@@ -234,7 +263,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 | tenferro crate | Origin | What changes |
 |----------------|--------|--------------|
 | tenferro-device | **New** (POC) | Device enum, Error/Result types (thiserror) |
-| tenferro-tensorops | **New** (POC), will absorb strided-einsum2 | TensorOps trait, ContractionDescriptor/Plan, CpuBackend |
+| tenferro-tensorops | **New** (POC), will absorb strided-einsum2 | TensorOps\<A\> trait (algebra-parameterized), OpDescriptor, CpuBackend |
 | tenferro-tensor | **New** (POC) | Tensor\<T\>, DataBuffer\<T\>, MemoryOrder, zero-copy view ops |
 | tenferro-einsum | **New** (POC), will absorb strided-opteinsum + omeinsum-rs | Subscripts, ContractionTree, einsum/einsum_with_subscripts/einsum_with_plan |
 | tenferro-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types [future] |
@@ -255,7 +284,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 |--------|-----------|-----------|
 | GPU vendor (cuTENSOR/hipTensor) | **Runtime** (dlopen) [future] | Single binary for all platforms; Julia/Python inject .so path |
 | CPU GEMM (faer/cblas) | **Compile-time** (Cargo feature) [future] | Fundamentally different linking (pure Rust vs C ABI) |
-| Elementwise ops | **Enum-based only** | cuTENSOR-compatible operator enums; custom closures via strided-kernel directly |
+| Elementwise ops | **Enum-based** in TensorOps; closures via strided-kernel | cuTENSOR-compatible operator enums for GPU; custom closures via strided-kernel directly (CPU only) |
 | libloading dependency | **Always ON** (in tenferro-device) [future] | Lightweight, no overhead when GPU absent, no feature gate needed |
 | .so path for GPU libs | **Caller-injected** [future] | Rust does not search; Julia/Python provide exact path |
 
@@ -315,148 +344,256 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 **Note**: `BackendRegistry`, `GpuBackend`, and `TensorLibVtable` are **not** in the POC. They are planned for future GPU support (see [GPU Strategy](#gpu-strategy) section below).
 
+### tenferro-algebra
+
+Minimal algebra foundation for `TensorOps<A>`. Provides the `HasAlgebra`
+trait for automatic algebra inference and the `Standard` type for standard
+arithmetic.
+
+```rust
+/// Maps a scalar type T to its default algebra A.
+/// Enables automatic inference: Tensor<f64> → Standard, Tensor<MaxPlus<f64>> → MaxPlus.
+pub trait HasAlgebra {
+    type Algebra;
+}
+
+/// Standard arithmetic algebra (add = +, mul = *).
+pub struct Standard;
+
+impl HasAlgebra for f64 { type Algebra = Standard; }
+impl HasAlgebra for f32 { type Algebra = Standard; }
+impl HasAlgebra for Complex64 { type Algebra = Standard; }
+// etc.
+
+/// Semiring trait for algebra-generic operations.
+pub trait Semiring {
+    type Scalar: ScalarBase;
+    fn zero() -> Self::Scalar;
+    fn one() -> Self::Scalar;
+    fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar;
+    fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar;
+}
+```
+
+**Note**: Tropical types (`MaxPlus`, `MinPlus`, `MaxMul`) are in the separate
+`tenferro-tropical` crate, not here. This separation proves that the algebra
+extension mechanism works for external crates.
+
 ### tenferro-tensorops
 
-The central protocol layer. Defines a `TensorOps` trait with 4 operation categories.
-The POC uses **associated functions** (not `&self` methods) and operates directly on
-`StridedView<T>` / `StridedViewMut<T>` (no `Storage<T>` or `TensorMeta` abstractions).
+The central protocol layer. Defines `TensorOps<A>` parameterized by algebra `A`,
+with a cuTENSOR-compatible describe → plan → execute pattern.
 
 > **Detailed design**: See [tenferro Einsum Internal Design](./tenferro_einsum_internal_design.md)
 > for the full internal design including CPU contraction pipeline details.
 
-**Key types**:
+#### Design Overview
+
+GiggleLiu proposed a **universal set** of primitive operations plus an
+**extended set** of optimized composites. The trait is parameterized by
+algebra `A` so different scalar types can plug in their own implementations.
+
+```
+tenferro-einsum (engine)
+    │
+    │  T: HasAlgebra → infers A automatically
+    │
+    ├── [has_extension_for::<T>(Contract)?]
+    │   YES → execute Contract plan (fused permute+GEMM)
+    │
+    └── [otherwise]
+        decompose into core ops:
+        diag → trace/reduce → permute → batched_gemm → permute
+```
+
+**Dispatch is dynamic**: `has_extension_for::<T>(ext)` queries at runtime
+whether a specific extended operation is available for scalar type `T`.
+This is important because:
+- GPU backends are loaded at runtime (dlopen)
+- cuTENSOR supports `f32`/`f64`/Complex but not tropical types
+- CPU backends may support `contract` for `f64` (faer) but not for custom types
+
+Note: `diag` (diagonal extraction) and `repeat` (broadcast) are **zero-copy
+stride tricks** handled at the `Tensor<T>` level (see below), not in `TensorOps`.
+
+#### Adjoint Pairs for AD
+
+The core operations form adjoint pairs, enabling clean VJP/JVP rules:
+
+| Forward | Backward (adjoint) |
+|---------|-------------------|
+| trace | anti_trace |
+| diag (on Tensor) | anti_diag |
+| reduce | repeat (on Tensor) |
+| permute | inverse permute |
+| batched_gemm | Leibniz rule |
+
+#### Key Types
 
 ```rust
-/// Describes a tensor contraction in terms of index modes.
-/// Modes are u32 labels (cuTENSOR-compatible).
-#[derive(Debug, Clone)]
-pub struct ContractionDescriptor {
-    pub modes_a: Vec<u32>,
-    pub modes_b: Vec<u32>,
-    pub modes_c: Vec<u32>,
-}
-
-/// Pre-computed execution plan for a tensor contraction.
-pub struct ContractionPlan<T: ScalarBase> {
-    _marker: PhantomData<T>,
+/// Describes any TensorOps operation (cuTENSOR pattern: describe → plan → execute).
+pub enum OpDescriptor {
+    BatchedGemm { batch_dims: Vec<usize>, m: usize, n: usize, k: usize },
+    Reduce { modes_a: Vec<u32>, modes_c: Vec<u32>, op: ReduceOp },
+    Trace { modes_a: Vec<u32>, modes_c: Vec<u32>, paired: Vec<(u32, u32)> },
+    Permute { modes_a: Vec<u32>, modes_b: Vec<u32> },
+    AntiTrace { modes_a: Vec<u32>, modes_c: Vec<u32>, paired: Vec<(u32, u32)> },
+    AntiDiag { modes_a: Vec<u32>, modes_c: Vec<u32>, paired: Vec<(u32, u32)> },
+    // Extended
+    Contract { modes_a: Vec<u32>, modes_b: Vec<u32>, modes_c: Vec<u32> },
+    ElementwiseMul,
 }
 
 /// Reduction operation kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReduceOp {
-    Sum,
-    Max,
-    Min,
-}
+pub enum ReduceOp { Sum, Max, Min }
+
+/// Extended operation identifiers for dynamic capability query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Extension { Contract, ElementwiseMul }
 ```
 
-**TensorOps trait** (POC version -- 4 operations, associated functions):
+#### TensorOps\<A\> Trait
 
 ```rust
-pub trait TensorOps {
-    // === Contraction (plan-based) ===
-    fn plan_contraction<T: ScalarBase>(
-        desc: &ContractionDescriptor,
-        dims_a: &[usize],
-        dims_b: &[usize],
-        dims_c: &[usize],
-    ) -> Result<ContractionPlan<T>>;
+/// Backend trait parameterized by algebra A.
+///
+/// Provides a cuTENSOR-compatible plan-based execution model for all
+/// operations. Core ops (batched_gemm, reduce, trace, permute, anti_trace,
+/// anti_diag) must be implemented. Extended ops (contract, elementwise_mul)
+/// have default implementations that decompose into core ops.
+///
+/// The algebra parameter A enables extensibility: external crates can
+/// implement TensorOps<MyAlgebra> for CpuBackend (orphan rule compatible).
+pub trait TensorOps<A> {
+    /// Backend-specific plan type (no type erasure).
+    type Plan<T: ScalarBase>;
 
-    fn contract<T: ScalarBase>(
-        plan: &ContractionPlan<T>,
+    /// Create an execution plan (cuTENSOR: describe → plan).
+    fn plan<T: ScalarBase>(
+        desc: &OpDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<Self::Plan<T>>;
+
+    /// Execute a plan (cuTENSOR: plan → execute).
+    fn execute<T: ScalarBase>(
+        plan: &Self::Plan<T>,
         alpha: T,
-        a: &StridedView<T>,
-        b: &StridedView<T>,
+        inputs: &[&StridedView<T>],
         beta: T,
-        c: &mut StridedViewMut<T>,
+        output: &mut StridedViewMut<T>,
     ) -> Result<()>;
 
-    // === Element-wise binary (plan-free) ===
-    fn elementwise_binary<T: ScalarBase>(
-        alpha: T,
-        a: &StridedView<T>,
-        modes_a: &[u32],
-        beta: T,
-        c: &mut StridedViewMut<T>,
-        modes_c: &[u32],
-    ) -> Result<()>;
-
-    // === Reduction (plan-free) ===
-    fn reduce<T: ScalarBase>(
-        alpha: T,
-        a: &StridedView<T>,
-        modes_a: &[u32],
-        beta: T,
-        c: &mut StridedViewMut<T>,
-        modes_c: &[u32],
-        op: ReduceOp,
-    ) -> Result<()>;
-
-    // === Permutation (plan-free) ===
-    fn permute<T: ScalarBase>(
-        alpha: T,
-        a: &StridedView<T>,
-        modes_a: &[u32],
-        b: &mut StridedViewMut<T>,
-        modes_b: &[u32],
-    ) -> Result<()>;
+    /// Query whether an extended operation is available for scalar type T.
+    /// Enables dynamic dispatch: GPU may support Contract for f64 but not
+    /// for tropical types.
+    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool;
 }
 ```
 
-**CpuBackend**:
+#### CpuBackend
 
 ```rust
 pub struct CpuBackend;
 
-impl TensorOps for CpuBackend {
-    fn plan_contraction<T: ScalarBase>(...) -> Result<ContractionPlan<T>> { ... }
-    fn contract<T: ScalarBase>(...) -> Result<()> { ... }
-    fn elementwise_binary<T: ScalarBase>(...) -> Result<()> { ... }
-    fn reduce<T: ScalarBase>(...) -> Result<()> { ... }
-    fn permute<T: ScalarBase>(...) -> Result<()> { ... }
+/// Standard arithmetic on CPU (faer GEMM for f64/f32, naive for others).
+impl TensorOps<Standard> for CpuBackend {
+    type Plan<T: ScalarBase> = CpuPlan<T>;
+
+    fn plan<T: ScalarBase>(desc: &OpDescriptor, shapes: &[&[usize]])
+        -> Result<CpuPlan<T>> { ... }
+
+    fn execute<T: ScalarBase>(plan: &CpuPlan<T>, ...) -> Result<()> { ... }
+
+    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool {
+        // CPU supports Contract and ElementwiseMul for all standard types
+        true
+    }
+}
+
+/// CPU plan — concrete enum, no type erasure.
+enum CpuPlan<T: ScalarBase> {
+    BatchedGemm { m: usize, n: usize, k: usize, ... },
+    Reduce { axis: usize, op: ReduceOp },
+    Trace { paired: Vec<(u32, u32)> },
+    Permute { perm: Vec<usize> },
+    Contract { /* strided-einsum2 cached analysis */ },
+    ElementwiseMul,
+    ...
 }
 ```
 
-**Key differences from original design**:
-- Only 4 operations (no `ElementwiseTrinary`)
-- Associated functions, not methods with `&self` -- no associated types on the trait
-- Uses `StridedView<T>` / `StridedViewMut<T>` directly (not `Storage<T>` + `TensorMeta`)
-- `ContractionDescriptor` uses `Vec<u32>` for modes (not `&[i32]`)
-- Only contraction is plan-based; other operations are plan-free
-- `ReduceOp` is its own enum (`Sum`, `Max`, `Min`), not an alias for `BinaryOp`
+**Tropical backend** (in separate `tenferro-tropical` crate):
+
+```rust
+// tenferro-tropical crate — external, proves extensibility
+pub struct MaxPlus;
+
+impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus; }
+
+/// Tropical GEMM on CPU (SIMD-optimized tropical-gemm kernel).
+impl TensorOps<MaxPlus> for CpuBackend {
+    type Plan<T: ScalarBase> = TropicalPlan<T>;
+
+    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool {
+        false  // tropical uses core ops decomposition, no fused contract
+    }
+    ...
+}
+```
+
+**User-defined algebra** (in user crate):
+
+```rust
+// User crate — same pattern as tenferro-tropical
+struct MyScalar(f64);
+struct MyAlgebra;
+
+impl ScalarBase for MyScalar { ... }
+impl HasAlgebra for MyScalar { type Algebra = MyAlgebra; }
+
+impl TensorOps<MyAlgebra> for CpuBackend {
+    type Plan<T: ScalarBase> = MyPlan<T>;
+    ...
+}
+
+// Just works:
+let a = Tensor::<MyScalar>::zeros(&[3, 4], ...);
+einsum("ij,jk->ik", &[&a, &b])?;  // MyAlgebra auto-inferred
+```
+
+**Backend implementation matrix**:
+
+| Backend | Algebra | Extended ops | Notes |
+|---------|---------|-------------|-------|
+| CpuBackend | Standard | Contract, ElementwiseMul | faer/cblas GEMM |
+| CpuBackend | MaxPlus | None (decompose to core) | tropical-gemm SIMD |
+| CpuBackend | MyAlgebra | User choice | User-provided kernels |
+| GpuBackend [future] | Standard | Contract, ElementwiseMul | cuTENSOR/hipTensor |
+| GpuBackend [future] | MaxPlus | None | No cuTENSOR tropical support |
 
 **Usage examples**:
 
 ```rust
-use tenferro_tensorops::{ContractionDescriptor, CpuBackend, TensorOps};
+use tenferro_tensorops::{CpuBackend, TensorOps, OpDescriptor, ReduceOp, Standard};
 use strided_view::StridedArray;
 
-// Matrix multiplication: C_{m,n} = A_{m,k} * B_{k,n}
-let a = StridedArray::<f64>::col_major(&[3, 4]);
-let b = StridedArray::<f64>::col_major(&[4, 5]);
-let mut c = StridedArray::<f64>::col_major(&[3, 5]);
+// Plan + execute: GEMM
+let desc = OpDescriptor::BatchedGemm { batch_dims: vec![], m: 3, n: 5, k: 4 };
+let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
+CpuBackend::execute(&plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
 
-let desc = ContractionDescriptor {
-    modes_a: vec![0, 1],   // m=0, k=1
-    modes_b: vec![1, 2],   // k=1, n=2
-    modes_c: vec![0, 2],   // m=0, n=2
-};
+// Plan + execute: Reduction
+let desc = OpDescriptor::Reduce { modes_a: vec![0, 1], modes_c: vec![0], op: ReduceOp::Sum };
+let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[3]]).unwrap();
+CpuBackend::execute(&plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
 
-let plan = CpuBackend::plan_contraction::<f64>(&desc, &[3, 4], &[4, 5], &[3, 5]).unwrap();
-CpuBackend::contract(&plan, 1.0, &a.view(), &b.view(), 0.0, &mut c.view_mut()).unwrap();
-
-// Reduction: c_i = sum_j A_{i,j}
-CpuBackend::reduce(
-    1.0, &a.view(), &[0, 1],
-    0.0, &mut c_vec.view_mut(), &[0],
-    ReduceOp::Sum,
-).unwrap();
-
-// Permutation (transpose): B_{j,i} = A_{i,j}
-CpuBackend::permute(
-    1.0, &a.view(), &[0, 1],
-    &mut b.view_mut(), &[1, 0],
-).unwrap();
+// Dynamic extension check
+if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
+    let desc = OpDescriptor::Contract { modes_a: vec![0,1], modes_b: vec![1,2], modes_c: vec![0,2] };
+    let plan = CpuBackend::plan::<f64>(&desc, &shapes).unwrap();
+    CpuBackend::execute(&plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
+}
 ```
 
 **No Metal (Apple GPU) support**: M-series CPUs are fast enough for our
@@ -716,27 +853,32 @@ let c = einsum_with_plan(&tree, &[&a, &b]).unwrap();
 
 ---
 
-## Future Phase: tenferro-algebra
+## Future Phase: tenferro-tropical (Separate Crate)
 
-Semiring/Algebra abstraction from omeinsum-rs, as a standalone crate:
+Tropical algebra types and `TensorOps` implementations, as a separate crate
+that proves the extensibility of the algebra-parameterized design:
 
 ```rust
-pub trait Semiring: ScalarBase {
-    fn sem_zero() -> Self;
-    fn sem_one() -> Self;
-    fn sem_add(self, rhs: Self) -> Self;
-    fn sem_mul(self, rhs: Self) -> Self;
-}
+// tenferro-tropical crate
+pub struct MaxPlus<T>(pub T);    // sem_add = max, sem_mul = +
+pub struct MinPlus<T>(pub T);    // sem_add = min, sem_mul = +
+pub struct MaxMul<T>(pub T);     // sem_add = max, sem_mul = *
 
-pub struct Standard<T>(pub T);    // sem_add = +, sem_mul = *
-pub struct MaxPlus<T>(pub T);     // sem_add = max, sem_mul = +
-pub struct MinPlus<T>(pub T);     // sem_add = min, sem_mul = +
-pub struct MaxMul<T>(pub T);      // sem_add = max, sem_mul = *
+impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus; }
+
+impl TensorOps<MaxPlus> for CpuBackend {
+    type Plan<T: ScalarBase> = TropicalPlan<T>;
+    // SIMD-optimized tropical-gemm kernels
+    ...
+}
 ```
 
 Also provides:
 - Argmax tracking for tropical backward pass
-- Algebra trait extending Semiring with optional backward/gradient support
+- SIMD-optimized tropical-gemm via `TypeId`-based runtime dispatch (from omeinsum-rs)
+
+Being in a separate crate proves that external crates can extend the system
+by implementing `TensorOps<MyAlgebra> for CpuBackend` (orphan rule compatible).
 
 ---
 
@@ -790,6 +932,16 @@ pub struct DualTensor<T: Scalar> {
 ### Contraction VJP/JVP
 
 Both VJP and JVP delegate to `TensorOps`, so they work on CPU and GPU uniformly.
+The two-tier TensorOps design provides clean **adjoint pairs** for each
+primitive operation:
+
+| Forward | Backward (adjoint) |
+|---------|-------------------|
+| `trace(A)` | `anti_trace(∂y)` — scatter-add to diagonal |
+| `diag(A)` (on Tensor) | `anti_diag(∂y)` — write to diagonal positions |
+| `reduce(A, dim)` | `repeat(∂y, dim)` — broadcast gradient |
+| `permute(A, p)` | `permute(∂y, p⁻¹)` — inverse permutation |
+| `batched_gemm(A, B)` | `∂A = batched_gemm(∂C, B^T)`, `∂B = batched_gemm(A^T, ∂C)` |
 
 ```rust
 pub fn contract_vjp<T: Scalar>(
@@ -927,9 +1079,10 @@ block indices and fusion-rule-constrained block structure.
 
 | Burn Method | tenferro Implementation |
 |---|---|
-| `float_add` | `TensorOps::elementwise_binary` |
-| `float_matmul` | `TensorOps::contract` |
-| `float_exp/sin/...` | `TensorOps::permute` with unary op on identity permutation |
+| `float_add` | `TensorOps::reduce` or strided-kernel `axpy` |
+| `float_matmul` | `TensorOps contract (extended op)` (or decomposed to `batched_gemm`) |
+| `float_mul` | `TensorOps elementwise_mul (extended op)` |
+| `float_exp/sin/...` | strided-kernel map (CPU only) |
 | `float_reshape/permute/slice` | Metadata-only (zero-copy) |
 | `float_sum/sum_dim` | `TensorOps::reduce` (ReduceOp::Sum) |
 
@@ -1043,14 +1196,15 @@ Users extend the system at the appropriate level:
 | Level | What to implement | Result |
 |-------|-------------------|--------|
 | `ScalarBase` only | Basic trait bounds | Einsum via naive loop, map/reduce work |
-| `ScalarBase` + custom GEMM | Custom backend in tenferro-tensorops | Einsum uses custom GEMM (permute -> reshape -> bgemm) |
-| Full `TensorOps` | Custom backend implementation | Complete control over all operations |
+| `ScalarBase` + custom GEMM | Custom `batched_gemm` in tenferro-tensorops | Einsum decomposes to diag → trace → permute → custom batched_gemm |
+| Full `TensorOps` | Custom backend implementation | Complete control over all core operations |
+| Full `TensorOps<A>` with extensions | Custom backend with extended ops (contract, elementwise_mul) | Maximum performance (has_extension_for returns true) |
 
-**Algebra-aware dispatch** (future, in tenferro-einsum):
-- `Standard<f64/f32/Complex>` -> faer or CBLAS GEMM
-- `Standard<i32/i64>` -> naive loop
-- `MaxPlus<f64>` -> tropical-gemm (SIMD, future)
-- GPU tensors -> cuTENSOR/hipTensor via `TensorOps`
+**Algebra-parameterized dispatch** (via `TensorOps<A>`):
+- `impl TensorOps<Standard> for CpuBackend` → faer/cblas GEMM for f64/f32/Complex, naive for i32/i64
+- `impl TensorOps<MaxPlus> for CpuBackend` (tenferro-tropical) → tropical-gemm SIMD
+- `impl TensorOps<Standard> for GpuBackend` [future] → cuTENSOR/hipTensor
+- `impl TensorOps<MyAlgebra> for CpuBackend` (user crate) → user-provided kernels
 
 ---
 
@@ -1110,8 +1264,10 @@ cd tenferro-rs && cargo test -p tenferro-device -p tenferro-tensorops \
 | ElementOp | `strided-rs/strided-traits/src/element_op.rs` | Stays in strided-rs; used by tenferro via dependency |
 | StridedArray/View | `strided-rs/strided-view/src/` | Stays in strided-rs; used directly in tenferro-tensor (DataBuffer), tenferro-tensorops (TensorOps), tenferro-device (StridedError) |
 | map/reduce kernels | `strided-rs/strided-kernel/src/` | Stays in strided-rs; tenferro-tensorops will depend on it |
-| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | **Absorbed** into tenferro-tensorops (CPU contraction) [future] |
-| BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | **Absorbed** into tenferro-tensorops (GEMM dispatch) [future] |
+| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | **Absorbed** into tenferro-tensorops `TensorOpsExt::contract` (CPU contraction) [future] |
+| BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | **Absorbed** into tenferro-tensorops `TensorOps::batched_gemm` [future] |
+| reduce_trace_axes | `strided-rs/strided-einsum2/src/trace.rs` | **Absorbed** into tenferro-tensorops `TensorOps::trace` [future] |
+| diagonal_view | `strided-rs/strided-view/src/view.rs` | Stays in strided-rs; used by `Tensor::diagonal()` [future] |
 | opteinsum | `strided-rs/strided-opteinsum/src/lib.rs` | **Absorbed** into tenferro-einsum [future] |
 | Algebra traits | `omeinsum-rs/src/algebra/` | **Absorbed** into tenferro-algebra [future] |
 | Backend trait | `omeinsum-rs/src/backend/traits.rs` | **Absorbed** into tenferro-tensorops (evolved into TensorOps) |
