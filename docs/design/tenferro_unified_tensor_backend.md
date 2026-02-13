@@ -1699,6 +1699,148 @@ struct as `Option<CompletionEvent>` (placeholder type) to signal the design
 intent. Actual async execution will be implemented with accelerator and
 multi-threaded backends.
 
+### Tensor / TensorView ownership split
+
+#### Motivation
+
+The POC defines `permute(&self) -> Tensor<T>` as "zero-copy," but `Tensor<T>`
+owns its `DataBuffer<T>`. For true zero-copy view operations, the new tensor
+must share the original's data buffer. Two main approaches exist:
+
+- **Arc-based sharing** (PyTorch model): Single `Tensor` type, buffer wrapped
+  in `Arc`. Simple API, but buffer uniqueness is a runtime check.
+- **Tensor / TensorView split** (ndarray model, `String` / `&str` pattern):
+  Owned `Tensor` and borrowed `TensorView<'a>`. Buffer uniqueness is a
+  compile-time guarantee.
+
+#### Chosen direction: Tensor + TensorView
+
+The Tensor/TensorView split is more idiomatic Rust and provides stronger
+compile-time guarantees for buffer reuse:
+
+```rust
+/// Owned tensor. Holds exclusive ownership of the data buffer.
+/// Can be moved (consumed) for buffer reuse.
+pub struct Tensor<T: ScalarBase> {
+    buffer: DataBuffer<T>,
+    dims: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+    device: Device,
+    event: Option<CompletionEvent>,
+}
+
+/// Borrowed tensor view. References a Tensor's data buffer.
+/// Zero-copy, lifetime-tied to the source Tensor.
+pub struct TensorView<'a, T: ScalarBase> {
+    data: &'a DataBuffer<T>,
+    dims: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+    device: Device,
+    // No event — wait() is called when creating the view.
+}
+```
+
+#### API design
+
+**Tensor (owned) methods:**
+
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    // --- Borrow → TensorView (zero-copy) ---
+    fn view(&self) -> TensorView<'_, T>;
+    fn permute(&self, perm: &[usize]) -> Result<TensorView<'_, T>>;
+    fn broadcast(&self, dims: &[usize]) -> Result<TensorView<'_, T>>;
+    fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'_, T>>;
+
+    // --- Consume self → Tensor (buffer reuse, guaranteed) ---
+    fn into_contiguous(self, order: MemoryOrder) -> Tensor<T>;
+    fn into_conj(self) -> Tensor<T>;
+
+    // --- Borrow → new Tensor (new allocation) ---
+    fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
+    fn conj(&self) -> Tensor<T>;
+}
+```
+
+**TensorView methods:**
+
+```rust
+impl<'a, T: ScalarBase> TensorView<'a, T> {
+    // Further view ops inherit the same lifetime 'a
+    fn permute(&self, perm: &[usize]) -> Result<TensorView<'a, T>>;
+    fn broadcast(&self, dims: &[usize]) -> Result<TensorView<'a, T>>;
+    fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'a, T>>;
+
+    // Materialize: copy data into a new owned Tensor
+    fn to_tensor(&self) -> Tensor<T>;
+    fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
+    fn conj(&self) -> Tensor<T>;
+}
+```
+
+**einsum accepts TensorView:**
+
+```rust
+// einsum takes TensorView (borrowed data).
+// Tensor auto-converts to TensorView via From/Into.
+pub fn einsum<T: ScalarBase + HasAlgebra>(
+    subscripts: &str,
+    operands: &[TensorView<'_, T>],
+) -> Result<Tensor<T>>;
+
+// Consuming variant: moves Tensors, enabling buffer reuse for intermediates.
+// Buffer reuse is guaranteed (compile-time) — no runtime refcount check.
+pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
+    subscripts: &str,
+    operands: Vec<Tensor<T>>,
+) -> Result<Tensor<T>>;
+```
+
+#### Ownership safety examples
+
+```rust
+let a = Tensor::<f64>::zeros(&[3, 4], Device::cpu(), ColumnMajor);
+let b = Tensor::<f64>::zeros(&[4, 5], Device::cpu(), ColumnMajor);
+
+// View operations are zero-copy, lifetime-safe
+let at = a.permute(&[1, 0])?;           // TensorView borrowing a
+let c = einsum("ij,jk->ik", &[at, b.view()])?;  // → new Tensor
+
+// Compile-time safety: can't consume while borrowed
+let at = a.permute(&[1, 0])?;
+let d = einsum_owned("...", vec![a]);    // ERROR: at borrows a
+drop(at);
+let d = einsum_owned("...", vec![a])?;   // OK: borrow released
+
+// Consuming einsum: buffer reuse is deterministic
+let d = einsum_owned("ij,jk->ik", vec![a, b])?;
+// a, b are moved — compiler guarantees no other references exist
+// Their buffers can be reused for intermediates — zero allocation
+```
+
+#### Comparison with Arc-based approach
+
+| Aspect | TensorView (chosen) | Arc-based |
+|--------|---------------------|-----------|
+| Buffer uniqueness | Compile-time guarantee | Runtime `Arc::strong_count` check |
+| `into_` buffer reuse | Always succeeds | May fail if views exist (fallback to alloc) |
+| API types | `Tensor` + `TensorView` | `Tensor` only |
+| Lifetime complexity | Yes (`'a` propagates) | None |
+| Runtime overhead | Zero | Atomic refcount on clone/drop |
+| Rust idiom | `String`/`&str`, `Vec`/`&[T]` | `Arc<T>` |
+| Misuse detection | Compile error | Silent fallback to allocation |
+
+The Arc approach remains viable if lifetime ergonomics prove too burdensome
+in practice. Switching from TensorView to Arc is backward-compatible for
+callers (TensorView disappears, all methods return Tensor).
+
+**Current status**: POC uses `Tensor<T>` only (no TensorView yet).
+View operations (`permute`, `broadcast`, `diagonal`) return `Tensor<T>`
+with `todo!()` bodies. The TensorView split will be implemented when
+view operations are filled in.
+
 ### einsum_into (implemented in POC)
 
 The POC includes accumulating `einsum_*_into` variants alongside the allocating versions:
