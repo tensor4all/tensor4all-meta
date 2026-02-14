@@ -31,7 +31,8 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 - **Algebra-parameterized dispatch**: `TensorPrims<A>` is parameterized by algebra (e.g., `Standard`, `MaxPlus`). The `HasAlgebra` trait on scalar types enables automatic algebra inference: `Tensor<f64>` → `Standard`, `Tensor<MaxPlus<f64>>` → `MaxPlus`. Users can extend the system by defining new algebras in their own crates (orphan rule compatible).
 - **Runtime GPU discovery**: GPU vendor libraries (cuTENSOR, hipTensor) are loaded at runtime via `dlopen`. The caller (Julia, Python) provides the `.so` path. No Cargo feature flags for GPU vendor selection.
 - **Plan-based execution**: All operations follow the cuTENSOR pattern of `PrimDescriptor` → plan → execute. Plans cache expensive analysis (GPU kernel selection, CPU fusability checks) for reuse. Extended operations (contract, elementwise_mul) are dynamically queried via `has_extension_for::<T>()`.
-- **Enums for all variant types**: All types with variants (`MemorySpace`, `ComputeTarget`, `OpDescriptor`, etc.) use Rust enums. This preserves exhaustive `match` checking — when a new variant is added, the compiler identifies every call site that needs updating. New variants constitute a semver breaking change (major version bump), managed through Cargo's version resolution. This is preferred over opaque structs because the cost of hidden unhandled variants (runtime bugs) outweighs the cost of explicit version migration (compile-time errors).
+- **Enums for all variant types**: All types with variants (`LogicalMemorySpace`, `ComputeDevice`, `OpDescriptor`, etc.) use Rust enums. This preserves exhaustive `match` checking — when a new variant is added, the compiler identifies every call site that needs updating. New variants constitute a semver breaking change (major version bump), managed through Cargo's version resolution. This is preferred over opaque structs because the cost of hidden unhandled variants (runtime bugs) outweighs the cost of explicit version migration (compile-time errors).
+- **No implicit cross-space transfer**: Operations across different logical memory spaces fail by default. Data movement is explicit via `to_memory_space_async`.
 
 ---
 
@@ -76,7 +77,8 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
 │ Shared Infrastructure: Device Layer (tenferro-device) [POC]  │
-│   Device enum (Cpu, Cuda{device_id}, Hip{device_id})         │
+│   LogicalMemorySpace + ComputeDevice enums                    │
+│   preferred_compute_devices(space, op_kind)                   │
 │   Error types (thiserror): ShapeMismatch, RankMismatch,      │
 │     DeviceError, InvalidArgument, Strided                    │
 │   Result<T> type alias                                       │
@@ -123,7 +125,8 @@ strided-rs/ (independent workspace) ── Foundation crates stay as-is ──�
 tenferro-rs/ (workspace) ── 5 POC crates ─────────────────────
 │  Depends on strided-rs.
 │
-├── tenferro-device      # Device enum (Cpu, Cuda{device_id}, Hip{device_id})
+├── tenferro-device      # LogicalMemorySpace + ComputeDevice enums
+│                        #   preferred_compute_devices(space, op_kind)
 │                        #   Error (thiserror): ShapeMismatch, RankMismatch,
 │                        #     DeviceError, InvalidArgument, Strided
 │                        #   Result<T> type alias
@@ -272,7 +275,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 
 | tenferro crate | Origin | What changes |
 |----------------|--------|--------------|
-| tenferro-device | **New** (POC) | Device enum, Error/Result types (thiserror) |
+| tenferro-device | **New** (POC) | LogicalMemorySpace/ComputeDevice enums, preferred device selection, Error/Result types |
 | tenferro-prims | **New** (POC), will absorb strided-einsum2 | TensorPrims\<A\> trait (algebra-parameterized), PrimDescriptor, CpuBackend |
 | tenferro-tensor | **New** (POC) | Tensor\<T\>, DataBuffer\<T\>, MemoryOrder, zero-copy view ops |
 | tenferro-einsum | **New** (POC), will absorb strided-opteinsum + omeinsum-rs | Subscripts, ContractionTree, einsum/einsum_with_subscripts/einsum_with_plan |
@@ -308,23 +311,42 @@ burn-tenferro ← tenferro-tensor, burn-backend
 The device crate provides shared infrastructure used across all tenferro crates.
 
 ```rust
-/// Compute device on which tensor data resides.
+/// Logical memory space where tensor buffers reside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Device {
-    Cpu,
+pub enum LogicalMemorySpace {
+    /// Always-available host memory.
+    MainMemory,
+    /// GPU-accessible memory space. A space may be attached to one or many GPUs.
+    GpuMemory { space_id: usize },
+}
+
+/// Compute device where kernels execute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ComputeDevice {
+    Cpu { device_id: usize },
     Cuda { device_id: usize },
     Hip { device_id: usize },
 }
 
-impl fmt::Display for Device {
+impl fmt::Display for ComputeDevice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Device::Cpu => write!(f, "cpu"),
-            Device::Cuda { device_id } => write!(f, "cuda:{device_id}"),
-            Device::Hip { device_id } => write!(f, "hip:{device_id}"),
+            ComputeDevice::Cpu { device_id } => write!(f, "cpu:{device_id}"),
+            ComputeDevice::Cuda { device_id } => write!(f, "cuda:{device_id}"),
+            ComputeDevice::Hip { device_id } => write!(f, "hip:{device_id}"),
         }
     }
 }
+
+/// Operation kind used for capability filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OpKind { Contract, BatchedGemm, Reduce, Trace, Permute, ElementwiseMul }
+
+/// Returns executable compute devices in descending preference order.
+pub fn preferred_compute_devices(
+    space: LogicalMemorySpace,
+    op_kind: OpKind,
+) -> Result<Vec<ComputeDevice>>;
 ```
 
 **Error types** using `thiserror`:
@@ -340,6 +362,12 @@ pub enum Error {
 
     #[error("device error: {0}")]
     DeviceError(String),
+
+    #[error("no compatible compute device for {op:?} in memory space {space:?}")]
+    NoCompatibleComputeDevice { space: LogicalMemorySpace, op: OpKind },
+
+    #[error("operation across distinct logical memory spaces is not allowed by default")]
+    CrossMemorySpaceOperation,
 
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
@@ -638,7 +666,8 @@ pub struct Tensor<T: ScalarBase> {
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
-    device: Device,
+    logical_memory_space: LogicalMemorySpace,
+    preferred_compute_device: Option<ComputeDevice>,
     event: Option<CompletionEvent>,  // None = ready, Some = pending accelerator work
 }
 ```
@@ -647,8 +676,8 @@ pub struct Tensor<T: ScalarBase> {
 
 ```rust
 impl<T: ScalarBase> Tensor<T> {
-    pub fn zeros(dims: &[usize], device: Device, order: MemoryOrder) -> Self;
-    pub fn ones(dims: &[usize], device: Device, order: MemoryOrder) -> Self;
+    pub fn zeros(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self;
+    pub fn ones(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self;
     pub fn from_slice(data: &[T], dims: &[usize], order: MemoryOrder) -> Result<Self>;
     pub fn from_strided_array(array: StridedArray<T>) -> Self;
 }
@@ -663,7 +692,22 @@ impl<T: ScalarBase> Tensor<T> {
     pub fn ndim(&self) -> usize;
     pub fn len(&self) -> usize;
     pub fn is_empty(&self) -> bool;
-    pub fn device(&self) -> &Device;
+    pub fn logical_memory_space(&self) -> LogicalMemorySpace;
+    pub fn preferred_compute_device(&self) -> Option<ComputeDevice>;
+    pub fn set_preferred_compute_device(&mut self, d: Option<ComputeDevice>);
+    pub fn effective_compute_devices(&self, op: OpKind) -> Result<Vec<ComputeDevice>>;
+}
+```
+
+**Explicit memory movement**:
+
+```rust
+impl<T: ScalarBase> Tensor<T> {
+    /// Asynchronous explicit move between logical memory spaces.
+    ///
+    /// - Same source/destination space: always Ok, zero-copy no-op.
+    /// - Different spaces: explicit transfer (never implicit in ops).
+    pub fn to_memory_space_async(&self, dst: LogicalMemorySpace) -> Result<Tensor<T>>;
 }
 ```
 
@@ -734,10 +778,10 @@ impl<T: ScalarBase> Tensor<T> {
 
 ```rust
 use tenferro_tensor::{Tensor, MemoryOrder};
-use tenferro_device::Device;
+use tenferro_device::LogicalMemorySpace;
 
 // Create tensors
-let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 let m = Tensor::<f64>::from_slice(&data, &[2, 3], MemoryOrder::ColumnMajor).unwrap();
 
@@ -746,13 +790,13 @@ let mt = m.permute(&[1, 0]).unwrap();
 assert_eq!(mt.dims(), &[3, 2]);
 
 // Broadcasting (zero-copy via stride 0)
-let col = Tensor::<f64>::ones(&[3, 1], Device::Cpu, MemoryOrder::ColumnMajor);
+let col = Tensor::<f64>::ones(&[3, 1], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 let expanded = col.broadcast(&[3, 4]).unwrap();
 assert_eq!(expanded.dims(), &[3, 4]);
 
 // Get strided views for low-level operations
 let view = a.view();
-let mut b = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+let mut b = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 let view_mut = b.view_mut();
 ```
 
@@ -843,7 +887,7 @@ pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
 ```rust
 use tenferro_einsum::einsum;
 use tenferro_tensor::{Tensor, MemoryOrder};
-use tenferro_device::Device;
+use tenferro_device::LogicalMemorySpace;
 
 let col = MemoryOrder::ColumnMajor;
 let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
@@ -856,8 +900,8 @@ let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
 let tr = einsum("ii->", &[&a]).unwrap();
 
 // Batch matrix multiplication
-let ba = Tensor::<f64>::zeros(&[10, 3, 4], Device::Cpu, col);
-let bb = Tensor::<f64>::zeros(&[10, 4, 5], Device::Cpu, col);
+let ba = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
+let bb = Tensor::<f64>::zeros(&[10, 4, 5], LogicalMemorySpace::MainMemory, col);
 let bc = einsum("bij,bjk->bik", &[&ba, &bb]).unwrap();
 
 // Explicit contraction order via parentheses
@@ -1134,9 +1178,10 @@ The `memory_order` attribute records the writer's logical convention
 
 ```rust
 use tenferro_hdf5::{read_tensor, write_tensor};
+use tenferro_device::LogicalMemorySpace;
 
 // Write tensor to HDF5 file
-let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 write_tensor(&file, "group/tensor_name", &a)?;
 
 // Read tensor from HDF5 file
@@ -1342,7 +1387,7 @@ impl BackendRegistry {
     pub fn new() -> Self;  // CPU only
     pub fn load_cutensor(&mut self, path: &str) -> Result<()>;
     pub fn load_hiptensor(&mut self, path: &str) -> Result<()>;
-    pub fn available_devices(&self) -> Vec<Device>;
+    pub fn available_compute_devices(&self) -> Vec<ComputeDevice>;
 }
 
 /// GPU vtable abstracting over cuTENSOR / hipTensor.
@@ -1509,55 +1554,51 @@ The current design targets single-GPU execution. For large-scale tensor
 network computations, distributing contractions across multiple GPUs
 is desirable.
 
-**Architectural issue — Device vs Memory Space**:
+**Chosen memory/compute separation**:
 
-The current `Device` enum conflates two distinct concepts:
+The design now separates memory placement from execution target:
 
-1. **Memory space**: Where the tensor's data buffer physically resides
-   (CPU RAM, GPU 0 VRAM, GPU 1 VRAM, ...)
-2. **Compute device**: Where the operation is executed
+1. **Logical memory space**: where the tensor buffer lives
+   (`MainMemory`, GPU memory spaces, etc.)
+2. **Compute device**: where the kernel executes (`Cpu`, `Cuda`, `Hip`)
 
-With NVLink P2P (up to 1.8 TB/s on Blackwell), a GPU can directly
-access another GPU's memory without copying. This means:
-- Tensor A in GPU 0 VRAM + Tensor B in GPU 1 VRAM → contraction can
-  run on GPU 0 (P2P read B), on GPU 1 (P2P read A), or distributed
-  across both.
-- The `Tensor` should specify the **memory space** where its buffer
-  resides, not the compute device.
-- Computation should **default** to the optimal device(s) inferred
-  from the operands' memory spaces (e.g., if both tensors are on
-  GPU 0, run on GPU 0).
-- The user can **explicitly override** the compute device(s).
+Rules:
+- `MainMemory` always exists.
+- A logical GPU memory space may be attached to one GPU or multiple GPUs.
+- A single GPU compute device is attached to exactly one logical memory space.
+- Cross-space operations are **not implicit**; they fail by default.
+- Movement across spaces is explicit via `to_memory_space_async`.
 
 ```rust
-// Current design (conflates memory and compute):
-pub enum Device { Cpu, Cuda { device_id: usize }, Hip { device_id: usize } }
-
-// Possible future design:
-pub enum MemorySpace {
-    CpuRam,
-    GpuVram { device_id: usize },
-    UnifiedRam,                    // CUDA/HIP managed memory (auto page migration)
-    // Future variants (semver breaking change):
-    // GpuCluster { device_ids: Vec<usize> },  // NVLink domain
+pub enum LogicalMemorySpace {
+    MainMemory,
+    GpuMemory { space_id: usize },
 }
 
-// Tensor stores where its data lives:
-pub struct Tensor<T> { ..., memory_space: MemorySpace }
-
-// Compute target is separate, specified at operation time.
-pub enum ComputeTarget {
-    Auto,                          // infer from operands' memory spaces (default)
-    Gpu { device_id: usize },     // specific GPU
-    // Future variants (semver breaking change, compiler catches all match sites):
-    // Gpus { device_ids: Vec<usize> },          // multi-GPU distribution
-    // CpuAndGpu { threads: usize, gpu: usize }, // heterogeneous
+pub enum ComputeDevice {
+    Cpu { device_id: usize },
+    Cuda { device_id: usize },
+    Hip { device_id: usize },
 }
 
-// Usage:
-einsum("ij,jk->ik", &[&a, &b])?;                                       // Auto
-einsum_on(ComputeTarget::Auto, "ij,jk->ik", &[&a, &b])?;              // explicit Auto
-einsum_on(ComputeTarget::Gpu { device_id: 0 }, "ij,jk->ik", &[&a, &b])?; // specific GPU
+pub enum OpKind { Contract, BatchedGemm, Reduce, Trace, Permute, ElementwiseMul }
+
+pub struct Tensor<T> {
+    // ...
+    logical_memory_space: LogicalMemorySpace,
+    preferred_compute_device: Option<ComputeDevice>, // None => infer from memory space + op
+}
+
+// tenferro-device API:
+pub fn preferred_compute_devices(
+    space: LogicalMemorySpace,
+    op_kind: OpKind,
+) -> Result<Vec<ComputeDevice>>; // Err(NoCompatibleComputeDevice) when empty
+
+impl<T> Tensor<T> {
+    pub fn to_memory_space_async(&self, dst: LogicalMemorySpace) -> Result<Tensor<T>>;
+    // same src/dst space: always Ok, zero-copy no-op
+}
 ```
 
 **Open questions**:
@@ -1608,7 +1649,8 @@ pub struct Tensor<T: ScalarBase> {
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
-    device: Device,
+    logical_memory_space: LogicalMemorySpace,
+    preferred_compute_device: Option<ComputeDevice>,
     event: Option<CompletionEvent>,  // None = ready, Some = pending accelerator work
 }
 ```
@@ -1681,14 +1723,13 @@ It applies equally to **multi-threaded CPU execution**:
   subsequent `einsum` automatically chains via event dependencies — no
   explicit synchronization needed.
 
-- **Device model extension**: `Device::Cpu` will be extended to carry a
-  `device_id` (e.g., `Cpu { device_id: usize }`) matching the pattern of
-  `Cuda` and `Hip` variants. `device_id: 0` represents the default global
-  thread pool (all cores). Higher IDs can map to Rayon `ThreadPool`
-  instances bound to specific core sets via `core_affinity`, enabling
-  NUMA-aware and cache-local execution. Constructor functions
-  (`Device::cpu()`, `Device::cuda(id)`, `Device::hip(id)`) provide
-  ergonomic defaults. The `CompletionEvent` mechanism remains unchanged.
+- **Compute-device model extension**: `ComputeDevice::Cpu { device_id }`
+  matches `Cuda/Hip` and supports multiple CPU execution contexts.
+  `device_id: 0` represents the default global thread pool (all cores).
+  Higher IDs can map to Rayon `ThreadPool` instances bound to specific
+  core sets via `core_affinity`, enabling NUMA-aware and cache-local
+  execution. Memory placement remains independent via
+  `LogicalMemorySpace`. The `CompletionEvent` mechanism remains unchanged.
 
 This means the same `einsum` API and `wait()` / `is_ready()` interface
 covers GPU async, CPU multi-thread, and potentially other execution models
@@ -1726,7 +1767,8 @@ pub struct Tensor<T: ScalarBase> {
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
-    device: Device,
+    logical_memory_space: LogicalMemorySpace,
+    preferred_compute_device: Option<ComputeDevice>,
     event: Option<CompletionEvent>,
 }
 
@@ -1742,8 +1784,9 @@ pub struct TensorView<'a, T: ScalarBase> {
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
-    device: Device,
-    event: Option<&'a CompletionEvent>,  // Always None in public API
+    logical_memory_space: LogicalMemorySpace,
+    preferred_compute_device: Option<ComputeDevice>,
+    event: Option<&'a CompletionEvent>,  // Public API: None; internal operand path: propagated
 }
 ```
 
@@ -1811,8 +1854,8 @@ pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
 #### Ownership safety examples
 
 ```rust
-let a = Tensor::<f64>::zeros(&[3, 4], Device::cpu(), ColumnMajor);
-let b = Tensor::<f64>::zeros(&[4, 5], Device::cpu(), ColumnMajor);
+let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, ColumnMajor);
+let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, ColumnMajor);
 
 // einsum takes &Tensor — notation handles permutation/broadcast
 let c = einsum("ij,jk->ik", &[&a, &b])?;       // → new Tensor

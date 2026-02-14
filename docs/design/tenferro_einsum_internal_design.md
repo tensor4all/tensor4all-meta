@@ -37,7 +37,7 @@ Layer 2: Tensor Operation Protocol (tenferro-prims)
          GPU dispatch via tenferro-device
          ↓
 Shared:  Device Layer (tenferro-device)
-         Device enum (Cpu, Cuda, Hip), Error, Result
+         LogicalMemorySpace + ComputeDevice, preferred device selection, Error, Result
          Used by: tenferro-prims, tenferro-tensor, tenferro-einsum
 
 Foundation: strided-rs (independent workspace, not absorbed)
@@ -292,19 +292,37 @@ L1 blocking, importance-weighted ordering, SIMD auto-vectorization.
 
 ### Device Layer (tenferro-device)
 
-The POC `tenferro-device` crate provides a minimal device abstraction:
+The POC `tenferro-device` crate provides a memory/compute separation abstraction:
 
 ```rust
-/// Compute device on which tensor data resides.
+/// Logical memory space where tensor buffers reside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Device {
-    /// CPU device.
-    Cpu,
+pub enum LogicalMemorySpace {
+    /// Always-available host memory.
+    MainMemory,
+    /// GPU-accessible memory space.
+    GpuMemory { space_id: usize },
+}
+
+/// Compute device where kernels execute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ComputeDevice {
+    /// CPU device with execution context ID.
+    Cpu { device_id: usize },
     /// NVIDIA CUDA device with a specific device ID.
     Cuda { device_id: usize },
     /// AMD HIP device with a specific device ID.
     Hip { device_id: usize },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OpKind { Contract, BatchedGemm, Reduce, Trace, Permute, ElementwiseMul }
+
+/// Returns executable compute devices in descending preference order.
+pub fn preferred_compute_devices(
+    space: LogicalMemorySpace,
+    op_kind: OpKind,
+) -> Result<Vec<ComputeDevice>>;
 
 /// Error type used across the tenferro workspace.
 #[derive(Debug, thiserror::Error)]
@@ -317,6 +335,12 @@ pub enum Error {
 
     #[error("device error: {0}")]
     DeviceError(String),
+
+    #[error("no compatible compute device for {op:?} in memory space {space:?}")]
+    NoCompatibleComputeDevice { space: LogicalMemorySpace, op: OpKind },
+
+    #[error("operation across distinct logical memory spaces is not allowed by default")]
+    CrossMemorySpaceOperation,
 
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
@@ -331,8 +355,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 The POC does **not** include `BackendRegistry`, `GpuBackend`, or
 `TensorLibVtable`. These are future work for GPU support. The current
-`tenferro-device` crate is intentionally minimal: `Device` enum, `Error`,
-and `Result`.
+`tenferro-device` crate is intentionally minimal: `LogicalMemorySpace`,
+`ComputeDevice`, `preferred_compute_devices`, `Error`, and `Result`.
 
 ### CPU Backend
 
@@ -954,11 +978,14 @@ strided-traits -> strided-view -> strided-kernel
 tenferro-rs (workspace, depends on strided-rs):
 
 tenferro-device              tenferro-algebra
-  (Device enum, Error,         (HasAlgebra trait,
-   Result)                      Semiring trait,
-  (depends on: strided-view     Standard type)
-   for StridedError,           (depends on: strided-traits,
-   thiserror)                   num-complex)
+  (LogicalMemorySpace +        (HasAlgebra trait,
+   ComputeDevice, Error,       Semiring trait,
+   Result)                     Standard type)
+  (depends on: strided-view
+   for StridedError,
+   thiserror)
+                              (depends on: strided-traits,
+                               num-complex)
         │                              │
         ├──────────────┐       ┌───────┤
         │              ↓       ↓       │
