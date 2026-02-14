@@ -756,6 +756,10 @@ impl<T: ScalarBase> Tensor<T> {
     /// For complex types (Complex32, Complex64), negates the imaginary part.
     pub fn conj(&self) -> Tensor<T>;
 
+    /// Consume this tensor and return one with complex-conjugated elements.
+    /// Like conj() but may reuse the buffer (no allocation).
+    pub fn into_conj(self) -> Tensor<T>;
+
     /// Wait for any pending accelerator computation to complete.
     /// No-op for CPU tensors or already-completed operations.
     pub fn wait(&self);
@@ -882,6 +886,33 @@ pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
 | `einsum_with_subscripts` | Cached | Yes | Yes | Same pattern, varying shapes |
 | `einsum_with_plan` | Cached | Cached | Yes | Hot loops, same shapes |
 
+**Consuming variants** (operands moved, buffer reuse possible):
+
+```rust
+/// Level 1: Consuming — parse + optimize + execute, input buffers may be reused.
+pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
+    subscripts: &str,
+    operands: Vec<Tensor<T>>,
+) -> Result<Tensor<T>>;
+
+/// Level 2: Consuming — optimize + execute.
+pub fn einsum_with_subscripts_owned<T: ScalarBase + HasAlgebra>(
+    subscripts: &Subscripts,
+    operands: Vec<Tensor<T>>,
+) -> Result<Tensor<T>>;
+
+/// Level 3: Consuming — execute only.
+pub fn einsum_with_plan_owned<T: ScalarBase + HasAlgebra>(
+    tree: &ContractionTree,
+    operands: Vec<Tensor<T>>,
+) -> Result<Tensor<T>>;
+```
+
+Input tensors are moved into the function. The implementation may reuse
+their buffers for intermediate results or the final output, avoiding
+allocation in contraction trees. Buffer reuse is deterministic — the
+compiler guarantees no other references to the moved tensors exist.
+
 **User examples**:
 
 ```rust
@@ -916,14 +947,21 @@ let c = einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
 use tenferro_einsum::ContractionTree;
 let tree = ContractionTree::optimize(&subs, &[&[2, 2], &[2, 2]]).unwrap();
 let c = einsum_with_plan(&tree, &[&a, &b]).unwrap();
+
+// Consuming variant: operands are moved, buffers may be reused
+use tenferro_einsum::einsum_owned;
+let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+let y = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+let z = einsum_owned("ij,jk->ik", vec![x, y]).unwrap();
+// x, y are moved — their buffers can be reused for intermediates
 ```
 
 **Key differences from original design**:
 - String-first API: `einsum("ij,jk->ik", &[&a, &b])` instead of integer labels as primary
 - Parenthesized contraction order in string notation
 - `Subscripts::parse()` handles string-to-integer conversion
-- Six API functions: three allocating (`einsum`, `einsum_with_subscripts`, `einsum_with_plan`) and three accumulating (`einsum_into`, `einsum_with_subscripts_into`, `einsum_with_plan_into`) with BLAS-style `alpha`/`beta` scaling
-- `Tensor::into_contiguous(self)` consuming variant avoids allocation when already contiguous
+- Nine API functions: three allocating (`einsum`, `einsum_with_subscripts`, `einsum_with_plan`), three accumulating (`einsum_into`, `einsum_with_subscripts_into`, `einsum_with_plan_into`) with BLAS-style `alpha`/`beta` scaling, and three consuming (`einsum_owned`, `einsum_with_subscripts_owned`, `einsum_with_plan_owned`) for buffer reuse
+- `Tensor::into_contiguous(self)` and `Tensor::into_conj(self)` consuming variants avoid allocation when possible
 - No mixed-type inputs: all inputs and output must be the same type `T`
 
 ---
@@ -1954,18 +1992,18 @@ View operations (`permute`, `broadcast`, `diagonal`) return `Tensor<T>`
 with `todo!()` bodies. The TensorView split will be implemented when
 view operations are filled in.
 
-### einsum_into (implemented in POC)
+### einsum variants (implemented in POC)
 
-The POC includes accumulating `einsum_*_into` variants alongside the allocating versions:
+The POC includes three variant families alongside the allocating versions:
 
-- **`einsum_into`**, **`einsum_with_subscripts_into`**, **`einsum_with_plan_into`** --
+- **Accumulating** (`einsum_into`, `einsum_with_subscripts_into`, `einsum_with_plan_into`) --
   write into a caller-provided output buffer with BLAS-style accumulation
   (`output = alpha * einsum(...) + beta * output`). Avoids output allocation in hot loops.
 
-**Not yet implemented** (future optimization):
-- **`einsum_owned_into`** -- consumes input tensors, reuses their buffers as intermediate
-  workspace when reference count is 1 (buffer pool pattern from strided-opteinsum).
-  Maximum performance for N-ary contraction trees.
+- **Consuming** (`einsum_owned`, `einsum_with_subscripts_owned`, `einsum_with_plan_owned`) --
+  take ownership of input tensors (`Vec<Tensor<T>>`). The implementation may reuse
+  input buffers for intermediate results, avoiding allocation in contraction trees.
+  Buffer reuse is guaranteed safe by Rust's ownership system (no runtime refcount check).
 
 ### Insights from ITensor Julia ecosystem
 
