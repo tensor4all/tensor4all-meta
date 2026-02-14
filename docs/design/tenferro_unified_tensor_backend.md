@@ -1732,13 +1732,18 @@ pub struct Tensor<T: ScalarBase> {
 
 /// Borrowed tensor view. References a Tensor's data buffer.
 /// Zero-copy, lifetime-tied to the source Tensor.
+///
+/// Public API always returns TensorView with event = None
+/// (wait is performed before construction). The event field
+/// is used only by crate-internal as_operand_view() for
+/// accelerator pipeline chaining.
 pub struct TensorView<'a, T: ScalarBase> {
     data: &'a DataBuffer<T>,
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
     device: Device,
-    event: Option<&'a CompletionEvent>,  // Propagated from source (borrowed)
+    event: Option<&'a CompletionEvent>,  // Always None in public API
 }
 ```
 
@@ -1748,17 +1753,20 @@ pub struct TensorView<'a, T: ScalarBase> {
 
 ```rust
 impl<T: ScalarBase> Tensor<T> {
-    // --- Borrow → TensorView (zero-copy) ---
+    // --- Public: Borrow → TensorView (zero-copy, waits if pending) ---
     fn view(&self) -> TensorView<'_, T>;
     fn permute(&self, perm: &[usize]) -> Result<TensorView<'_, T>>;
     fn broadcast(&self, dims: &[usize]) -> Result<TensorView<'_, T>>;
     fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'_, T>>;
 
+    // --- Internal: Non-blocking operand view (event propagated) ---
+    pub(crate) fn as_operand_view(&self) -> TensorView<'_, T>;
+
     // --- Consume self → Tensor (buffer reuse, guaranteed) ---
     fn into_contiguous(self, order: MemoryOrder) -> Tensor<T>;
     fn into_conj(self) -> Tensor<T>;
 
-    // --- Borrow → new Tensor (new allocation) ---
+    // --- Borrow → new Tensor (new allocation, waits if pending) ---
     fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
     fn conj(&self) -> Tensor<T>;
 }
@@ -1768,7 +1776,7 @@ impl<T: ScalarBase> Tensor<T> {
 
 ```rust
 impl<'a, T: ScalarBase> TensorView<'a, T> {
-    // Further view ops inherit the same lifetime 'a
+    // Further view ops (data already ready — event is None in public API)
     fn permute(&self, perm: &[usize]) -> Result<TensorView<'a, T>>;
     fn broadcast(&self, dims: &[usize]) -> Result<TensorView<'a, T>>;
     fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'a, T>>;
@@ -1780,14 +1788,16 @@ impl<'a, T: ScalarBase> TensorView<'a, T> {
 }
 ```
 
-**einsum accepts TensorView:**
+**einsum takes &Tensor references (not TensorView):**
 
 ```rust
-// einsum takes TensorView (borrowed data).
-// Tensor auto-converts to TensorView via From/Into.
+// einsum takes Tensor references. Internally uses as_operand_view()
+// to propagate pending events without blocking (pipeline-safe).
+// Einstein notation handles permute/broadcast — no need to create
+// TensorView before calling einsum.
 pub fn einsum<T: ScalarBase + HasAlgebra>(
     subscripts: &str,
-    operands: &[TensorView<'_, T>],
+    operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>>;
 
 // Consuming variant: moves Tensors, enabling buffer reuse for intermediates.
@@ -1804,9 +1814,13 @@ pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
 let a = Tensor::<f64>::zeros(&[3, 4], Device::cpu(), ColumnMajor);
 let b = Tensor::<f64>::zeros(&[4, 5], Device::cpu(), ColumnMajor);
 
-// View operations are zero-copy, lifetime-safe
+// einsum takes &Tensor — notation handles permutation/broadcast
+let c = einsum("ij,jk->ik", &[&a, &b])?;       // → new Tensor
+let c_t = einsum("ji,jk->ik", &[&a, &b])?;     // transposed a via notation
+
+// View operations for CPU data inspection (waits if pending)
 let at = a.permute(&[1, 0])?;           // TensorView borrowing a
-let c = einsum("ij,jk->ik", &[at, b.view()])?;  // → new Tensor
+assert_eq!(at.dims(), &[4, 3]);         // data is ready to read
 
 // Compile-time safety: can't consume while borrowed
 let at = a.permute(&[1, 0])?;
@@ -1834,49 +1848,59 @@ let d = einsum_owned("ij,jk->ik", vec![a, b])?;
 
 #### Coherence with async execution (CompletionEvent propagation)
 
-TensorView must propagate `CompletionEvent` from the source Tensor to
-preserve accelerator pipelines. Without propagation, creating a view
-would force a CPU wait, breaking GPU-to-GPU operation chaining:
+Public view APIs (`view()`, `permute()`, etc.) **wait** before returning,
+so users always receive ready-to-read data. Accelerator pipeline chaining
+is handled internally by `as_operand_view()`, which propagates pending
+events without blocking.
 
-```
-// BAD: wait on view creation breaks pipeline
-GPU: [== einsum A ==]              [== einsum B ==]
-CPU:                  [wait][permute]
-```
+**Two-tier API contract:**
 
-With event propagation through TensorView:
+| Tier | Methods | Event handling | User visibility |
+|------|---------|---------------|-----------------|
+| **Public (CPU-read)** | `view()`, `permute()`, `broadcast()`, `diagonal()`, `view_mut()`, `to_tensor()`, `contiguous()`, `conj()` | **Wait** if pending, return ready data | Yes |
+| **Internal (pipeline)** | `pub(crate) as_operand_view()` | **Propagate** event as `Option<&'a CompletionEvent>` | No (crate-internal) |
+| **Accelerator ops** | `einsum` (takes `&[&Tensor]`) | Internally calls `as_operand_view()`, **detects** events → sets up stream dependency | Yes (but event handling is transparent) |
 
-```
-// GOOD: event propagates, no CPU wait
-GPU: [== einsum A ==][== einsum B ==]
-CPU: [permute (metadata only)]
-```
-
-**Design rule — when to wait vs. propagate:**
-
-| Operation | Event handling | Rationale |
-|-----------|--------------|-----------|
-| `permute`, `broadcast`, `diagonal`, `view()` | **Propagate** event as `&'a CompletionEvent` | Metadata-only; data not accessed |
-| `einsum` (taking TensorView operands) | **Detect** operand events → set up stream dependency | Accelerator-to-accelerator chaining |
-| `to_tensor`, `contiguous`, `conj` | **Wait**, then read data | CPU must access data |
-| `view_mut` | **Wait**, then grant `&mut` | Exclusive CPU access required |
-
-Example: GPU pipeline preserved through views:
+**GPU pipeline preserved via internal path:**
 
 ```rust
-let a = einsum_gpu("ij,jk->ik", &[x.view(), y.view()])?;
+let a = einsum("ij,jk->ik", &[&x_gpu, &y_gpu])?;
+//  → einsum internally: as_operand_view(&x_gpu), as_operand_view(&y_gpu)
 //  → GPU submit, a.event = Some(event_1), returns immediately
 
-let at = a.permute(&[1, 0])?;
-//  → at.event = Some(&event_1) — no CPU wait, metadata only
-
-let b = einsum_gpu("ij,jk->ik", &[at, z.view()])?;
-//  → detects at.event → sets up stream dependency on event_1
+let b = einsum("ij,jk->ik", &[&a, &z_gpu])?;
+//  → einsum internally: as_operand_view(&a) → event_1 propagated
+//  → detects event_1 → sets up stream dependency → no CPU wait
 //  → GPU submit, b.event = Some(event_2), returns immediately
 
-// CPU data access triggers synchronization
-let data = b.to_tensor();  // wait(event_2), then copy
+// Public API access triggers synchronization
+let bv = b.view();  // wait(event_2), then return TensorView (event=None)
 ```
+
+Note: Einstein notation subsumes `permute`/`broadcast` for einsum operands
+(`"ji,jk->ik"` transposes the first operand), so users rarely need to
+create TensorView explicitly when chaining accelerator operations.
+
+**Implementation note — `wait(&self)` requires interior mutability:**
+
+`Tensor::wait(&self)` must clear the `event` field through a shared
+reference. This requires interior mutability (e.g., `Cell<Option<CompletionEvent>>`
+or similar). This is an implementation detail that does not affect the
+public API contract.
+
+**Potential issues to monitor:**
+
+1. **Non-einsum accelerator operations**: Future element-wise operations
+   (add, mul, etc.) on accelerators will also need the `as_operand_view()`
+   internal path to maintain pipelines. This is architecturally consistent
+   but must be applied to every new accelerator-capable operation.
+
+2. **TensorView cannot be passed to einsum**: Since `einsum` takes
+   `&[&Tensor]`, a user cannot pass a `TensorView` directly. This is
+   intentional — Einstein notation already handles permute/broadcast,
+   and `einsum` uses `as_operand_view()` internally for pipeline safety.
+   If a use case arises that genuinely requires passing views to einsum,
+   a trait-based approach can be introduced later.
 
 The Arc approach remains viable if lifetime ergonomics prove too burdensome
 in practice. Switching from TensorView to Arc is backward-compatible for
