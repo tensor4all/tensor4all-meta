@@ -165,7 +165,7 @@ strided-rs/ (independent workspace) ── Foundation crates stay as-is ──�
 ├── strided-view         # StridedArray, StridedView, StridedViewMut (zero-copy strided views)
 └── strided-kernel       # Cache-optimized map/reduce/broadcast kernels
 
-tenferro-rs/ (workspace) ── 13 POC crates ────────────────────
+tenferro-rs/ (workspace) ── 11 POC crates ────────────────────
 │  Depends on strided-rs.
 │
 │  ── core (root level) ── tenferro-* essential stack ──────────
@@ -298,19 +298,8 @@ tenferro-rs/ (workspace) ── 13 POC crates ───────────�
     │                        #   Re-exports all of chainrules-core
     │                        #   Depends on: chainrules-core
     │
-    ├── dlpack-core               # DLPack-compatible containers
-    │                            #   DLDevice/DeviceType (CPU/CUDA/ROCm)
-    │                            #   Matrix<T>/MatrixView (2D, owned w/ deleter)
-    │                            #   Tensor<T>/TensorView (N-dim, same pattern)
-    │                            #   Alloc trait (device-aware allocation)
-    │                            #   No external dependencies
-    │
-    └── chainrules-linalg        # Matrix-level decompositions + AD rules
-                                 #   SVD, QR, LU, eigen for 2D matrices
-                                 #   Matrix-level rrule/frule (Mathieu 2019)
-                                 #   GPU-compatible via dlpack-core types
-                                 #   Functions take &dyn Alloc for allocation
-                                 #   Depends on: chainrules-core, dlpack-core
+    └── (no more extern linalg crates — matrix-level AD rules
+          are now in tenferro-linalg following PyTorch convention)
 ```
 
 ### Future Crates (not in POC)
@@ -349,16 +338,11 @@ tenferro-rs workspace:
 
 ┌─ extern/ (general-purpose, no tenferro dependency) ──────────┐
 │                                                              │
-│  dlpack-core                  chainrules-core                │
-│   (no deps)                    (← thiserror)                 │
-│      │                            │                          │
-│      │        ┌───────────────────┤                          │
-│      │        │                   ↓                          │
-│      │        │              chainrules                      │
-│      │        │               (← chainrules-core)            │
-│      ↓        ↓                                              │
-│  chainrules-linalg                                           │
-│   (← dlpack-core, ← chainrules-core)                        │
+│  chainrules-core              (← thiserror)                  │
+│      │                                                       │
+│      ↓                                                       │
+│  chainrules                                                  │
+│   (← chainrules-core)                                        │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
     │
@@ -385,9 +369,8 @@ tenferro-rs workspace:
 │      tenferro-einsum                                         │
 │        (← tenferro-algebra, ← chainrules)                    │
 │      tenferro-linalg                                         │
-│        (← tenferro-algebra, ← chainrules,                    │
-│         ← tenferro-tensor, ← tenferro-device,                │
-│         ← chainrules-linalg)                                 │
+│        (← tenferro-algebra, ← chainrules-core,               │
+│         ← tenferro-tensor, ← tenferro-device)                │
 │             │                                                │
 │             ↓                                                │
 │      tenferro-capi                                           │
@@ -416,9 +399,7 @@ tenferro-rs workspace:
 
 ```
 ┌─ extern/ (general-purpose) ──────────────────────────────────┐
-│  dlpack-core                                                 │
 │  chainrules-core → chainrules                                │
-│  dlpack-core + chainrules-core → chainrules-linalg           │
 └──────────────────────────────────────────────────────────────┘
     │
 ┌─ core ───────────────────────────────────────────────────────┐
@@ -431,7 +412,7 @@ tenferro-rs workspace:
 │      └──────┬─────────┘                                      │
 │             ↓                                                │
 │  tenferro-einsum (← chainrules)                              │
-│  tenferro-linalg (← chainrules, ← chainrules-linalg)        │
+│  tenferro-linalg (← chainrules-core)                         │
 │             │                                                │
 │             ↓                                                │
 │  tenferro-capi                                               │
@@ -474,9 +455,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 | tenferro-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types [future] |
 | chainrules-core | **New** (POC) | Core AD traits: Differentiable, ReverseRule, ForwardRule (like Julia ChainRulesCore.jl) |
 | chainrules | **New** (POC) | AD engine: Tape, TrackedTensor, DualTensor, pullback, hvp (like Julia Zygote.jl) |
-| dlpack-core | **New** (POC) | DLPack-compatible containers: DLDevice/DeviceType, Matrix\<T\>/MatrixView (2D, owned w/ deleter), Tensor\<T\>/TensorView (N-dim), Alloc trait. No external dependencies. |
-| chainrules-linalg | **New** (POC) | Matrix-level (2D) SVD/QR/LU/eigen AD rules (Mathieu 2019). Uses dlpack-core types for GPU-transparent operation. Functions take &dyn Alloc. |
-| tenferro-linalg | ndtensors-rs (linalg + linalg AD) | **POC** API skeleton: tensor-level SVD/QR/LU/eigen (matricize/unmatricize + dim permutation AD). Delegates 2D matrix-level AD rules to chainrules-linalg. GPU: cuSOLVER/rocSOLVER |
+| tenferro-linalg | ndtensors-rs (linalg + linalg AD) | **POC** API skeleton: batched matrix SVD/QR/LU/eigen following torch.linalg convention. `(*, m, n)` shape, col-major contiguous, matrix-level AD rules (Mathieu 2019). GPU: cuSOLVER/rocSOLVER |
 | tenferro-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | **POC** API skeleton: einsum + SVD, f64 only, stateless rrule/frule (14 functions) |
 | tenferro-tropical | omeinsum-rs (algebra) | **POC** API skeleton: MaxPlus, MinPlus, MaxMul scalars + algebra markers + TensorPrims impls + ArgmaxTracker |
 | tenferro-tropical-capi | **New** (POC) | C-API for tropical einsum: 9 FFI functions (3 algebras × einsum/rrule/frule), reuses TfeTensorF64 from tenferro-capi |
@@ -505,18 +484,16 @@ burn-tenferro ← tenferro-tensor, burn-backend
 
 > **Detailed API designs**: See [tenferro Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_design.md) in tenferro-rs for full per-crate API designs including code examples.
 
-The POC implements thirteen crates:
+The POC implements eleven crates:
 
 - **tenferro-device** — `LogicalMemorySpace` (MainMemory, PinnedMemory, GpuMemory, ManagedMemory) + `ComputeDevice` enums, `OpKind`, `preferred_compute_devices()`, shared `Error`/`Result` types. DLPack-aligned device model.
 - **tenferro-algebra** — `HasAlgebra` trait (maps scalar T → algebra A), `Semiring` trait, `Standard` type for standard arithmetic. `Scalar` trait (blanket impl, replaces strided-traits' `Scalar`). `Conjugate` trait for complex conjugation.
 - **chainrules-core** — Core AD traits (like Julia's ChainRulesCore.jl): `Differentiable` (tangent space), `ReverseRule<V>` (pullback), `ForwardRule<V>` (pushforward), `AutodiffError`, `NodeId`, `SavePolicy`.
 - **chainrules** — AD engine (like Julia's Zygote.jl): `Tape<V>`, `TrackedTensor<V>`, `DualTensor<V>`, `pullback()`, `hvp()` (forward-over-reverse HVP), `Gradients<V>`, `PullbackPlan<V>`. Re-exports all of `chainrules-core`.
-- **dlpack-core** — Lightweight DLPack-compatible containers: `DLDevice`/`DeviceType` (CPU/CUDA/ROCm device identification), `Matrix<T>`/`MatrixView`/`MatrixViewMut` (2D, owned with deleter callback), `Tensor<T>`/`TensorView`/`TensorViewMut` (N-dim, same ownership pattern), `Alloc` trait for device-aware memory allocation. No external dependencies.
-- **chainrules-linalg** — Matrix-level (2D) SVD, QR, LU, eigendecomposition with AD rules (`mat_svd_rrule`/`mat_svd_frule`, etc.). Uses `dlpack_core::MatrixView` for inputs and `dlpack_core::Matrix` for outputs, enabling GPU-transparent operation. Functions take `&dyn Alloc` for device-aware allocation. Depends on `chainrules-core` and `dlpack-core`.
 - **tenferro-prims** — `TensorPrims<A>` trait with cuTENSOR-compatible plan-based execution. Core ops (batched_gemm, reduce, trace, permute, anti_trace, anti_diag) + dynamically-queried extended ops (contract, elementwise_mul). `CpuBackend` implements `TensorPrims<Standard>`.
 - **tenferro-tensor** — `Tensor<T>` with `DataBuffer<T>` (opaque struct: Owned `Vec<T>` or External with DLPack release callback), shape/strides, zero-copy view ops (permute, broadcast, diagonal, reshape), `CompletionEvent` for async execution, `TensorView<'a, T>` for borrowed views, consuming variants (`into_contiguous`, `into_conj`). Implements `Differentiable` for `Tensor<T>`. No strided-rs dependency.
 - **tenferro-einsum** — High-level einsum on `Tensor<T>` with string notation, parenthesized contraction order, `Subscripts`, `ContractionTree`. Nine API functions: allocating, accumulating (`_into` with alpha/beta), and consuming (`_owned` for buffer reuse). Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`.
-- **tenferro-linalg** — Tensor-level SVD, QR, LU, eigendecomposition with left/right dimension indices. Handles matricize → decompose → unmatricize pattern, 2D matrix-level AD rules (Mathieu 2019 et al.), and tensor-level AD (dim permutation). GPU: cuSOLVER/rocSOLVER. Full tensor AD: `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule`, and same for QR/LU/eigen.
+- **tenferro-linalg** — Batched matrix SVD, QR, LU, eigendecomposition following the `torch.linalg` convention: `(*, m, n)` shape (last 2 dims are the matrix, rest are batch), column-major contiguous input. Stateless AD rules (`svd_rrule`/`svd_frule`, etc.) using batched matrix operations (Mathieu 2019) that broadcast over batch dims. No `tracked_*`/`dual_*` — chainrules tape engine composes via chain rule. GPU: cuSOLVER/rocSOLVER.
 - **tenferro-capi** — C-API (FFI) for Julia/Python: opaque `TfeTensorF64` handle, `tfe_status_t` error codes. 16 functions: tensor lifecycle (8) + DLPack interop (2: `tfe_tensor_f64_to_dlpack`, `tfe_tensor_f64_from_dlpack`) + einsum (3) + SVD (3). DLPack v1.0 zero-copy tensor exchange (CPU/CUDA/ROCm/managed memory). Stateless `rrule`/`frule` only (no tape exposure). f64 only in POC phase. Produces rlib in addition to cdylib/staticlib, enabling type sharing with extension capi crates.
 - **tenferro-tropical-capi** — C-API (FFI) for tropical einsum: extends `tenferro-capi` with tropical-specific functions. 9 functions: 3 algebras (MaxPlus, MinPlus, MaxMul) × 3 functions (einsum, rrule, frule). Reuses `TfeTensorF64` handles since `MaxPlus<f64>` is `#[repr(transparent)]` (same memory layout as f64). Algebra is selected by function name (`tfe_tropical_einsum_maxplus_f64`, etc.), not by handle type. Produces a separate `.so` from `tenferro-capi`; C consumers load both.
 - **tenferro-tropical** — Tropical semiring tensor operations: `MaxPlus<T>` (⊕=max, ⊗=+), `MinPlus<T>` (⊕=min, ⊗=+), `MaxMul<T>` (⊕=max, ⊗=×) scalar wrappers with `#[repr(transparent)]`. Algebra markers (`MaxPlusAlgebra`, `MinPlusAlgebra`, `MaxMulAlgebra`) with `HasAlgebra` and `Semiring` impls (f64 only for POC). `TensorPrims` impls for `CpuBackend` (all three algebras, orphan rule compatible). `TropicalPlan<T>` for plan-based execution. `ArgmaxTracker` for tropical backward pass (AD).
@@ -564,25 +541,27 @@ Being a workspace crate with locally-defined algebra markers proves that
 
 ## tenferro-linalg (POC exists)
 
-> **POC API skeleton exists** with tensor-level SVD, QR, LU, eigen + full AD rules.
+> **POC API skeleton exists** with batched matrix SVD, QR, LU, eigen
+> + stateless AD rules, following the `torch.linalg` convention.
 
-Provides tensor-level decompositions that delegate 2D matrix-level AD math
-to `chainrules-linalg` (in `extern/`). This two-layer design separates
-GPU-transparent matrix AD rules (via `dlpack-core` types) from tensor-level
-dimension handling. GPU support: cuSOLVER/rocSOLVER via `tenferro-device`.
+Batched matrix decompositions with the PyTorch `torch.linalg` convention:
+input shape `(*, m, n)` where last 2 dims are the matrix and all preceding
+dims are independent batch dimensions. Column-major contiguous input required
+(LAPACK/cuSOLVER native). This design is **context-agnostic** — the module
+does not know about tensor networks, MPS, or any specific application.
 
-The user specifies which dimensions form "left" (row) and "right" (column)
-sides. Internally: matricize → delegate to chainrules-linalg → unmatricize.
+If you need to decompose a tensor along arbitrary legs:
+`permute` → `reshape` → `contiguous(ColumnMajor)` → call linalg function.
 
 **Primary functions**: `svd`, `qr`, `lu`, `eigen`.
 **Result types**: `SvdResult`, `QrResult`, `LuResult`, `EigenResult`.
 **SVD truncation**: `SvdOptions` (`max_rank`, `cutoff`).
 
-**AD rules** (all POC API skeletons):
-- Reverse-mode: `tracked_svd`, `tracked_qr`, `tracked_lu`, `tracked_eigen`
-- Forward-mode: `dual_svd`, `dual_qr`, `dual_lu`, `dual_eigen`
-- Stateless rules: `svd_rrule`/`svd_frule`, `qr_rrule`/`qr_frule`,
-  `lu_rrule`/`lu_frule`, `eigen_rrule`/`eigen_frule`
+**AD rules** (stateless, matrix-level, batched via broadcasting):
+- Reverse-mode: `svd_rrule`, `qr_rrule`, `lu_rrule`, `eigen_rrule`
+- Forward-mode: `svd_frule`, `qr_frule`, `lu_frule`, `eigen_frule`
+- No `tracked_*`/`dual_*` — the chainrules tape engine composes
+  `permute_backward` + `reshape_backward` + `svd_rrule` via chain rule.
 
 **GPU path**: cuSOLVER/rocSOLVER via runtime-loaded vendor library (same dlopen pattern).
 
@@ -662,8 +641,7 @@ pub struct HvpResult<V: Differentiable> { gradients: Gradients<V>, hvp: Gradient
 AD rules live in their operation crates, not in chainrules:
 
 - **tenferro-einsum**: `tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`
-- **chainrules-linalg** (extern): `mat_svd_rrule`/`mat_svd_frule` etc. — 2D matrix-level AD (Mathieu 2019), GPU-transparent via dlpack-core
-- **tenferro-linalg**: `tracked_svd`/`dual_svd`/`svd_rrule`/`svd_frule` (and same for QR, LU, eigen) — tensor-level AD (dim permutation), delegates 2D math to chainrules-linalg
+- **tenferro-linalg**: `svd_rrule`/`svd_frule` (and same for QR, LU, eigen) — batched matrix-level AD (Mathieu 2019), broadcasts over batch dims `*`. No `tracked_*`/`dual_*` — tape engine composes via chain rule.
 - **tenferro-capi**: Exposes stateless `rrule`/`frule` only via FFI
 
 ### Contraction VJP/JVP
@@ -1175,24 +1153,12 @@ cd tenferro-rs && cargo test --workspace
 - HVP correctness (forward-over-reverse)
 - Complex-valued gradient test (Wirtinger calculus)
 
-**dlpack-core**:
-- Matrix/Tensor construction from Vec (CPU)
-- View creation and accessor correctness (data pointer, strides, device)
-- Matrix↔Tensor conversion (into_tensor, as_tensor_view)
-- Deleter callback invocation on Drop
-- Alloc trait integration: allocate + deallocate roundtrip
-
-**chainrules-linalg**:
-- Matrix-level SVD/QR/LU/eigen correctness (2D matrices via dlpack-core types)
-- Matrix-level AD rule correctness: finite-difference vs mat_svd_rrule/mat_svd_frule
-- Complex matrix SVD test (Wirtinger calculus)
-- Alloc trait integration: verify output matrices use provided allocator
-
 **tenferro-linalg**:
-- Tensor-level SVD/QR with dimension permutation (matricize/unmatricize)
+- Batched matrix SVD/QR/LU/eigen correctness (2D and batched `(*, m, n)`)
+- Matrix-level AD rule correctness: finite-difference vs svd_rrule/svd_frule
+- Complex matrix SVD test (Wirtinger calculus)
+- Batched AD: verify broadcasting over batch dims `*`
 - Cross-validate results against ndtensors-rs
-- Tensor-level AD correctness: dim permutation handling in rrule/frule
-- Delegation to chainrules-linalg: verify 2D results match direct calls
 
 **tenferro-capi + tenferro-tropical-capi**:
 - Round-trip test: Julia -> C API -> Rust -> C API -> Julia
@@ -1230,8 +1196,7 @@ cd tenferro-rs && cargo test --workspace
 | Backend trait | `omeinsum-rs/src/backend/traits.rs` | **Absorbed** into tenferro-prims (evolved into TensorPrims) |
 | cuTENSOR wrapper | `omeinsum-rs/src/backend/cuda/cutensor/` | **Absorbed** into tenferro-device (GPU vtable) [future] |
 | PlanCache | `omeinsum-rs/src/backend/cuda/cutensor/contract.rs` | **Absorbed** into tenferro-device [future] |
-| DLPack containers | `tenferro-rs/extern/dlpack-core/src/lib.rs` | DLDevice, Matrix\<T\>/MatrixView, Tensor\<T\>/TensorView, Alloc trait (POC exists) |
-| Matrix AD rules | `tenferro-rs/extern/chainrules-linalg/src/lib.rs` | mat_svd/mat_qr/mat_lu/mat_eigen + rrule/frule (POC API exists) |
+| Matrix AD rules | `ndtensors-rs/.../linalg/` | tenferro-linalg: batched matrix-level svd_rrule/svd_frule etc. (POC API exists) |
 | faer bridge | `ndtensors-rs/.../faer_interop.rs` | tenferro-linalg (may use faer internally for CPU path) |
 | contract_vjp | `ndtensors-rs/.../contract/naive.rs` | tenferro-einsum einsum_rrule (POC API exists) |
 | TrackedTensor | `ndtensors-rs/.../autodiff/tensor.rs` | chainrules TrackedTensor (POC API exists) |
