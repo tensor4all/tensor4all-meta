@@ -1,6 +1,6 @@
 # tenferro: Unified Tensor Backend Design Plan
 
-> **POC implementation**: The proof-of-concept (9 POC crates) is at
+> **POC implementation**: The proof-of-concept (10 POC crates) is at
 > <https://github.com/tensor4all/tenferro-rs/>.
 
 > **Detailed design documents** (in [tenferro-rs](https://github.com/tensor4all/tenferro-rs/)):
@@ -93,6 +93,12 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 │   HasAlgebra trait: T → A automatic inference                │
 │   CpuBackend: impl TensorPrims<Standard>                      │
 │   Uses StridedView<T> / StridedViewMut<T> directly           │
+│                                                              │
+│          Tropical Algebra (tenferro-tropical)        [POC]   │
+│   MaxPlus<T>, MinPlus<T>, MaxMul<T> scalar wrappers          │
+│   MaxPlusAlgebra, MinPlusAlgebra, MaxMulAlgebra markers      │
+│   impl TensorPrims<MaxPlusAlgebra> for CpuBackend            │
+│   ArgmaxTracker for tropical backward pass                   │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -155,7 +161,7 @@ strided-rs/ (independent workspace) ── Foundation crates stay as-is ──�
 ├── strided-view         # StridedArray, StridedView, StridedViewMut (zero-copy strided views)
 └── strided-kernel       # Cache-optimized map/reduce/broadcast kernels
 
-tenferro-rs/ (workspace) ── 9 POC crates ─────────────────────
+tenferro-rs/ (workspace) ── 10 POC crates ────────────────────
 │  Depends on strided-rs.
 │
 ├── tenferro-device      # LogicalMemorySpace + ComputeDevice enums
@@ -233,21 +239,35 @@ tenferro-rs/ (workspace) ── 9 POC crates ───────────�
 │                        #   Depends on: tenferro-device, tenferro-algebra,
 │                        #     tenferro-tensor, chainrules
 │
-└── tenferro-capi        # C-API (FFI) for Julia/Python
-                         #   Opaque TfeTensorF64 handle, tfe_status_t error codes
-                         #   tfe_ prefix, _f64 suffix naming convention
-                         #   Tensor lifecycle: from_data, zeros, clone, release,
-                         #     ndim, shape, len, data (8 functions)
-                         #   DLPack v1.0 interop: tfe_tensor_f64_to_dlpack,
-                         #     tfe_tensor_f64_from_dlpack (2 functions, zero-copy)
-                         #   Einsum: tfe_einsum_f64, tfe_einsum_rrule_f64,
-                         #     tfe_einsum_frule_f64 (3 functions)
-                         #   SVD: tfe_svd_f64, tfe_svd_rrule_f64,
-                         #     tfe_svd_frule_f64 (3 functions)
-                         #   Stateless rrule/frule only (no tape exposure)
-                         #   f64 only, DLPack for zero-copy interop
-                         #   Depends on: tenferro-device, tenferro-tensor,
-                         #     tenferro-einsum, tenferro-linalg
+├── tenferro-capi        # C-API (FFI) for Julia/Python
+│                        #   Opaque TfeTensorF64 handle, tfe_status_t error codes
+│                        #   tfe_ prefix, _f64 suffix naming convention
+│                        #   Tensor lifecycle: from_data, zeros, clone, release,
+│                        #     ndim, shape, len, data (8 functions)
+│                        #   DLPack v1.0 interop: tfe_tensor_f64_to_dlpack,
+│                        #     tfe_tensor_f64_from_dlpack (2 functions, zero-copy)
+│                        #   Einsum: tfe_einsum_f64, tfe_einsum_rrule_f64,
+│                        #     tfe_einsum_frule_f64 (3 functions)
+│                        #   SVD: tfe_svd_f64, tfe_svd_rrule_f64,
+│                        #     tfe_svd_frule_f64 (3 functions)
+│                        #   Stateless rrule/frule only (no tape exposure)
+│                        #   f64 only, DLPack for zero-copy interop
+│                        #   Depends on: tenferro-device, tenferro-tensor,
+│                        #     tenferro-einsum, tenferro-linalg
+│
+└── tenferro-tropical    # Tropical semiring tensor operations
+                         #   MaxPlus<T> (⊕=max, ⊗=+), MinPlus<T> (⊕=min, ⊗=+),
+                         #     MaxMul<T> (⊕=max, ⊗=×) scalar wrappers
+                         #   #[repr(transparent)] newtypes satisfying Scalar
+                         #   MaxPlusAlgebra, MinPlusAlgebra, MaxMulAlgebra markers
+                         #   HasAlgebra impls: MaxPlus<f32/f64> → MaxPlusAlgebra, etc.
+                         #   Semiring impls (f64 only for POC)
+                         #   impl TensorPrims<MaxPlusAlgebra> for CpuBackend
+                         #     (and MinPlus, MaxMul) — orphan rule compatible
+                         #   TropicalPlan<T> (analogous to CpuPlan<T>)
+                         #   ArgmaxTracker for tropical backward pass (AD)
+                         #   Depends on: tenferro-device, tenferro-algebra,
+                         #     tenferro-prims, strided-view, strided-traits, num-traits
 ```
 
 ### Future Crates (not in POC)
@@ -262,17 +282,7 @@ tenferro-rs/ (future additions) ────────────────
 │
 │  Note: AD is now chainrules-core + chainrules (POC exists).
 │  tenferro-linalg (POC exists), tenferro-capi (POC exists).
-
-tenferro-tropical/ (separate crate — proves extensibility) ──
-│  Tropical algebra types and TensorPrims implementations.
-│  Being external proves that user-defined algebras can extend
-│  the system via the same pattern (orphan rule compatible).
-│
-├── MaxPlus<T>, MinPlus<T>, MaxMul<T> types
-├── impl HasAlgebra for MaxPlus<T> { type Algebra = MaxPlus; }
-├── impl TensorPrims<MaxPlus> for CpuBackend   ← orphan OK
-├── tropical-gemm SIMD kernels
-└── argmax tracking for tropical backward pass
+│  tenferro-tropical (POC exists) — proves algebra extensibility.
 
 tenferro-structured-rs/ (future separate workspace) ── Structured tensor types ──
 │
@@ -319,8 +329,13 @@ chainrules                       │            ↓       ↓       │
     │                               ← tenferro-tensor, ← tenferro-device)
     │
     └──────────────────────────→ tenferro-capi
-                                   (← tenferro-tensor, ← tenferro-einsum,
-                                    ← tenferro-linalg, ← tenferro-device)
+    │                              (← tenferro-tensor, ← tenferro-einsum,
+    │                               ← tenferro-linalg, ← tenferro-device)
+    │
+    │                          tenferro-tropical
+    │                            (← tenferro-device, ← tenferro-algebra,
+    │                             ← tenferro-prims, ← strided-view,
+    │                             ← strided-traits, ← num-traits)
 ```
 
 ### Future Dependency Graph (full vision)
@@ -347,9 +362,11 @@ chainrules           tenferro-algebra (HasAlgebra, Semiring, Standard)
 
 tenferro-hdf5 ← tenferro-tensor, hdf5-rt (dlopen)
 
-[separate crate: tenferro-tropical]
-← tenferro-algebra, tenferro-prims
-impl TensorPrims<MaxPlus> for CpuBackend (orphan OK)
+[workspace crate: tenferro-tropical]  (POC exists)
+← tenferro-device, tenferro-algebra, tenferro-prims
+impl TensorPrims<MaxPlusAlgebra> for CpuBackend (orphan OK)
+impl TensorPrims<MinPlusAlgebra> for CpuBackend (orphan OK)
+impl TensorPrims<MaxMulAlgebra> for CpuBackend (orphan OK)
 
 [separate workspace: tenferro-structured-rs]
 tenferro-blocksparse ← tenferro-tensor
@@ -373,6 +390,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 | chainrules | **New** (POC) | AD engine: Tape, TrackedTensor, DualTensor, pullback, hvp (like Julia Zygote.jl) |
 | tenferro-linalg | ndtensors-rs (linalg) | **POC** API skeleton: SVD/QR/LU/eigen + full AD rules (tracked, dual, rrule, frule) |
 | tenferro-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | **POC** API skeleton: einsum + SVD, f64 only, stateless rrule/frule (14 functions) |
+| tenferro-tropical | omeinsum-rs (algebra) | **POC** API skeleton: MaxPlus, MinPlus, MaxMul scalars + algebra markers + TensorPrims impls + ArgmaxTracker |
 | tenferro-hdf5 | New, uses hdf5-rt | Tensor\<T\> HDF5 I/O via runtime library loading [future] |
 | burn-tenferro | New | Burn Backend bridge [future] |
 | **tenferro-structured-rs (separate workspace):** | | |
@@ -398,7 +416,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 
 > **Detailed API designs**: See [tenferro Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_design.md) in tenferro-rs for full per-crate API designs including code examples.
 
-The POC implements nine crates:
+The POC implements ten crates:
 
 - **tenferro-device** — `LogicalMemorySpace` (MainMemory, PinnedMemory, GpuMemory, ManagedMemory) + `ComputeDevice` enums, `OpKind`, `preferred_compute_devices()`, shared `Error`/`Result` types. DLPack-aligned device model.
 - **tenferro-algebra** — `HasAlgebra` trait (maps scalar T → algebra A), `Semiring` trait, `Standard` type for standard arithmetic. `Scalar` trait (blanket impl, replaces strided-traits' `Scalar`). `Conjugate` trait for complex conjugation.
@@ -409,35 +427,46 @@ The POC implements nine crates:
 - **tenferro-einsum** — High-level einsum on `Tensor<T>` with string notation, parenthesized contraction order, `Subscripts`, `ContractionTree`. Nine API functions: allocating, accumulating (`_into` with alpha/beta), and consuming (`_owned` for buffer reuse). Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`.
 - **tenferro-linalg** — Tensor-level SVD, QR, LU, eigendecomposition with left/right dimension indices (matricize → decompose → unmatricize pattern). Full AD rules: `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule`, and same for QR/LU/eigen.
 - **tenferro-capi** — C-API (FFI) for Julia/Python: opaque `TfeTensorF64` handle, `tfe_status_t` error codes. 16 functions: tensor lifecycle (8) + DLPack interop (2: `tfe_tensor_f64_to_dlpack`, `tfe_tensor_f64_from_dlpack`) + einsum (3) + SVD (3). DLPack v1.0 zero-copy tensor exchange (CPU/CUDA/ROCm/managed memory). Stateless `rrule`/`frule` only (no tape exposure). f64 only in POC phase.
+- **tenferro-tropical** — Tropical semiring tensor operations: `MaxPlus<T>` (⊕=max, ⊗=+), `MinPlus<T>` (⊕=min, ⊗=+), `MaxMul<T>` (⊕=max, ⊗=×) scalar wrappers with `#[repr(transparent)]`. Algebra markers (`MaxPlusAlgebra`, `MinPlusAlgebra`, `MaxMulAlgebra`) with `HasAlgebra` and `Semiring` impls (f64 only for POC). `TensorPrims` impls for `CpuBackend` (all three algebras, orphan rule compatible). `TropicalPlan<T>` for plan-based execution. `ArgmaxTracker` for tropical backward pass (AD).
 
 ---
 
-## Future Phase: tenferro-tropical (Separate Crate)
+## tenferro-tropical (POC exists)
 
-Tropical algebra types and `TensorPrims` implementations, as a separate crate
-that proves the extensibility of the algebra-parameterized design:
+> **POC API skeleton exists** in the tenferro-rs workspace with three
+> tropical semiring scalar wrappers, algebra markers, `TensorPrims` impls,
+> and `ArgmaxTracker`. All function bodies use `todo!()`.
+
+Tropical algebra types and `TensorPrims` implementations that prove
+the extensibility of the algebra-parameterized design:
 
 ```rust
-// tenferro-tropical crate
-pub struct MaxPlus<T>(pub T);    // sem_add = max, sem_mul = +
-pub struct MinPlus<T>(pub T);    // sem_add = min, sem_mul = +
-pub struct MaxMul<T>(pub T);     // sem_add = max, sem_mul = *
+// tenferro-tropical crate (in tenferro-rs workspace)
+pub struct MaxPlus<T>(pub T);    // ⊕ = max, ⊗ = +
+pub struct MinPlus<T>(pub T);    // ⊕ = min, ⊗ = +
+pub struct MaxMul<T>(pub T);     // ⊕ = max, ⊗ = ×
 
-impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus; }
+// Algebra markers (zero-sized)
+pub struct MaxPlusAlgebra;
+pub struct MinPlusAlgebra;
+pub struct MaxMulAlgebra;
 
-impl TensorPrims<MaxPlus> for CpuBackend {
-    type Plan<T: Scalar> = TropicalPlan<T>;
-    // SIMD-optimized tropical-gemm kernels
+impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlusAlgebra; }
+
+impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
+    type Plan<T: ScalarBase> = TropicalPlan<T>;
+    // has_extension_for returns false (no extended ops for tropical)
     ...
 }
 ```
 
 Also provides:
-- Argmax tracking for tropical backward pass
-- SIMD-optimized tropical-gemm via `TypeId`-based runtime dispatch (from omeinsum-rs)
+- `ArgmaxTracker` for tropical backward pass (AD winner-index tracking)
+- `Semiring` impls for each algebra (f64 only for POC)
+- Future: SIMD-optimized tropical-gemm via `TypeId`-based runtime dispatch (from omeinsum-rs)
 
-Being in a separate crate proves that external crates can extend the system
-by implementing `TensorPrims<MyAlgebra> for CpuBackend` (orphan rule compatible).
+Being a workspace crate with locally-defined algebra markers proves that
+`TensorPrims<MyAlgebra> for CpuBackend` is orphan rule compatible.
 
 ---
 
@@ -1022,7 +1051,7 @@ Users extend the system at the appropriate level:
 
 **Algebra-parameterized dispatch** (via `TensorPrims<A>`):
 - `impl TensorPrims<Standard> for CpuBackend` → faer/cblas GEMM for f64/f32/Complex, naive for i32/i64
-- `impl TensorPrims<MaxPlus> for CpuBackend` (tenferro-tropical) → tropical-gemm SIMD
+- `impl TensorPrims<MaxPlusAlgebra> for CpuBackend` (tenferro-tropical) → tropical-gemm SIMD [future]
 - `impl TensorPrims<Standard> for GpuBackend` [future] → cuTENSOR/hipTensor
 - `impl TensorPrims<MyAlgebra> for CpuBackend` (user crate) → user-provided kernels
 
@@ -1102,6 +1131,10 @@ cd tenferro-rs && cargo test --workspace
 | contract_vjp | `ndtensors-rs/.../contract/naive.rs` | tenferro-einsum einsum_rrule (POC API exists) |
 | TrackedTensor | `ndtensors-rs/.../autodiff/tensor.rs` | chainrules TrackedTensor (POC API exists) |
 | C API patterns | `tensor4all-rs/crates/tensor4all-capi/src/` | tenferro-capi (POC API exists: 14 functions) |
+| Tropical scalars | `tenferro-rs/tenferro-tropical/src/scalar.rs` | MaxPlus, MinPlus, MaxMul wrappers (POC API exists) |
+| Tropical algebra | `tenferro-rs/tenferro-tropical/src/algebra.rs` | Algebra markers + HasAlgebra + Semiring impls (POC API exists) |
+| Tropical prims | `tenferro-rs/tenferro-tropical/src/prims.rs` | TensorPrims impls for CpuBackend (POC API exists) |
+| Tropical argmax | `tenferro-rs/tenferro-tropical/src/argmax.rs` | ArgmaxTracker for AD backward pass (POC API exists) |
 
 ---
 
