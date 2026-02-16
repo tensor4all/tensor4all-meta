@@ -1,9 +1,15 @@
 # tensor4all-meta
 
-Design documents and meta-information for the [tensor4all](https://github.com/tensor4all) project.
+Meta-information for the [tensor4all](https://github.com/tensor4all) project.
 
-## Documents
+## tenferro Design Documents
 
-- [tenferro Unified Tensor Backend Design](./docs/design/tenferro_unified_tensor_backend.md) — Architecture and crate structure for the unified tenferro tensor backend ([POC](https://github.com/tensor4all/tenferro-rs/))
-- [tenferro Einsum Internal Design](./docs/design/tenferro_einsum_internal_design.md) — Detailed internal design of tenferro-tensorops and tenferro-einsum
-- [Einsum Algorithm Comparison](./docs/design/einsum_algorithm_comparison.md) — strided-rs vs omeinsum-rs optimization comparison
+All tenferro design documents are maintained in the
+[tenferro-rs](https://github.com/tensor4all/tenferro-rs) repository
+under [`docs/design/`](https://github.com/tensor4all/tenferro-rs/tree/main/docs/design):
+
+- [Unified Tensor Backend Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_unified_tensor_backend.md) — high-level architecture, crate structure, roadmap
+- [tenferro Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_design.md) — detailed per-crate API designs
+- [Einsum Internal Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_einsum_internal_design.md) — tenferro-prims and tenferro-einsum internals
+- [chainrules-core Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/chainrules_core_design.md) — AD trait design
+- [libtorch Reference](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/libtorch_reference.md) — PyTorch feature survey for design reference
