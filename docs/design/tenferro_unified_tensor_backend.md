@@ -1,12 +1,13 @@
 # tenferro: Unified Tensor Backend Design Plan
 
-> **POC implementation**: The initial proof-of-concept (4 core crates) is at
+> **POC implementation**: The proof-of-concept (9 POC crates) is at
 > <https://github.com/tensor4all/tenferro-rs/>.
 
 > **Detailed design documents** (in [tenferro-rs](https://github.com/tensor4all/tenferro-rs/)):
 > - [tenferro Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_design.md) — detailed per-crate API designs (Phase 1 + Future Considerations)
 > - [Einsum Internal Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_einsum_internal_design.md) — tenferro-prims and tenferro-einsum internals
 > - [Einsum Algorithm Comparison](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/einsum_algorithm_comparison.md) — strided-rs vs omeinsum-rs optimization comparison
+> - [chainrules-core Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/chainrules_core_design.md) — AD trait design (Differentiable, ReverseRule, ForwardRule)
 > - [Async/Ownership Integration Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/plans/2026-02-14-tensor-async-ownership-integration-design.md) — CompletionEvent + TensorView decisions
 
 ## Context
@@ -24,7 +25,7 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 3. Supports both NVIDIA and AMD GPUs via **runtime library loading** (no compile-time vendor lock-in)
 4. Supports complex numbers natively
 5. Supports custom scalar types (tropical semiring, etc.) with pluggable backends
-6. Exposes VJP/JVP through C API for Julia ChainRules.jl
+6. Exposes VJP/JVP through C API for Julia ChainRules.jl (POC exists: `tenferro-capi`)
 7. Can optionally bridge to Burn for NN workloads
 
 **Key design principles**:
@@ -42,9 +43,17 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Layer 5: Application                                         │
+│ Layer 6: Application                                         │
 │   tensor4all-rs (TCI, Quantics, MPS algorithms)              │
-│   Julia / Python (C API via tenferro-capi) [future]          │
+│   Julia / Python (C API via tenferro-capi)                   │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│ Layer 5: C-API (tenferro-capi)                     [POC]     │
+│   Opaque TfeTensorF64 handle, tfe_status_t error codes       │
+│   Tensor lifecycle (8 functions), einsum (3), SVD (3)        │
+│   Stateless rrule/frule only (no tape exposure)              │
+│   f64 only in POC phase                                      │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -54,6 +63,13 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 │   ContractionTree (optimize, from_pairs)                     │
 │   Three API levels: einsum, einsum_with_subscripts,          │
 │                     einsum_with_plan                          │
+│   Einsum AD rules: tracked_einsum, dual_einsum,              │
+│     einsum_rrule, einsum_frule, einsum_hvp                   │
+│                                                              │
+│          Linear Algebra (tenferro-linalg)         [POC]      │
+│   SVD, QR, LU, eigen with left/right dim indices             │
+│   Matricize → decompose → unmatricize pattern                │
+│   Full AD rules: tracked_*, dual_*, *_rrule, *_frule         │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -78,12 +94,24 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
-│ Shared Infrastructure: Device Layer (tenferro-device) [POC]  │
+│ Shared Infrastructure                                        │
+│                                                              │
+│   Device Layer (tenferro-device)                    [POC]    │
 │   LogicalMemorySpace + ComputeDevice enums                    │
 │   preferred_compute_devices(space, op_kind)                   │
 │   Error types (thiserror): ShapeMismatch, RankMismatch,      │
 │     DeviceError, InvalidArgument, Strided                    │
 │   Result<T> type alias                                       │
+│                                                              │
+│   AD Core (chainrules-core)                         [POC]    │
+│   Differentiable trait (tangent space definition)             │
+│   ReverseRule<V>, ForwardRule<V> (per-operation AD rules)     │
+│   AutodiffError, NodeId, SavePolicy                          │
+│                                                              │
+│   AD Engine (chainrules)                            [POC]    │
+│   Tape<V>, TrackedTensor<V>, DualTensor<V>                    │
+│   pullback(), hvp() (forward-over-reverse HVP)               │
+│   Gradients<V>, PullbackPlan<V>, HvpResult<V>                │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -124,7 +152,7 @@ strided-rs/ (independent workspace) ── Foundation crates stay as-is ──�
 ├── strided-view         # StridedArray, StridedView, StridedViewMut (zero-copy strided views)
 └── strided-kernel       # Cache-optimized map/reduce/broadcast kernels
 
-tenferro-rs/ (workspace) ── 5 POC crates ─────────────────────
+tenferro-rs/ (workspace) ── 9 POC crates ─────────────────────
 │  Depends on strided-rs.
 │
 ├── tenferro-device      # LogicalMemorySpace + ComputeDevice enums
@@ -139,7 +167,22 @@ tenferro-rs/ (workspace) ── 5 POC crates ───────────�
 │                        #   Minimal algebra foundation for TensorPrims<A>
 │                        #   Depends on: strided-traits, num-complex
 │
-├── tenferro-prims   # TensorPrims<A> trait — parameterized by algebra A
+├── chainrules-core      # Core AD traits (like Julia's ChainRulesCore.jl)
+│                        #   Differentiable trait (tangent space definition)
+│                        #   ReverseRule<V> (pullback), ForwardRule<V> (pushforward)
+│                        #   AutodiffError, AdResult, NodeId, SavePolicy
+│                        #   impl Differentiable for f64, f32
+│                        #   Depends on: thiserror
+│                        #   See: docs/design/chainrules_core_design.md
+│
+├── chainrules           # AD engine (like Zygote.jl in Julia)
+│                        #   Tape<V>, TrackedTensor<V>, DualTensor<V>
+│                        #   pullback() (reverse-mode), hvp() (forward-over-reverse)
+│                        #   Gradients<V>, PullbackPlan<V>, HvpResult<V>
+│                        #   Re-exports all of chainrules-core
+│                        #   Depends on: chainrules-core
+│
+├── tenferro-prims       # TensorPrims<A> trait — parameterized by algebra A
 │                        #   PrimDescriptor enum (describe → plan → execute)
 │                        #   Core ops: batched_gemm, reduce, trace, permute,
 │                        #     anti_trace, anti_diag
@@ -157,18 +200,44 @@ tenferro-rs/ (workspace) ── 5 POC crates ───────────�
 │                        #   View ops: view(), view_mut(), permute, broadcast,
 │                        #     diagonal, reshape (zero-copy metadata ops)
 │                        #   Data ops: contiguous, into_contiguous, is_contiguous, conj
-│                        #   Depends on: tenferro-device, strided-view, strided-traits, num-traits
+│                        #   impl Differentiable for Tensor<T>
+│                        #   Depends on: tenferro-device, strided-view, strided-traits,
+│                        #     num-traits, chainrules-core
 │
-└── tenferro-einsum      # High-level einsum on Tensor<T>
-                         #   String notation: einsum("ij,jk->ik", &[&a, &b])
-                         #   Parenthesized order: einsum("ij,(jk,kl)->il", &[...])
-                         #   Subscripts struct (new for integers, parse for strings)
-                         #   ContractionTree (optimize, from_pairs)
-                         #   Allocating: einsum, einsum_with_subscripts, einsum_with_plan
-                         #   Accumulating: einsum_into, einsum_with_subscripts_into,
-                         #     einsum_with_plan_into (alpha/beta scaling)
-                         #   Depends on: tenferro-device, tenferro-algebra,
-                         #     tenferro-prims, tenferro-tensor, strided-traits
+├── tenferro-einsum      # High-level einsum on Tensor<T>
+│                        #   String notation: einsum("ij,jk->ik", &[&a, &b])
+│                        #   Parenthesized order: einsum("ij,(jk,kl)->il", &[...])
+│                        #   Subscripts struct (new for integers, parse for strings)
+│                        #   ContractionTree (optimize, from_pairs)
+│                        #   Allocating: einsum, einsum_with_subscripts, einsum_with_plan
+│                        #   Accumulating: einsum_into, einsum_with_subscripts_into,
+│                        #     einsum_with_plan_into (alpha/beta scaling)
+│                        #   Einsum AD: tracked_einsum, dual_einsum, einsum_rrule,
+│                        #     einsum_frule, einsum_hvp
+│                        #   Depends on: tenferro-device, tenferro-algebra,
+│                        #     tenferro-prims, tenferro-tensor, strided-traits, chainrules
+│
+├── tenferro-linalg      # Tensor-level linear algebra decompositions
+│                        #   SVD, QR, LU, eigen with left/right dim indices
+│                        #   Matricize → decompose → unmatricize pattern
+│                        #   SvdOptions (max_rank, cutoff) for truncated SVD
+│                        #   Full AD: tracked_*, dual_*, *_rrule, *_frule
+│                        #   Depends on: tenferro-device, tenferro-tensor,
+│                        #     strided-traits, chainrules
+│
+└── tenferro-capi        # C-API (FFI) for Julia/Python
+                         #   Opaque TfeTensorF64 handle, tfe_status_t error codes
+                         #   tfe_ prefix, _f64 suffix naming convention
+                         #   Tensor lifecycle: from_data, zeros, clone, release,
+                         #     ndim, shape, len, data (8 functions)
+                         #   Einsum: tfe_einsum_f64, tfe_einsum_rrule_f64,
+                         #     tfe_einsum_frule_f64 (3 functions)
+                         #   SVD: tfe_svd_f64, tfe_svd_rrule_f64,
+                         #     tfe_svd_frule_f64 (3 functions)
+                         #   Stateless rrule/frule only (no tape exposure)
+                         #   f64 only, column-major, copy semantics at boundary
+                         #   Depends on: tenferro-device, tenferro-tensor,
+                         #     tenferro-einsum, tenferro-linalg
 ```
 
 ### Future Crates (not in POC)
@@ -176,13 +245,13 @@ tenferro-rs/ (workspace) ── 5 POC crates ───────────�
 ```
 tenferro-rs/ (future additions) ──────────────────────────────
 │
-├── tenferro-linalg      # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER via device layer)
-├── tenferro-autograd    # TrackedTensor, DualTensor, VJP/JVP
 ├── tenferro-hdf5        # Tensor<T> HDF5 I/O (via hdf5-rt, dlopen)
 ├── tenferro-mdarray     # Tensor<T> ←→ mdarray conversion (memory copy)
 ├── tenferro-ndarray     # Tensor<T> ←→ ndarray conversion (memory copy)
-├── tenferro-capi        # C FFI (tensor ops + VJP/JVP + backend loading)
 └── burn-tenferro        # Burn Backend bridge [OPTIONAL, for NN only]
+│
+│  Note: AD is now chainrules-core + chainrules (POC exists).
+│  tenferro-linalg (POC exists), tenferro-capi (POC exists).
 
 tenferro-tropical/ (separate crate — proves extensibility) ──
 │  Tropical algebra types and TensorPrims implementations.
@@ -215,48 +284,58 @@ strided-traits → strided-view → strided-kernel
 
 tenferro-rs (workspace, depends on strided-rs):
 
-tenferro-device              tenferro-algebra
-  (← strided-view,            (← strided-traits,
-   ← thiserror)                ← num-complex)
-    │                            │
-    ├────────────┐       ┌───────┤
-    │            ↓       ↓       │
-    │       tenferro-prims       │
-    │         (← strided-view,   │
-    │          ← strided-traits) │
-    │            │               │
-    ↓            │               │
-tenferro-tensor  │               │
-  (← strided-view,              │
-   ← strided-traits,            │
-   ← num-traits)                │
-    │            │               │
-    └──────┬─────┘       ┌───────┘
-           ↓             ↓
-      tenferro-einsum
-        (← strided-traits)
+chainrules-core              tenferro-device              tenferro-algebra
+  (← thiserror)               (← strided-view,            (← strided-traits,
+    │                           ← thiserror)                ← num-complex)
+    │                            │                            │
+    ↓                            ├────────────┐       ┌───────┤
+chainrules                       │            ↓       ↓       │
+  (← chainrules-core)           │       tenferro-prims       │
+    │                            │         (← strided-view,   │
+    │                            │          ← strided-traits) │
+    │                            │            │               │
+    │                            ↓            │               │
+    │                       tenferro-tensor    │               │
+    │                         (← strided-view, │               │
+    │                          ← strided-traits,               │
+    │                          ← num-traits,   │               │
+    │                          ← chainrules-core)              │
+    │                            │            │               │
+    │                            └──────┬─────┘       ┌───────┘
+    │                                   ↓             ↓
+    └──────────────────────────→ tenferro-einsum
+    │                              (← strided-traits, ← chainrules)
+    │
+    └──────────────────────────→ tenferro-linalg
+    │                              (← strided-traits, ← chainrules,
+    │                               ← tenferro-tensor, ← tenferro-device)
+    │
+    └──────────────────────────→ tenferro-capi
+                                   (← tenferro-tensor, ← tenferro-einsum,
+                                    ← tenferro-linalg, ← tenferro-device)
 ```
 
 ### Future Dependency Graph (full vision)
 
 ```
-tenferro-device
-    │
-    ↓
-tenferro-algebra (HasAlgebra, Semiring, Standard)
-    │
-    ├────────────────────────────┐
-    ↓                            ↓
-tenferro-prims          tenferro-tensor
-    │                            │
-    └──────────┬─────────────────┘
-               ↓
-          tenferro-einsum
-               │
-    ┌──────────┼──────────────┐
-    ↓          ↓              ↓
-tenferro-  tenferro-     tenferro-
- linalg     autograd       capi
+chainrules-core          tenferro-device
+    │                        │
+    ↓                        ↓
+chainrules           tenferro-algebra (HasAlgebra, Semiring, Standard)
+    │                        │
+    │                ┌───────┴────────────────┐
+    │                ↓                        ↓
+    │          tenferro-prims          tenferro-tensor
+    │                │                  (← chainrules-core)
+    │                └──────────┬─────────────┘
+    │                           ↓
+    └──────────────→ tenferro-einsum (← chainrules)
+    │                tenferro-linalg (← chainrules)
+    │                           │
+    │                           ↓
+    └──────────────→ tenferro-capi
+                       (← tenferro-einsum, ← tenferro-linalg,
+                        ← tenferro-tensor, ← tenferro-device)
 
 tenferro-hdf5 ← tenferro-tensor, hdf5-rt (dlopen)
 
@@ -282,9 +361,10 @@ burn-tenferro ← tenferro-tensor, burn-backend
 | tenferro-tensor | **New** (POC) | Tensor\<T\>, DataBuffer\<T\>, MemoryOrder, zero-copy view ops |
 | tenferro-einsum | **New** (POC), will absorb strided-opteinsum + omeinsum-rs | Subscripts, ContractionTree, einsum/einsum_with_subscripts/einsum_with_plan |
 | tenferro-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types [future] |
-| tenferro-linalg | ndtensors-rs (linalg) | Port SVD/QR/eigen [future] |
-| tenferro-autograd | ndtensors-rs (autodiff) | Port TrackedTensor/DualTensor [future] |
-| tenferro-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | Port C FFI + backend loading API [future] |
+| chainrules-core | **New** (POC) | Core AD traits: Differentiable, ReverseRule, ForwardRule (like Julia ChainRulesCore.jl) |
+| chainrules | **New** (POC) | AD engine: Tape, TrackedTensor, DualTensor, pullback, hvp (like Julia Zygote.jl) |
+| tenferro-linalg | ndtensors-rs (linalg) | **POC** API skeleton: SVD/QR/LU/eigen + full AD rules (tracked, dual, rrule, frule) |
+| tenferro-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | **POC** API skeleton: einsum + SVD, f64 only, stateless rrule/frule (14 functions) |
 | tenferro-hdf5 | New, uses hdf5-rt | Tensor\<T\> HDF5 I/O via runtime library loading [future] |
 | burn-tenferro | New | Burn Backend bridge [future] |
 | **tenferro-structured-rs (separate workspace):** | | |
@@ -310,13 +390,17 @@ burn-tenferro ← tenferro-tensor, burn-backend
 
 > **Detailed API designs**: See [tenferro Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_design.md) in tenferro-rs for full per-crate API designs including code examples.
 
-The POC implements five crates:
+The POC implements nine crates:
 
 - **tenferro-device** — `LogicalMemorySpace` + `ComputeDevice` enums, `OpKind`, `preferred_compute_devices()`, shared `Error`/`Result` types.
 - **tenferro-algebra** — `HasAlgebra` trait (maps scalar T → algebra A), `Semiring` trait, `Standard` type for standard arithmetic.
+- **chainrules-core** — Core AD traits (like Julia's ChainRulesCore.jl): `Differentiable` (tangent space), `ReverseRule<V>` (pullback), `ForwardRule<V>` (pushforward), `AutodiffError`, `NodeId`, `SavePolicy`.
+- **chainrules** — AD engine (like Julia's Zygote.jl): `Tape<V>`, `TrackedTensor<V>`, `DualTensor<V>`, `pullback()`, `hvp()` (forward-over-reverse HVP), `Gradients<V>`, `PullbackPlan<V>`. Re-exports all of `chainrules-core`.
 - **tenferro-prims** — `TensorPrims<A>` trait with cuTENSOR-compatible plan-based execution. Core ops (batched_gemm, reduce, trace, permute, anti_trace, anti_diag) + dynamically-queried extended ops (contract, elementwise_mul). `CpuBackend` implements `TensorPrims<Standard>`.
-- **tenferro-tensor** — `Tensor<T>` with `DataBuffer<T>`, shape/strides, zero-copy view ops (permute, broadcast, diagonal, reshape), `CompletionEvent` for async execution, `TensorView<'a, T>` for borrowed views, consuming variants (`into_contiguous`, `into_conj`).
-- **tenferro-einsum** — High-level einsum on `Tensor<T>` with string notation, parenthesized contraction order, `Subscripts`, `ContractionTree`. Nine API functions: allocating, accumulating (`_into` with alpha/beta), and consuming (`_owned` for buffer reuse).
+- **tenferro-tensor** — `Tensor<T>` with `DataBuffer<T>`, shape/strides, zero-copy view ops (permute, broadcast, diagonal, reshape), `CompletionEvent` for async execution, `TensorView<'a, T>` for borrowed views, consuming variants (`into_contiguous`, `into_conj`). Implements `Differentiable` for `Tensor<T>`.
+- **tenferro-einsum** — High-level einsum on `Tensor<T>` with string notation, parenthesized contraction order, `Subscripts`, `ContractionTree`. Nine API functions: allocating, accumulating (`_into` with alpha/beta), and consuming (`_owned` for buffer reuse). Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`.
+- **tenferro-linalg** — Tensor-level SVD, QR, LU, eigendecomposition with left/right dimension indices (matricize → decompose → unmatricize pattern). Full AD rules: `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule`, and same for QR/LU/eigen.
+- **tenferro-capi** — C-API (FFI) for Julia/Python: opaque `TfeTensorF64` handle, `tfe_status_t` error codes. 14 functions: tensor lifecycle (8) + einsum (3) + SVD (3). Stateless `rrule`/`frule` only (no tape exposure). f64 only in POC phase.
 
 ---
 
@@ -349,17 +433,31 @@ by implementing `TensorPrims<MyAlgebra> for CpuBackend` (orphan rule compatible)
 
 ---
 
-## Future Phase: tenferro-linalg
+## tenferro-linalg (POC exists)
 
-All decomposition functions:
+> **POC API skeleton exists** with SVD, QR, LU, eigen + full AD rules
+> (tracked, dual, rrule, frule for each decomposition).
+
+The user specifies which dimensions form "left" (row) and "right" (column)
+sides. Internally: matricize → decompose → unmatricize.
+
+**Primary functions**: `svd`, `qr`, `lu`, `eigen`.
+**Result types**: `SvdResult`, `QrResult`, `LuResult`, `EigenResult`.
+**SVD truncation**: `SvdOptions` (`max_rank`, `cutoff`).
+
+**AD rules** (all POC API skeletons):
+- Reverse-mode: `tracked_svd`, `tracked_qr`, `tracked_lu`, `tracked_eigen`
+- Forward-mode: `dual_svd`, `dual_qr`, `dual_lu`, `dual_eigen`
+- Stateless rules: `svd_rrule`/`svd_frule`, `qr_rrule`/`qr_frule`,
+  `lu_rrule`/`lu_frule`, `eigen_rrule`/`eigen_frule`
+
+**Future implementation details** (not yet implemented):
+
+All decomposition functions will:
 1. Call `tensor.contiguous(MemoryOrder::ColumnMajor)` (faer is column-major)
 2. Create `faer::MatRef` from raw pointer + strides
 3. Call faer's decomposition
 4. Wrap result back into Tensor
-
-**Operations**: svd, svd_truncated, qr, qr_positive, ql, eigen_hermitian, eigen, polar, matrix_exp.
-
-**N-D tensor decomposition**: specify left_dims for "row" side, reshape to 2D, decompose, reshape back.
 
 **Trait bound**: `T: Scalar + faer::ComplexField` (enforced here, not in strided-traits/tenferro-tensor).
 
@@ -371,30 +469,78 @@ All decomposition functions:
 
 ---
 
-## Future Phase: tenferro-autograd (Primary AD System)
+## chainrules-core + chainrules (POC exists)
 
-This is the **default** AD system for tenferro users. Burn's autodiff is only for NN workloads.
+> **POC API skeletons exist**. This is the **default** AD system for
+> tenferro users. Burn's autodiff is only for NN workloads.
 
-### Reverse-Mode (Backward)
+The AD system follows the Julia ChainRulesCore.jl / Zygote.jl pattern:
+core traits are separated from the AD engine, and operation-specific AD
+rules live with their operations (not in the AD crate).
 
-```rust
-pub struct TrackedTensor<T: Scalar> {
-    tensor: Tensor<T>,
-    node: Option<NodeRef>,
-    requires_grad: bool,
-}
+See [chainrules-core Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/chainrules_core_design.md) for detailed design rationale.
 
-pub fn backward<T: Scalar>(loss: &TrackedTensor<T>) -> Result<Gradients<T>>;
-```
-
-### Forward-Mode (JVP)
+### chainrules-core (Core AD Traits)
 
 ```rust
-pub struct DualTensor<T: Scalar> {
-    primal: Tensor<T>,
-    tangent: Option<Tensor<T>>,
+/// Tangent space definition (like Julia ChainRulesCore.AbstractTangent)
+pub trait Differentiable {
+    type Tangent: Clone;
+    fn zero_tangent(&self) -> Self::Tangent;
+    fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent;
+}
+
+/// Per-operation reverse-mode rule (rrule / pullback)
+pub trait ReverseRule<V: Differentiable> {
+    fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<(NodeId, V::Tangent)>>;
+    fn inputs(&self) -> Vec<NodeId>;
+    fn pullback_with_tangents(...) -> AdResult<...>;  // for HVP
+}
+
+/// Per-operation forward-mode rule (frule / pushforward)
+pub trait ForwardRule<V: Differentiable> {
+    fn pushforward(&self, tangents: &[Option<&V::Tangent>]) -> AdResult<V::Tangent>;
 }
 ```
+
+Also provides: `AutodiffError`, `AdResult<T>`, `NodeId`, `SavePolicy`.
+`Differentiable` is implemented for `f64`, `f32` in chainrules-core,
+and for `Tensor<T>` in tenferro-tensor.
+
+### chainrules (AD Engine)
+
+```rust
+/// Reverse-mode tape (like Zygote.jl / TensorFlow GradientTape)
+pub struct Tape<V: Differentiable> { ... }
+
+impl<V: Differentiable> Tape<V> {
+    pub fn new() -> Self;
+    pub fn leaf(&self, value: V) -> TrackedTensor<V>;
+    pub fn leaf_with_tangent(&self, value: V, tangent: V::Tangent) -> AdResult<TrackedTensor<V>>;
+    pub fn pullback(&self, loss: &TrackedTensor<V>) -> AdResult<Gradients<V>>;
+    pub fn hvp(&self, loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>>;
+}
+
+/// Reverse-mode wrapper
+pub struct TrackedTensor<V: Differentiable> { value, node_id, tape, requires_grad, tangent }
+
+/// Forward-mode wrapper (dual numbers)
+pub struct DualTensor<V: Differentiable> { primal, tangent: Option<V::Tangent> }
+
+/// Gradient container
+pub struct Gradients<V: Differentiable> { ... }
+
+/// HVP result (forward-over-reverse)
+pub struct HvpResult<V: Differentiable> { gradients: Gradients<V>, hvp: Gradients<V> }
+```
+
+### Operation-specific AD rules
+
+AD rules live in their operation crates, not in chainrules:
+
+- **tenferro-einsum**: `tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`
+- **tenferro-linalg**: `tracked_svd`/`dual_svd`/`svd_rrule`/`svd_frule` (and same for QR, LU, eigen)
+- **tenferro-capi**: Exposes stateless `rrule`/`frule` only via FFI
 
 ### Contraction VJP/JVP
 
@@ -410,19 +556,6 @@ primitive operation:
 | `permute(A, p)` | `permute(∂y, p⁻¹)` — inverse permutation |
 | `batched_gemm(A, B)` | `∂A = batched_gemm(∂C, B^T)`, `∂B = batched_gemm(A^T, ∂C)` |
 
-```rust
-pub fn contract_vjp<T: Scalar>(
-    a: &Tensor<T>, labels_a: &[u32],
-    b: &Tensor<T>, labels_b: &[u32],
-    grad_output: &Tensor<T>,
-) -> Result<(Tensor<T>, Tensor<T>)>;
-
-pub fn dual_contract<T: Scalar>(
-    a: &DualTensor<T>, labels_a: &[u32],
-    b: &DualTensor<T>, labels_b: &[u32],
-) -> Result<DualTensor<T>>;
-```
-
 **Existing code to reuse**:
 - `ndtensors-rs/crates/ndtensors/src/autodiff/` -- backward pass, graph, TrackedTensor
 - `ndtensors-rs/crates/ndtensors/src/contract/naive.rs:222` -- contract_vjp
@@ -435,20 +568,75 @@ pub fn dual_contract<T: Scalar>(
 
 ---
 
-## Future Phase: tenferro-capi (C FFI for ChainRules.jl)
+## tenferro-capi (POC exists)
 
-### Backend Loading API
+> **POC API skeleton exists**: 14 functions covering tensor lifecycle,
+> einsum, and SVD (including AD rules). f64 only, stateless rrule/frule.
 
-Wraps the device layer's `BackendRegistry` as C functions:
+### Design Principles
+
+- **Opaque handles**: `TfeTensorF64` wraps `Tensor<f64>`. Host languages never see Rust internals.
+- **Naming convention**: `tfe_` prefix (tenferro), `_f64` suffix for scalar type.
+- **Status codes**: `tfe_status_t` (i32) — `TFE_SUCCESS` (0), `TFE_INVALID_ARGUMENT` (-1), `TFE_SHAPE_MISMATCH` (-2), `TFE_INTERNAL_ERROR` (-3).
+- **Stateless AD rules**: Only `rrule` (VJP) and `frule` (JVP) are exposed. `Tape` / `TrackedTensor` / `DualTensor` are **not** exposed. Host languages manage their own AD tapes (ChainRules.jl, PyTorch autograd, JAX custom_vjp).
+- **Column-major order** (Julia/BLAS convention) for data layout.
+- **Copy semantics** at FFI boundary: `tfe_tensor_f64_from_data` copies the caller's data.
+- **Panic safety**: All functions use `catch_unwind` and convert panics to `TFE_INTERNAL_ERROR`.
+
+### Implemented API (14 functions)
 
 ```c
-// Load GPU vendor library at runtime
-int tenferro_backend_load_cutensor(const char* libcutensor_path);
-int tenferro_backend_load_hiptensor(const char* libhiptensor_path);
+// Opaque type
+typedef struct tfe_tensor_f64 tfe_tensor_f64;
+typedef int32_t tfe_status_t;
 
-// Query available devices
-int tenferro_backend_device_count(void);
-int tenferro_backend_device_type(int device_id);  // 0=CPU, 1=CUDA, 2=HIP
+// Tensor lifecycle (8 functions)
+tfe_tensor_f64* tfe_tensor_f64_from_data(const double* data, size_t len,
+    const size_t* shape, size_t ndim, tfe_status_t* status);
+tfe_tensor_f64* tfe_tensor_f64_zeros(const size_t* shape, size_t ndim,
+    tfe_status_t* status);
+tfe_tensor_f64* tfe_tensor_f64_clone(const tfe_tensor_f64* tensor,
+    tfe_status_t* status);
+void tfe_tensor_f64_release(tfe_tensor_f64* tensor);
+size_t tfe_tensor_f64_ndim(const tfe_tensor_f64* tensor);
+void tfe_tensor_f64_shape(const tfe_tensor_f64* tensor, size_t* out_shape);
+size_t tfe_tensor_f64_len(const tfe_tensor_f64* tensor);
+const double* tfe_tensor_f64_data(const tfe_tensor_f64* tensor);
+
+// Einsum (3 functions) — uses string notation
+tfe_tensor_f64* tfe_einsum_f64(const char* subscripts,
+    const tfe_tensor_f64** operands, size_t num_operands,
+    tfe_status_t* status);
+void tfe_einsum_rrule_f64(const char* subscripts,
+    const tfe_tensor_f64** operands, size_t num_operands,
+    const tfe_tensor_f64* cotangent,
+    tfe_tensor_f64** grads_out, tfe_status_t* status);
+tfe_tensor_f64* tfe_einsum_frule_f64(const char* subscripts,
+    const tfe_tensor_f64** primals, size_t num_operands,
+    const tfe_tensor_f64** tangents, tfe_status_t* status);
+
+// SVD (3 functions) — with left/right dim indices
+void tfe_svd_f64(const tfe_tensor_f64* tensor,
+    const size_t* left, size_t left_len,
+    const size_t* right, size_t right_len,
+    size_t max_rank, double cutoff,
+    tfe_tensor_f64** u_out, tfe_tensor_f64** s_out,
+    tfe_tensor_f64** vt_out, tfe_status_t* status);
+tfe_tensor_f64* tfe_svd_rrule_f64(const tfe_tensor_f64* tensor,
+    const size_t* left, size_t left_len,
+    const size_t* right, size_t right_len,
+    size_t max_rank, double cutoff,
+    const tfe_tensor_f64* cotangent_u,   // nullable
+    const tfe_tensor_f64* cotangent_s,   // nullable
+    const tfe_tensor_f64* cotangent_vt,  // nullable
+    tfe_status_t* status);
+void tfe_svd_frule_f64(const tfe_tensor_f64* tensor,
+    const size_t* left, size_t left_len,
+    const size_t* right, size_t right_len,
+    size_t max_rank, double cutoff,
+    const tfe_tensor_f64* tangent,  // nullable
+    tfe_tensor_f64** u_out, tfe_tensor_f64** s_out,
+    tfe_tensor_f64** vt_out, tfe_status_t* status);
 ```
 
 ### ChainRules.jl Integration
@@ -457,49 +645,26 @@ Julia's ChainRules.jl defines:
 - `rrule(f, args...)` -> `(result, pullback)` -- reverse-mode rule
 - `frule((Dself, Dargs...), f, args...)` -> `(result, Dresult)` -- forward-mode rule
 
-tenferro-capi exposes the VJP/JVP primitives that Julia wraps as ChainRules rules:
-
-```c
-// Opaque types
-typedef struct tenferro_tensor_f64 tenferro_tensor_f64;
-typedef struct tenferro_tensor_c64 tenferro_tensor_c64;
-
-// Core tensor lifecycle
-tenferro_tensor_f64* tenferro_tensor_f64_from_data(
-    const double* data, const size_t* shape, size_t ndim);
-void tenferro_tensor_f64_release(tenferro_tensor_f64* tensor);
-
-// Contraction
-tenferro_tensor_f64* tenferro_contract_f64(
-    const tenferro_tensor_f64* a, const uint32_t* labels_a,
-    const tenferro_tensor_f64* b, const uint32_t* labels_b,
-    int* status);
-
-// VJP (for rrule pullback)
-int tenferro_contract_vjp_f64(
-    const tenferro_tensor_f64* a, const uint32_t* labels_a, size_t ndim_a,
-    const tenferro_tensor_f64* b, const uint32_t* labels_b, size_t ndim_b,
-    const tenferro_tensor_f64* grad_c,
-    tenferro_tensor_f64** grad_a_out,
-    tenferro_tensor_f64** grad_b_out);
-
-// JVP (for frule)
-tenferro_tensor_f64* tenferro_contract_jvp_f64(
-    const tenferro_tensor_f64* a, const uint32_t* labels_a, size_t ndim_a,
-    const tenferro_tensor_f64* b, const uint32_t* labels_b, size_t ndim_b,
-    const tenferro_tensor_f64* da,   // nullable (zero tangent)
-    const tenferro_tensor_f64* db,   // nullable (zero tangent)
-    int* status);
-```
-
-**Uses integer labels** (`u32`), not string notation, for C API ergonomics.
+tenferro-capi exposes stateless `rrule`/`frule` functions that Julia wraps
+as ChainRules rules. The AD tape is managed entirely by Julia (Zygote.jl).
 
 Julia example:
 ```julia
-using cuTENSOR_jll
+# einsum via C API
+result = ccall((:tfe_einsum_f64, libtenferro), Ptr{Cvoid},
+    (Cstring, Ptr{Ptr{Cvoid}}, Csize_t, Ptr{Cint}),
+    "ij,jk->ik", ops, 2, status)
+```
 
-# Load GPU backend via jll-managed path
-ccall((:tenferro_backend_load_cutensor, libtenferro), Cint, (Cstring,),
+### Backend Loading API (Future)
+
+Backend loading via `tfe_backend_load_cutensor` / `tfe_backend_load_hiptensor`
+is planned but not yet in the POC.
+
+```julia
+using cuTENSOR_jll
+# Load GPU backend via jll-managed path (future)
+ccall((:tfe_backend_load_cutensor, libtenferro), Cint, (Cstring,),
       cuTENSOR_jll.libcutensor_path)
 ```
 
@@ -863,8 +1028,7 @@ This happens **after tenferro core is stable**.
 
 ### After POC (Phase 1 core):
 ```bash
-cd tenferro-rs && cargo test -p tenferro-device -p tenferro-prims \
-    -p tenferro-tensor -p tenferro-einsum
+cd tenferro-rs && cargo test --workspace
 ```
 - Unit tests for all Tensor operations
 - Zero-copy verification: assert same buffer pointer after view ops
@@ -873,6 +1037,23 @@ cd tenferro-rs && cargo test -p tenferro-device -p tenferro-prims \
 - Integer type einsum test (i32, i64 via naive backend)
 - Benchmark: tenferro einsum vs current tensor4all-rs mdarray-einsum
 
+**chainrules-core + chainrules**:
+- Numerical gradient checks (finite difference vs reverse-mode AD)
+- Forward-mode vs reverse-mode consistency
+- HVP correctness (forward-over-reverse)
+- Complex-valued gradient test (Wirtinger calculus)
+
+**tenferro-linalg**:
+- Cross-validate SVD/QR results against ndtensors-rs
+- Complex SVD test
+- AD rule correctness: finite-difference vs rrule/frule for all decompositions
+
+**tenferro-capi**:
+- Round-trip test: Julia -> C API -> Rust -> C API -> Julia
+- Einsum rrule/frule roundtrip test
+- SVD rrule/frule roundtrip test
+- ChainRules.jl integration test with Zygote.jl
+
 ### After future phases:
 
 **tenferro-algebra**:
@@ -880,19 +1061,8 @@ cd tenferro-rs && cargo test -p tenferro-device -p tenferro-prims \
 - Custom type extensibility tests: `ModInt<P>` test type through
   all three dispatch tiers
 
-**tenferro-linalg**:
-- Cross-validate SVD/QR results against ndtensors-rs
-- Complex SVD test
-
-**tenferro-autograd**:
-- Numerical gradient checks (finite difference vs reverse-mode AD)
-- Forward-mode vs reverse-mode consistency
-- Complex-valued gradient test (Wirtinger calculus)
-
-**tenferro-capi**:
-- Round-trip test: Julia -> C API -> Rust -> C API -> Julia
-- Backend loading test: `tenferro_backend_load_cutensor` / `tenferro_backend_load_hiptensor`
-- ChainRules.jl integration test with Zygote.jl
+**tenferro-capi (backend loading)**:
+- Backend loading test: `tfe_backend_load_cutensor` / `tfe_backend_load_hiptensor`
 
 ---
 
@@ -913,10 +1083,10 @@ cd tenferro-rs && cargo test -p tenferro-device -p tenferro-prims \
 | Backend trait | `omeinsum-rs/src/backend/traits.rs` | **Absorbed** into tenferro-prims (evolved into TensorPrims) |
 | cuTENSOR wrapper | `omeinsum-rs/src/backend/cuda/cutensor/` | **Absorbed** into tenferro-device (GPU vtable) [future] |
 | PlanCache | `omeinsum-rs/src/backend/cuda/cutensor/contract.rs` | **Absorbed** into tenferro-device [future] |
-| faer bridge | `ndtensors-rs/.../faer_interop.rs` | tenferro-linalg [future] |
-| contract_vjp | `ndtensors-rs/.../contract/naive.rs` | tenferro-autograd [future] |
-| TrackedTensor | `ndtensors-rs/.../autodiff/tensor.rs` | tenferro-autograd [future] |
-| C API patterns | `tensor4all-rs/crates/tensor4all-capi/src/` | tenferro-capi [future] |
+| faer bridge | `ndtensors-rs/.../faer_interop.rs` | tenferro-linalg (POC API exists, implementation [future]) |
+| contract_vjp | `ndtensors-rs/.../contract/naive.rs` | tenferro-einsum einsum_rrule (POC API exists) |
+| TrackedTensor | `ndtensors-rs/.../autodiff/tensor.rs` | chainrules TrackedTensor (POC API exists) |
+| C API patterns | `tensor4all-rs/crates/tensor4all-capi/src/` | tenferro-capi (POC API exists: 14 functions) |
 
 ---
 
@@ -929,8 +1099,8 @@ The following tenferro-specific design topics are documented in the tenferro-rs 
 - **GPU/CPU overlap and async execution** — `CompletionEvent` embedded in `Tensor<T>`, transparent accelerator-to-accelerator chaining, multi-threaded CPU parallelism
 - **Tensor / TensorView ownership split** — `Tensor<T>` (owned) + `TensorView<'a, T>` (borrowed), compile-time buffer uniqueness guarantees, two-tier API (public waits, internal propagates events)
 - **einsum variants** — allocating, accumulating (`_into`), and consuming (`_owned`) API families
-- **Complex-valued differentiation** — Wirtinger calculus for complex SVD/QR/eigen backward rules
-- **JAX/PyTorch integration via C-FFI** — tenferro-capi ctypes bridge
+- **Complex-valued differentiation** — Wirtinger calculus for complex SVD/QR/eigen backward rules (chainrules-core + tenferro-linalg)
+- **JAX/PyTorch integration via C-FFI** — tenferro-capi (POC API exists for einsum + SVD)
 - **Multi-GPU distributed contraction** — batch-level parallelism, tensor splitting, contraction tree parallelism
 - **ITensor Julia ecosystem insights** — sparse storage, axis fusion patterns
 - **mdarray / mdarray-linalg relationship** — numpy-equivalent vs PyTorch-equivalent positioning
