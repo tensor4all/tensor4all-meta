@@ -455,7 +455,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 | tenferro-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types [future] |
 | chainrules-core | **New** (POC) | Core AD traits: Differentiable, ReverseRule, ForwardRule (like Julia ChainRulesCore.jl) |
 | chainrules | **New** (POC) | AD engine: Tape, TrackedTensor, DualTensor, pullback, hvp (like Julia Zygote.jl) |
-| tenferro-linalg | ndtensors-rs (linalg + linalg AD) | **POC** API skeleton: batched matrix SVD/QR/LU/eigen following torch.linalg convention. `(*, m, n)` shape, col-major contiguous, matrix-level AD rules (Mathieu 2019). GPU: cuSOLVER/rocSOLVER |
+| tenferro-linalg | ndtensors-rs (linalg + linalg AD) | **POC** API skeleton: batched matrix SVD/QR/LU/eigen following torch.linalg convention adapted for col-major. `(m, n, *)` shape (first 2 dims = matrix), col-major contiguous, matrix-level AD rules (Mathieu 2019). GPU: cuSOLVER/rocSOLVER |
 | tenferro-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | **POC** API skeleton: einsum + SVD, f64 only, stateless rrule/frule (14 functions) |
 | tenferro-tropical | omeinsum-rs (algebra) | **POC** API skeleton: MaxPlus, MinPlus, MaxMul scalars + algebra markers + TensorPrims impls + ArgmaxTracker |
 | tenferro-tropical-capi | **New** (POC) | C-API for tropical einsum: 9 FFI functions (3 algebras × einsum/rrule/frule), reuses TfeTensorF64 from tenferro-capi |
@@ -493,7 +493,7 @@ The POC implements eleven crates:
 - **tenferro-prims** — `TensorPrims<A>` trait with cuTENSOR-compatible plan-based execution. Core ops (batched_gemm, reduce, trace, permute, anti_trace, anti_diag) + dynamically-queried extended ops (contract, elementwise_mul). `CpuBackend` implements `TensorPrims<Standard>`.
 - **tenferro-tensor** — `Tensor<T>` with `DataBuffer<T>` (opaque struct: Owned `Vec<T>` or External with DLPack release callback), shape/strides, zero-copy view ops (permute, broadcast, diagonal, reshape), `CompletionEvent` for async execution, `TensorView<'a, T>` for borrowed views, consuming variants (`into_contiguous`, `into_conj`). Implements `Differentiable` for `Tensor<T>`. No strided-rs dependency.
 - **tenferro-einsum** — High-level einsum on `Tensor<T>` with string notation, parenthesized contraction order, `Subscripts`, `ContractionTree`. Nine API functions: allocating, accumulating (`_into` with alpha/beta), and consuming (`_owned` for buffer reuse). Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`.
-- **tenferro-linalg** — Batched matrix SVD, QR, LU, eigendecomposition following the `torch.linalg` convention: `(*, m, n)` shape (last 2 dims are the matrix, rest are batch), column-major contiguous input. Stateless AD rules (`svd_rrule`/`svd_frule`, etc.) using batched matrix operations (Mathieu 2019) that broadcast over batch dims. No `tracked_*`/`dual_*` — chainrules tape engine composes via chain rule. GPU: cuSOLVER/rocSOLVER.
+- **tenferro-linalg** — Batched matrix SVD, QR, LU, eigendecomposition adapted from `torch.linalg` for col-major: `(m, n, *)` shape (first 2 dims are the matrix, rest are batch), column-major contiguous input. Stateless AD rules (`svd_rrule`/`svd_frule`, etc.) using batched matrix operations (Mathieu 2019) that broadcast over batch dims. No `tracked_*`/`dual_*` — chainrules tape engine composes via chain rule. GPU: cuSOLVER/rocSOLVER.
 - **tenferro-capi** — C-API (FFI) for Julia/Python: opaque `TfeTensorF64` handle, `tfe_status_t` error codes. 16 functions: tensor lifecycle (8) + DLPack interop (2: `tfe_tensor_f64_to_dlpack`, `tfe_tensor_f64_from_dlpack`) + einsum (3) + SVD (3). DLPack v1.0 zero-copy tensor exchange (CPU/CUDA/ROCm/managed memory). Stateless `rrule`/`frule` only (no tape exposure). f64 only in POC phase. Produces rlib in addition to cdylib/staticlib, enabling type sharing with extension capi crates.
 - **tenferro-tropical-capi** — C-API (FFI) for tropical einsum: extends `tenferro-capi` with tropical-specific functions. 9 functions: 3 algebras (MaxPlus, MinPlus, MaxMul) × 3 functions (einsum, rrule, frule). Reuses `TfeTensorF64` handles since `MaxPlus<f64>` is `#[repr(transparent)]` (same memory layout as f64). Algebra is selected by function name (`tfe_tropical_einsum_maxplus_f64`, etc.), not by handle type. Produces a separate `.so` from `tenferro-capi`; C consumers load both.
 - **tenferro-tropical** — Tropical semiring tensor operations: `MaxPlus<T>` (⊕=max, ⊗=+), `MinPlus<T>` (⊕=min, ⊗=+), `MaxMul<T>` (⊕=max, ⊗=×) scalar wrappers with `#[repr(transparent)]`. Algebra markers (`MaxPlusAlgebra`, `MinPlusAlgebra`, `MaxMulAlgebra`) with `HasAlgebra` and `Semiring` impls (f64 only for POC). `TensorPrims` impls for `CpuBackend` (all three algebras, orphan rule compatible). `TropicalPlan<T>` for plan-based execution. `ArgmaxTracker` for tropical backward pass (AD).
@@ -544,8 +544,8 @@ Being a workspace crate with locally-defined algebra markers proves that
 > **POC API skeleton exists** with batched matrix SVD, QR, LU, eigen
 > + stateless AD rules, following the `torch.linalg` convention.
 
-Batched matrix decompositions with the PyTorch `torch.linalg` convention:
-input shape `(*, m, n)` where last 2 dims are the matrix and all preceding
+Batched matrix decompositions adapted from PyTorch's `torch.linalg` for col-major:
+input shape `(m, n, *)` where the first 2 dims are the matrix and all following
 dims are independent batch dimensions. Column-major contiguous input required
 (LAPACK/cuSOLVER native). This design is **context-agnostic** — the module
 does not know about tensor networks, MPS, or any specific application.
@@ -1154,7 +1154,7 @@ cd tenferro-rs && cargo test --workspace
 - Complex-valued gradient test (Wirtinger calculus)
 
 **tenferro-linalg**:
-- Batched matrix SVD/QR/LU/eigen correctness (2D and batched `(*, m, n)`)
+- Batched matrix SVD/QR/LU/eigen correctness (2D and batched `(m, n, *)`)
 - Matrix-level AD rule correctness: finite-difference vs svd_rrule/svd_frule
 - Complex matrix SVD test (Wirtinger calculus)
 - Batched AD: verify broadcasting over batch dims `*`
