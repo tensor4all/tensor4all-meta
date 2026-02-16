@@ -166,6 +166,8 @@ strided-rs/ (independent workspace) ── Foundation crates stay as-is ──�
 tenferro-rs/ (workspace) ── 11 POC crates ────────────────────
 │  Depends on strided-rs.
 │
+│  ── core (root level) ── tenferro-* essential stack ──────────
+│
 ├── tenferro-device      # LogicalMemorySpace + ComputeDevice enums
 │                        #   LogicalMemorySpace: MainMemory, PinnedMemory,
 │                        #     GpuMemory { device_id }, ManagedMemory
@@ -181,21 +183,6 @@ tenferro-rs/ (workspace) ── 11 POC crates ───────────�
 │                        #   HasAlgebra: maps T → A (f64 → Standard, etc.)
 │                        #   Minimal algebra foundation for TensorPrims<A>
 │                        #   Depends on: num-complex, num-traits
-│
-├── chainrules-core      # Core AD traits (like Julia's ChainRulesCore.jl)
-│                        #   Differentiable trait (tangent space definition)
-│                        #   ReverseRule<V> (pullback), ForwardRule<V> (pushforward)
-│                        #   AutodiffError, AdResult, NodeId, SavePolicy
-│                        #   impl Differentiable for f64, f32
-│                        #   Depends on: thiserror
-│                        #   See: docs/design/chainrules_core_design.md
-│
-├── chainrules           # AD engine (like Zygote.jl in Julia)
-│                        #   Tape<V>, TrackedTensor<V>, DualTensor<V>
-│                        #   pullback() (reverse-mode), hvp() (forward-over-reverse)
-│                        #   Gradients<V>, PullbackPlan<V>, HvpResult<V>
-│                        #   Re-exports all of chainrules-core
-│                        #   Depends on: chainrules-core
 │
 ├── tenferro-prims       # TensorPrims<A> trait — parameterized by algebra A
 │                        #   PrimDescriptor enum (describe → plan → execute)
@@ -259,32 +246,53 @@ tenferro-rs/ (workspace) ── 11 POC crates ───────────�
 │                        #   Depends on: tenferro-device, tenferro-tensor,
 │                        #     tenferro-einsum, tenferro-linalg
 │
-├── tenferro-tropical-capi # C-API (FFI) for tropical einsum
-│                        #   Extends tenferro-capi with tropical einsum functions
-│                        #   Reuses TfeTensorF64 handles (MaxPlus<f64> is
-│                        #     #[repr(transparent)], same layout as f64)
-│                        #   9 functions (3 algebras × 3 functions each):
-│                        #     tfe_tropical_einsum_{maxplus,minplus,maxmul}_f64
-│                        #     tfe_tropical_einsum_rrule_{...}_f64 (VJP)
-│                        #     tfe_tropical_einsum_frule_{...}_f64 (JVP)
-│                        #   Algebra selected by function name, not handle type
-│                        #   Separate .so from tenferro-capi; C consumers load both
-│                        #   Depends on: tenferro-device, tenferro-capi,
-│                        #     tenferro-tropical
+│  ── extension/ ── optional extensions (depend on core + extern) ──
 │
-└── tenferro-tropical    # Tropical semiring tensor operations
-                         #   MaxPlus<T> (⊕=max, ⊗=+), MinPlus<T> (⊕=min, ⊗=+),
-                         #     MaxMul<T> (⊕=max, ⊗=×) scalar wrappers
-                         #   #[repr(transparent)] newtypes satisfying Scalar
-                         #   MaxPlusAlgebra, MinPlusAlgebra, MaxMulAlgebra markers
-                         #   HasAlgebra impls: MaxPlus<f32/f64> → MaxPlusAlgebra, etc.
-                         #   Semiring impls (f64 only for POC)
-                         #   impl TensorPrims<MaxPlusAlgebra> for CpuBackend
-                         #     (and MinPlus, MaxMul) — orphan rule compatible
-                         #   TropicalPlan<T> (analogous to CpuPlan<T>)
-                         #   ArgmaxTracker for tropical backward pass (AD)
-                         #   Depends on: tenferro-device, tenferro-algebra,
-                         #     tenferro-prims, strided-view, strided-traits, num-traits
+├── extension/
+│   ├── tenferro-tropical    # Tropical semiring tensor operations
+│   │                        #   MaxPlus<T> (⊕=max, ⊗=+), MinPlus<T> (⊕=min, ⊗=+),
+│   │                        #     MaxMul<T> (⊕=max, ⊗=×) scalar wrappers
+│   │                        #   #[repr(transparent)] newtypes satisfying Scalar
+│   │                        #   MaxPlusAlgebra, MinPlusAlgebra, MaxMulAlgebra markers
+│   │                        #   HasAlgebra impls: MaxPlus<f32/f64> → MaxPlusAlgebra, etc.
+│   │                        #   Semiring impls (f64 only for POC)
+│   │                        #   impl TensorPrims<MaxPlusAlgebra> for CpuBackend
+│   │                        #     (and MinPlus, MaxMul) — orphan rule compatible
+│   │                        #   TropicalPlan<T> (analogous to CpuPlan<T>)
+│   │                        #   ArgmaxTracker for tropical backward pass (AD)
+│   │                        #   Depends on: tenferro-device, tenferro-algebra,
+│   │                        #     tenferro-prims, strided-view, strided-traits, num-traits
+│   │
+│   └── tenferro-tropical-capi # C-API (FFI) for tropical einsum
+│                            #   Extends tenferro-capi with tropical einsum functions
+│                            #   Reuses TfeTensorF64 handles (MaxPlus<f64> is
+│                            #     #[repr(transparent)], same layout as f64)
+│                            #   9 functions (3 algebras × 3 functions each):
+│                            #     tfe_tropical_einsum_{maxplus,minplus,maxmul}_f64
+│                            #     tfe_tropical_einsum_rrule_{...}_f64 (VJP)
+│                            #     tfe_tropical_einsum_frule_{...}_f64 (JVP)
+│                            #   Algebra selected by function name, not handle type
+│                            #   Separate .so from tenferro-capi; C consumers load both
+│                            #   Depends on: tenferro-device, tenferro-capi,
+│                            #     tenferro-tropical
+│
+│  ── extern/ ── general-purpose crates (no tenferro dependency) ──
+│
+└── extern/
+    ├── chainrules-core      # Core AD traits (like Julia's ChainRulesCore.jl)
+    │                        #   Differentiable trait (tangent space definition)
+    │                        #   ReverseRule<V> (pullback), ForwardRule<V> (pushforward)
+    │                        #   AutodiffError, AdResult, NodeId, SavePolicy
+    │                        #   impl Differentiable for f64, f32
+    │                        #   Depends on: thiserror
+    │                        #   See: docs/design/chainrules_core_design.md
+    │
+    └── chainrules           # AD engine (like Zygote.jl in Julia)
+                             #   Tape<V>, TrackedTensor<V>, DualTensor<V>
+                             #   pullback() (reverse-mode), hvp() (forward-over-reverse)
+                             #   Gradients<V>, PullbackPlan<V>, HvpResult<V>
+                             #   Re-exports all of chainrules-core
+                             #   Depends on: chainrules-core
 ```
 
 ### Future Crates (not in POC)
@@ -319,80 +327,104 @@ tensor4all-rs/ (workspace) ── Tensor network algorithms ────
 strided-rs (independent workspace):
 strided-traits → strided-view → strided-kernel
 
-tenferro-rs (workspace; only tenferro-prims depends on strided-rs):
+tenferro-rs workspace:
 
-chainrules-core              tenferro-device              tenferro-algebra
-  (← thiserror)               (← thiserror)               (← num-complex,
-    │                            │                           ← num-traits)
-    │                            │                            │
-    ↓                            ├────────────┐       ┌───────┤
-chainrules                       │            ↓       ↓       │
-  (← chainrules-core)           │       tenferro-prims       │
-    │                            │         (← strided-view,   │
-    │                            │          ← strided-traits) │
-    │                            │            │               │
-    │                            ↓            │               │
-    │                       tenferro-tensor    │               │
-    │                         (← tenferro-algebra,             │
-    │                          ← chainrules-core)              │
-    │                            │            │               │
-    │                            └──────┬─────┘       ┌───────┘
-    │                                   ↓             ↓
-    └──────────────────────────→ tenferro-einsum
-    │                              (← tenferro-algebra, ← chainrules)
+┌─ extern/ (general-purpose, no tenferro dependency) ──────────┐
+│                                                              │
+│  chainrules-core              (← thiserror)                  │
+│      │                                                       │
+│      ↓                                                       │
+│  chainrules                   (← chainrules-core)            │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
     │
-    └──────────────────────────→ tenferro-linalg
-    │                              (← tenferro-algebra, ← chainrules,
-    │                               ← tenferro-tensor, ← tenferro-device)
+    │  depends on extern/ only ↓
     │
-    └──────────────────────────→ tenferro-capi
-    │                              (← tenferro-tensor, ← tenferro-einsum,
-    │                               ← tenferro-linalg, ← tenferro-device)
+┌─ core (root level) ── tenferro-* essential stack ────────────┐
+│                                                              │
+│  tenferro-device              tenferro-algebra               │
+│    (← thiserror)               (← num-complex, ← num-traits)│
+│      │                            │                          │
+│      ├────────────┐       ┌───────┤                          │
+│      │            ↓       ↓       │                          │
+│      │       tenferro-prims       │                          │
+│      │         (← strided-view,   │                          │
+│      │          ← strided-traits) │                          │
+│      │            │               │                          │
+│      ↓            │               │                          │
+│  tenferro-tensor  │               │                          │
+│    (← tenferro-algebra,           │                          │
+│     ← chainrules-core)            │                          │
+│      │            │               │                          │
+│      └──────┬─────┘       ┌───────┘                          │
+│             ↓             ↓                                  │
+│      tenferro-einsum                                         │
+│        (← tenferro-algebra, ← chainrules)                    │
+│      tenferro-linalg                                         │
+│        (← tenferro-algebra, ← chainrules,                    │
+│         ← tenferro-tensor, ← tenferro-device)                │
+│             │                                                │
+│             ↓                                                │
+│      tenferro-capi                                           │
+│        (← tenferro-tensor, ← tenferro-einsum,                │
+│         ← tenferro-linalg, ← tenferro-device)                │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
     │
-    │                          tenferro-tropical
-    │                            (← tenferro-device, ← tenferro-algebra,
-    │                             ← tenferro-prims, ← strided-view,
-    │                             ← strided-traits, ← num-traits)
+    │  depends on core + extern/ ↓
     │
-    │                          tenferro-tropical-capi
-    │                            (← tenferro-device, ← tenferro-capi [rlib],
-    │                             ← tenferro-tropical)
+┌─ extension/ ── optional extensions ──────────────────────────┐
+│                                                              │
+│  tenferro-tropical                                           │
+│    (← tenferro-device, ← tenferro-algebra,                   │
+│     ← tenferro-prims, ← strided-view,                       │
+│     ← strided-traits, ← num-traits)                          │
+│                                                              │
+│  tenferro-tropical-capi                                      │
+│    (← tenferro-device, ← tenferro-capi [rlib],               │
+│     ← tenferro-tropical)                                     │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Future Dependency Graph (full vision)
 
 ```
-chainrules-core          tenferro-device
-    │                        │
-    ↓                        ↓
-chainrules           tenferro-algebra (HasAlgebra, Semiring, Standard)
-    │                        │
-    │                ┌───────┴────────────────┐
-    │                ↓                        ↓
-    │          tenferro-prims          tenferro-tensor
-    │                │                  (← chainrules-core)
-    │                └──────────┬─────────────┘
-    │                           ↓
-    └──────────────→ tenferro-einsum (← chainrules)
-    │                tenferro-linalg (← chainrules)
-    │                           │
-    │                           ↓
-    └──────────────→ tenferro-capi
-                       (← tenferro-einsum, ← tenferro-linalg,
-                        ← tenferro-tensor, ← tenferro-device)
-
-tenferro-hdf5 ← tenferro-tensor, hdf5-rt (dlopen)
-
-[workspace crate: tenferro-tropical]  (POC exists)
-← tenferro-device, tenferro-algebra, tenferro-prims
-impl TensorPrims<MaxPlusAlgebra> for CpuBackend (orphan OK)
-impl TensorPrims<MinPlusAlgebra> for CpuBackend (orphan OK)
-impl TensorPrims<MaxMulAlgebra> for CpuBackend (orphan OK)
-
-[workspace crate: tenferro-tropical-capi]  (POC exists)
-← tenferro-device, tenferro-capi [rlib], tenferro-tropical
-Separate .so; reuses TfeTensorF64 handles from tenferro-capi
-9 FFI functions: 3 algebras × (einsum + rrule + frule)
+┌─ extern/ (general-purpose) ──────────────────────────────────┐
+│  chainrules-core → chainrules                                │
+└──────────────────────────────────────────────────────────────┘
+    │
+┌─ core ───────────────────────────────────────────────────────┐
+│  tenferro-device, tenferro-algebra                           │
+│      │                │                                      │
+│      ├────────────────┤                                      │
+│      ↓                ↓                                      │
+│  tenferro-prims  tenferro-tensor (← chainrules-core)         │
+│      │                │                                      │
+│      └──────┬─────────┘                                      │
+│             ↓                                                │
+│  tenferro-einsum, tenferro-linalg (← chainrules)             │
+│             │                                                │
+│             ↓                                                │
+│  tenferro-capi                                               │
+│    (← tenferro-einsum, ← tenferro-linalg,                    │
+│     ← tenferro-tensor, ← tenferro-device)                    │
+│                                                              │
+│  tenferro-hdf5 ← tenferro-tensor, hdf5-rt (dlopen) [future] │
+└──────────────────────────────────────────────────────────────┘
+    │
+┌─ extension/ ─────────────────────────────────────────────────┐
+│  tenferro-tropical  (POC exists)                             │
+│    ← tenferro-device, tenferro-algebra, tenferro-prims       │
+│    impl TensorPrims<MaxPlusAlgebra> for CpuBackend (orphan OK)│
+│    impl TensorPrims<MinPlusAlgebra> for CpuBackend (orphan OK)│
+│    impl TensorPrims<MaxMulAlgebra> for CpuBackend (orphan OK)│
+│                                                              │
+│  tenferro-tropical-capi  (POC exists)                        │
+│    ← tenferro-device, tenferro-capi [rlib], tenferro-tropical│
+│    Separate .so; reuses TfeTensorF64 handles                 │
+│    9 FFI functions: 3 algebras × (einsum + rrule + frule)    │
+└──────────────────────────────────────────────────────────────┘
 
 [separate workspace: tenferro-structured-rs]
 tenferro-blocksparse ← tenferro-tensor
