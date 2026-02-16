@@ -1,6 +1,6 @@
 # tenferro: Unified Tensor Backend Design Plan
 
-> **POC implementation**: The proof-of-concept (10 POC crates) is at
+> **POC implementation**: The proof-of-concept (11 POC crates) is at
 > <https://github.com/tensor4all/tenferro-rs/>.
 
 > **Detailed design documents** (in [tenferro-rs](https://github.com/tensor4all/tenferro-rs/)):
@@ -25,7 +25,7 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 3. Supports both NVIDIA and AMD GPUs via **runtime library loading** (no compile-time vendor lock-in)
 4. Supports complex numbers natively
 5. Supports custom scalar types (tropical semiring, etc.) with pluggable backends
-6. Exposes VJP/JVP through C API for Julia ChainRules.jl (POC exists: `tenferro-capi`)
+6. Exposes VJP/JVP through C API for Julia ChainRules.jl (POC exists: `tenferro-capi` + `tenferro-tropical-capi`)
 7. Can optionally bridge to Burn for NN workloads
 
 **Key design principles**:
@@ -49,12 +49,14 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
-│ Layer 5: C-API (tenferro-capi)                     [POC]     │
-│   Opaque TfeTensorF64 handle, tfe_status_t error codes       │
-│   Tensor lifecycle (8 functions), einsum (3), SVD (3)        │
-│   DLPack v1.0 zero-copy tensor exchange (2 functions)        │
-│   Stateless rrule/frule only (no tape exposure)              │
-│   f64 only in POC phase                                      │
+│ Layer 5: C-API                                       [POC]     │
+│   tenferro-capi: Opaque TfeTensorF64 handle, tfe_status_t    │
+│     Tensor lifecycle (8), einsum (3), SVD (3), DLPack (2)    │
+│     rlib crate-type for type sharing with extension capis    │
+│   tenferro-tropical-capi: Tropical einsum via C-FFI          │
+│     9 functions (3 algebras × einsum/rrule/frule)            │
+│     Reuses TfeTensorF64 (#[repr(transparent)] MaxPlus<f64>)  │
+│   Stateless rrule/frule only (no tape exposure), f64 only    │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -161,7 +163,7 @@ strided-rs/ (independent workspace) ── Foundation crates stay as-is ──�
 ├── strided-view         # StridedArray, StridedView, StridedViewMut (zero-copy strided views)
 └── strided-kernel       # Cache-optimized map/reduce/broadcast kernels
 
-tenferro-rs/ (workspace) ── 10 POC crates ────────────────────
+tenferro-rs/ (workspace) ── 11 POC crates ────────────────────
 │  Depends on strided-rs.
 │
 ├── tenferro-device      # LogicalMemorySpace + ComputeDevice enums
@@ -252,8 +254,23 @@ tenferro-rs/ (workspace) ── 10 POC crates ───────────�
 │                        #     tfe_svd_frule_f64 (3 functions)
 │                        #   Stateless rrule/frule only (no tape exposure)
 │                        #   f64 only, DLPack for zero-copy interop
+│                        #   crate-type: cdylib + staticlib + rlib (rlib for
+│                        #     type sharing with tenferro-tropical-capi)
 │                        #   Depends on: tenferro-device, tenferro-tensor,
 │                        #     tenferro-einsum, tenferro-linalg
+│
+├── tenferro-tropical-capi # C-API (FFI) for tropical einsum
+│                        #   Extends tenferro-capi with tropical einsum functions
+│                        #   Reuses TfeTensorF64 handles (MaxPlus<f64> is
+│                        #     #[repr(transparent)], same layout as f64)
+│                        #   9 functions (3 algebras × 3 functions each):
+│                        #     tfe_tropical_einsum_{maxplus,minplus,maxmul}_f64
+│                        #     tfe_tropical_einsum_rrule_{...}_f64 (VJP)
+│                        #     tfe_tropical_einsum_frule_{...}_f64 (JVP)
+│                        #   Algebra selected by function name, not handle type
+│                        #   Separate .so from tenferro-capi; C consumers load both
+│                        #   Depends on: tenferro-device, tenferro-capi,
+│                        #     tenferro-tropical
 │
 └── tenferro-tropical    # Tropical semiring tensor operations
                          #   MaxPlus<T> (⊕=max, ⊗=+), MinPlus<T> (⊕=min, ⊗=+),
@@ -336,6 +353,10 @@ chainrules                       │            ↓       ↓       │
     │                            (← tenferro-device, ← tenferro-algebra,
     │                             ← tenferro-prims, ← strided-view,
     │                             ← strided-traits, ← num-traits)
+    │
+    │                          tenferro-tropical-capi
+    │                            (← tenferro-device, ← tenferro-capi [rlib],
+    │                             ← tenferro-tropical)
 ```
 
 ### Future Dependency Graph (full vision)
@@ -368,6 +389,11 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend (orphan OK)
 impl TensorPrims<MinPlusAlgebra> for CpuBackend (orphan OK)
 impl TensorPrims<MaxMulAlgebra> for CpuBackend (orphan OK)
 
+[workspace crate: tenferro-tropical-capi]  (POC exists)
+← tenferro-device, tenferro-capi [rlib], tenferro-tropical
+Separate .so; reuses TfeTensorF64 handles from tenferro-capi
+9 FFI functions: 3 algebras × (einsum + rrule + frule)
+
 [separate workspace: tenferro-structured-rs]
 tenferro-blocksparse ← tenferro-tensor
 tenferro-diag        ← tenferro-tensor
@@ -391,6 +417,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 | tenferro-linalg | ndtensors-rs (linalg) | **POC** API skeleton: SVD/QR/LU/eigen + full AD rules (tracked, dual, rrule, frule) |
 | tenferro-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | **POC** API skeleton: einsum + SVD, f64 only, stateless rrule/frule (14 functions) |
 | tenferro-tropical | omeinsum-rs (algebra) | **POC** API skeleton: MaxPlus, MinPlus, MaxMul scalars + algebra markers + TensorPrims impls + ArgmaxTracker |
+| tenferro-tropical-capi | **New** (POC) | C-API for tropical einsum: 9 FFI functions (3 algebras × einsum/rrule/frule), reuses TfeTensorF64 from tenferro-capi |
 | tenferro-hdf5 | New, uses hdf5-rt | Tensor\<T\> HDF5 I/O via runtime library loading [future] |
 | burn-tenferro | New | Burn Backend bridge [future] |
 | **tenferro-structured-rs (separate workspace):** | | |
@@ -416,7 +443,7 @@ burn-tenferro ← tenferro-tensor, burn-backend
 
 > **Detailed API designs**: See [tenferro Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_design.md) in tenferro-rs for full per-crate API designs including code examples.
 
-The POC implements ten crates:
+The POC implements eleven crates:
 
 - **tenferro-device** — `LogicalMemorySpace` (MainMemory, PinnedMemory, GpuMemory, ManagedMemory) + `ComputeDevice` enums, `OpKind`, `preferred_compute_devices()`, shared `Error`/`Result` types. DLPack-aligned device model.
 - **tenferro-algebra** — `HasAlgebra` trait (maps scalar T → algebra A), `Semiring` trait, `Standard` type for standard arithmetic. `Scalar` trait (blanket impl, replaces strided-traits' `Scalar`). `Conjugate` trait for complex conjugation.
@@ -426,7 +453,8 @@ The POC implements ten crates:
 - **tenferro-tensor** — `Tensor<T>` with `DataBuffer<T>` (opaque struct: Owned `Vec<T>` or External with DLPack release callback), shape/strides, zero-copy view ops (permute, broadcast, diagonal, reshape), `CompletionEvent` for async execution, `TensorView<'a, T>` for borrowed views, consuming variants (`into_contiguous`, `into_conj`). Implements `Differentiable` for `Tensor<T>`. No strided-rs dependency.
 - **tenferro-einsum** — High-level einsum on `Tensor<T>` with string notation, parenthesized contraction order, `Subscripts`, `ContractionTree`. Nine API functions: allocating, accumulating (`_into` with alpha/beta), and consuming (`_owned` for buffer reuse). Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`.
 - **tenferro-linalg** — Tensor-level SVD, QR, LU, eigendecomposition with left/right dimension indices (matricize → decompose → unmatricize pattern). Full AD rules: `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule`, and same for QR/LU/eigen.
-- **tenferro-capi** — C-API (FFI) for Julia/Python: opaque `TfeTensorF64` handle, `tfe_status_t` error codes. 16 functions: tensor lifecycle (8) + DLPack interop (2: `tfe_tensor_f64_to_dlpack`, `tfe_tensor_f64_from_dlpack`) + einsum (3) + SVD (3). DLPack v1.0 zero-copy tensor exchange (CPU/CUDA/ROCm/managed memory). Stateless `rrule`/`frule` only (no tape exposure). f64 only in POC phase.
+- **tenferro-capi** — C-API (FFI) for Julia/Python: opaque `TfeTensorF64` handle, `tfe_status_t` error codes. 16 functions: tensor lifecycle (8) + DLPack interop (2: `tfe_tensor_f64_to_dlpack`, `tfe_tensor_f64_from_dlpack`) + einsum (3) + SVD (3). DLPack v1.0 zero-copy tensor exchange (CPU/CUDA/ROCm/managed memory). Stateless `rrule`/`frule` only (no tape exposure). f64 only in POC phase. Produces rlib in addition to cdylib/staticlib, enabling type sharing with extension capi crates.
+- **tenferro-tropical-capi** — C-API (FFI) for tropical einsum: extends `tenferro-capi` with tropical-specific functions. 9 functions: 3 algebras (MaxPlus, MinPlus, MaxMul) × 3 functions (einsum, rrule, frule). Reuses `TfeTensorF64` handles since `MaxPlus<f64>` is `#[repr(transparent)]` (same memory layout as f64). Algebra is selected by function name (`tfe_tropical_einsum_maxplus_f64`, etc.), not by handle type. Produces a separate `.so` from `tenferro-capi`; C consumers load both.
 - **tenferro-tropical** — Tropical semiring tensor operations: `MaxPlus<T>` (⊕=max, ⊗=+), `MinPlus<T>` (⊕=min, ⊗=+), `MaxMul<T>` (⊕=max, ⊗=×) scalar wrappers with `#[repr(transparent)]`. Algebra markers (`MaxPlusAlgebra`, `MinPlusAlgebra`, `MaxMulAlgebra`) with `HasAlgebra` and `Semiring` impls (f64 only for POC). `TensorPrims` impls for `CpuBackend` (all three algebras, orphan rule compatible). `TropicalPlan<T>` for plan-based execution. `ArgmaxTracker` for tropical backward pass (AD).
 
 ---
@@ -609,7 +637,8 @@ primitive operation:
 
 > **POC API skeleton exists**: 16 functions covering tensor lifecycle,
 > DLPack interop, einsum, and SVD (including AD rules). f64 only,
-> stateless rrule/frule.
+> stateless rrule/frule. Produces rlib for type sharing with
+> `tenferro-tropical-capi` (shared types: `TfeTensorF64`, `tfe_status_t`).
 
 ### Design Principles
 
@@ -1092,10 +1121,11 @@ cd tenferro-rs && cargo test --workspace
 - Complex SVD test
 - AD rule correctness: finite-difference vs rrule/frule for all decompositions
 
-**tenferro-capi**:
+**tenferro-capi + tenferro-tropical-capi**:
 - Round-trip test: Julia -> C API -> Rust -> C API -> Julia
 - Einsum rrule/frule roundtrip test
 - SVD rrule/frule roundtrip test
+- Tropical einsum roundtrip test (MaxPlus, MinPlus, MaxMul)
 - ChainRules.jl integration test with Zygote.jl
 
 ### After future phases:
@@ -1130,11 +1160,12 @@ cd tenferro-rs && cargo test --workspace
 | faer bridge | `ndtensors-rs/.../faer_interop.rs` | tenferro-linalg (POC API exists, implementation [future]) |
 | contract_vjp | `ndtensors-rs/.../contract/naive.rs` | tenferro-einsum einsum_rrule (POC API exists) |
 | TrackedTensor | `ndtensors-rs/.../autodiff/tensor.rs` | chainrules TrackedTensor (POC API exists) |
-| C API patterns | `tensor4all-rs/crates/tensor4all-capi/src/` | tenferro-capi (POC API exists: 14 functions) |
+| C API patterns | `tensor4all-rs/crates/tensor4all-capi/src/` | tenferro-capi (POC: 16 functions) + tenferro-tropical-capi (POC: 9 functions) |
 | Tropical scalars | `tenferro-rs/tenferro-tropical/src/scalar.rs` | MaxPlus, MinPlus, MaxMul wrappers (POC API exists) |
 | Tropical algebra | `tenferro-rs/tenferro-tropical/src/algebra.rs` | Algebra markers + HasAlgebra + Semiring impls (POC API exists) |
 | Tropical prims | `tenferro-rs/tenferro-tropical/src/prims.rs` | TensorPrims impls for CpuBackend (POC API exists) |
 | Tropical argmax | `tenferro-rs/tenferro-tropical/src/argmax.rs` | ArgmaxTracker for AD backward pass (POC API exists) |
+| Tropical C-API | `tenferro-rs/tenferro-tropical-capi/src/lib.rs` | 9 FFI functions for tropical einsum (POC API exists) |
 
 ---
 
