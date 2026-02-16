@@ -29,7 +29,7 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 7. Can optionally bridge to Burn for NN workloads
 
 **Key design principles**:
-- **strided-rs as foundation**: The general-purpose strided array crates (`strided-traits`, `strided-view`, `strided-kernel`) remain in an independent `strided-rs` workspace. They have no BLAS dependency and can be used standalone. `tenferro-rs` depends on them but does not absorb them.
+- **strided-rs as CPU backend foundation**: The general-purpose strided array crates (`strided-traits`, `strided-view`, `strided-kernel`) remain in an independent `strided-rs` workspace. They have no BLAS dependency and can be used standalone. Only `tenferro-prims` depends on strided-rs directly — higher-level crates (`tenferro-tensor`, `tenferro-einsum`, `tenferro-linalg`) use tenferro-owned traits (`Scalar`, `Conjugate` in `tenferro-algebra`) instead of strided-traits.
 - **cuTENSOR/hipTensor-compatible protocol**: `tenferro-prims` defines a unified `TensorPrims<A>` trait parameterized by algebra `A`, with a cuTENSOR-compatible describe → plan → execute pattern for all operations. CPU, NVIDIA, and AMD backends implement the same trait.
 - **Algebra-parameterized dispatch**: `TensorPrims<A>` is parameterized by algebra (e.g., `Standard`, `MaxPlus`). The `HasAlgebra` trait on scalar types enables automatic algebra inference: `Tensor<f64>` → `Standard`, `Tensor<MaxPlus<f64>>` → `MaxPlus`. Users can extend the system by defining new algebras in their own crates (orphan rule compatible).
 - **Runtime GPU discovery**: GPU vendor libraries (cuTENSOR, hipTensor) are loaded at runtime via `dlopen`. The caller (Julia, Python) provides the `.so` path. No Cargo feature flags for GPU vendor selection.
@@ -52,6 +52,7 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 │ Layer 5: C-API (tenferro-capi)                     [POC]     │
 │   Opaque TfeTensorF64 handle, tfe_status_t error codes       │
 │   Tensor lifecycle (8 functions), einsum (3), SVD (3)        │
+│   DLPack v1.0 zero-copy tensor exchange (2 functions)        │
 │   Stateless rrule/frule only (no tape exposure)              │
 │   f64 only in POC phase                                      │
 └──────────────────────┬──────────────────────────────────────┘
@@ -76,9 +77,10 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 │ Layer 3: Tensor Type (tenferro-tensor)             [POC]     │
 │   Tensor<T> = DataBuffer + dims + strides + offset + device  │
 │   Zero-copy view ops: permute, broadcast, diagonal, reshape  │
-│   Bridge to strided-rs via view() / view_mut()               │
-│   DataBuffer<T> enum: Cpu(StridedArray<T>)                   │
+│   DataBuffer<T>: opaque struct (Owned Vec<T> or External     │
+│     via DLPack with release callback)                        │
 │   MemoryOrder (ColumnMajor, RowMajor) for allocation only    │
+│   No strided-rs dependency (uses tenferro-algebra Scalar)    │
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -97,10 +99,11 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 │ Shared Infrastructure                                        │
 │                                                              │
 │   Device Layer (tenferro-device)                    [POC]    │
-│   LogicalMemorySpace + ComputeDevice enums                    │
+│   LogicalMemorySpace (MainMemory, PinnedMemory, GpuMemory,   │
+│     ManagedMemory) + ComputeDevice enums                     │
 │   preferred_compute_devices(space, op_kind)                   │
 │   Error types (thiserror): ShapeMismatch, RankMismatch,      │
-│     DeviceError, InvalidArgument, Strided                    │
+│     DeviceError, InvalidArgument, StrideError                │
 │   Result<T> type alias                                       │
 │                                                              │
 │   AD Core (chainrules-core)                         [POC]    │
@@ -148,7 +151,7 @@ strided-rs/ (independent workspace) ── Foundation crates stay as-is ──�
 │  General-purpose strided array library. No BLAS dependency.
 │  Can be used standalone by projects other than tenferro.
 │
-├── strided-traits       # ScalarBase, ElementOp traits
+├── strided-traits       # Scalar, ElementOp traits
 ├── strided-view         # StridedArray, StridedView, StridedViewMut (zero-copy strided views)
 └── strided-kernel       # Cache-optimized map/reduce/broadcast kernels
 
@@ -156,16 +159,20 @@ tenferro-rs/ (workspace) ── 9 POC crates ───────────�
 │  Depends on strided-rs.
 │
 ├── tenferro-device      # LogicalMemorySpace + ComputeDevice enums
+│                        #   LogicalMemorySpace: MainMemory, PinnedMemory,
+│                        #     GpuMemory { device_id }, ManagedMemory
 │                        #   preferred_compute_devices(space, op_kind)
 │                        #   Error (thiserror): ShapeMismatch, RankMismatch,
-│                        #     DeviceError, InvalidArgument, Strided
+│                        #     DeviceError, InvalidArgument, StrideError
 │                        #   Result<T> type alias
-│                        #   Depends on: strided-view (for StridedError), thiserror
+│                        #   Depends on: thiserror
 │
 ├── tenferro-algebra     # HasAlgebra trait, Semiring trait, Standard type
+│                        #   Scalar trait (blanket impl, replaces Scalar)
+│                        #   Conjugate trait (complex conjugation)
 │                        #   HasAlgebra: maps T → A (f64 → Standard, etc.)
 │                        #   Minimal algebra foundation for TensorPrims<A>
-│                        #   Depends on: strided-traits, num-complex
+│                        #   Depends on: num-complex, num-traits
 │
 ├── chainrules-core      # Core AD traits (like Julia's ChainRulesCore.jl)
 │                        #   Differentiable trait (tangent space definition)
@@ -194,15 +201,16 @@ tenferro-rs/ (workspace) ── 9 POC crates ───────────�
 │                        #     strided-view, strided-traits
 │
 ├── tenferro-tensor      # Tensor<T> = DataBuffer + dims + strides + offset + device
-│                        #   DataBuffer<T> enum: Cpu(StridedArray<T>)
+│                        #   DataBuffer<T>: opaque struct (Owned Vec<T> or External
+│                        #     with release callback for DLPack zero-copy import)
 │                        #   MemoryOrder: ColumnMajor, RowMajor (allocation-time only)
-│                        #   Constructors: zeros, ones, from_slice, from_strided_array
-│                        #   View ops: view(), view_mut(), permute, broadcast,
-│                        #     diagonal, reshape (zero-copy metadata ops)
+│                        #   Constructors: zeros, ones, from_slice, from_vec
+│                        #   View ops: permute, broadcast, diagonal, reshape
+│                        #     (zero-copy metadata ops)
 │                        #   Data ops: contiguous, into_contiguous, is_contiguous, conj
 │                        #   impl Differentiable for Tensor<T>
-│                        #   Depends on: tenferro-device, strided-view, strided-traits,
-│                        #     num-traits, chainrules-core
+│                        #   No strided-rs dependency (uses Scalar from tenferro-algebra)
+│                        #   Depends on: tenferro-device, tenferro-algebra, chainrules-core
 │
 ├── tenferro-einsum      # High-level einsum on Tensor<T>
 │                        #   String notation: einsum("ij,jk->ik", &[&a, &b])
@@ -215,27 +223,29 @@ tenferro-rs/ (workspace) ── 9 POC crates ───────────�
 │                        #   Einsum AD: tracked_einsum, dual_einsum, einsum_rrule,
 │                        #     einsum_frule, einsum_hvp
 │                        #   Depends on: tenferro-device, tenferro-algebra,
-│                        #     tenferro-prims, tenferro-tensor, strided-traits, chainrules
+│                        #     tenferro-prims, tenferro-tensor, chainrules
 │
 ├── tenferro-linalg      # Tensor-level linear algebra decompositions
 │                        #   SVD, QR, LU, eigen with left/right dim indices
 │                        #   Matricize → decompose → unmatricize pattern
 │                        #   SvdOptions (max_rank, cutoff) for truncated SVD
 │                        #   Full AD: tracked_*, dual_*, *_rrule, *_frule
-│                        #   Depends on: tenferro-device, tenferro-tensor,
-│                        #     strided-traits, chainrules
+│                        #   Depends on: tenferro-device, tenferro-algebra,
+│                        #     tenferro-tensor, chainrules
 │
 └── tenferro-capi        # C-API (FFI) for Julia/Python
                          #   Opaque TfeTensorF64 handle, tfe_status_t error codes
                          #   tfe_ prefix, _f64 suffix naming convention
                          #   Tensor lifecycle: from_data, zeros, clone, release,
                          #     ndim, shape, len, data (8 functions)
+                         #   DLPack v1.0 interop: tfe_tensor_f64_to_dlpack,
+                         #     tfe_tensor_f64_from_dlpack (2 functions, zero-copy)
                          #   Einsum: tfe_einsum_f64, tfe_einsum_rrule_f64,
                          #     tfe_einsum_frule_f64 (3 functions)
                          #   SVD: tfe_svd_f64, tfe_svd_rrule_f64,
                          #     tfe_svd_frule_f64 (3 functions)
                          #   Stateless rrule/frule only (no tape exposure)
-                         #   f64 only, column-major, copy semantics at boundary
+                         #   f64 only, DLPack for zero-copy interop
                          #   Depends on: tenferro-device, tenferro-tensor,
                          #     tenferro-einsum, tenferro-linalg
 ```
@@ -282,11 +292,11 @@ tensor4all-rs/ (workspace) ── Tensor network algorithms ────
 strided-rs (independent workspace):
 strided-traits → strided-view → strided-kernel
 
-tenferro-rs (workspace, depends on strided-rs):
+tenferro-rs (workspace; only tenferro-prims depends on strided-rs):
 
 chainrules-core              tenferro-device              tenferro-algebra
-  (← thiserror)               (← strided-view,            (← strided-traits,
-    │                           ← thiserror)                ← num-complex)
+  (← thiserror)               (← thiserror)               (← num-complex,
+    │                            │                           ← num-traits)
     │                            │                            │
     ↓                            ├────────────┐       ┌───────┤
 chainrules                       │            ↓       ↓       │
@@ -296,18 +306,16 @@ chainrules                       │            ↓       ↓       │
     │                            │            │               │
     │                            ↓            │               │
     │                       tenferro-tensor    │               │
-    │                         (← strided-view, │               │
-    │                          ← strided-traits,               │
-    │                          ← num-traits,   │               │
+    │                         (← tenferro-algebra,             │
     │                          ← chainrules-core)              │
     │                            │            │               │
     │                            └──────┬─────┘       ┌───────┘
     │                                   ↓             ↓
     └──────────────────────────→ tenferro-einsum
-    │                              (← strided-traits, ← chainrules)
+    │                              (← tenferro-algebra, ← chainrules)
     │
     └──────────────────────────→ tenferro-linalg
-    │                              (← strided-traits, ← chainrules,
+    │                              (← tenferro-algebra, ← chainrules,
     │                               ← tenferro-tensor, ← tenferro-device)
     │
     └──────────────────────────→ tenferro-capi
@@ -392,15 +400,15 @@ burn-tenferro ← tenferro-tensor, burn-backend
 
 The POC implements nine crates:
 
-- **tenferro-device** — `LogicalMemorySpace` + `ComputeDevice` enums, `OpKind`, `preferred_compute_devices()`, shared `Error`/`Result` types.
-- **tenferro-algebra** — `HasAlgebra` trait (maps scalar T → algebra A), `Semiring` trait, `Standard` type for standard arithmetic.
+- **tenferro-device** — `LogicalMemorySpace` (MainMemory, PinnedMemory, GpuMemory, ManagedMemory) + `ComputeDevice` enums, `OpKind`, `preferred_compute_devices()`, shared `Error`/`Result` types. DLPack-aligned device model.
+- **tenferro-algebra** — `HasAlgebra` trait (maps scalar T → algebra A), `Semiring` trait, `Standard` type for standard arithmetic. `Scalar` trait (blanket impl, replaces strided-traits' `Scalar`). `Conjugate` trait for complex conjugation.
 - **chainrules-core** — Core AD traits (like Julia's ChainRulesCore.jl): `Differentiable` (tangent space), `ReverseRule<V>` (pullback), `ForwardRule<V>` (pushforward), `AutodiffError`, `NodeId`, `SavePolicy`.
 - **chainrules** — AD engine (like Julia's Zygote.jl): `Tape<V>`, `TrackedTensor<V>`, `DualTensor<V>`, `pullback()`, `hvp()` (forward-over-reverse HVP), `Gradients<V>`, `PullbackPlan<V>`. Re-exports all of `chainrules-core`.
 - **tenferro-prims** — `TensorPrims<A>` trait with cuTENSOR-compatible plan-based execution. Core ops (batched_gemm, reduce, trace, permute, anti_trace, anti_diag) + dynamically-queried extended ops (contract, elementwise_mul). `CpuBackend` implements `TensorPrims<Standard>`.
-- **tenferro-tensor** — `Tensor<T>` with `DataBuffer<T>`, shape/strides, zero-copy view ops (permute, broadcast, diagonal, reshape), `CompletionEvent` for async execution, `TensorView<'a, T>` for borrowed views, consuming variants (`into_contiguous`, `into_conj`). Implements `Differentiable` for `Tensor<T>`.
+- **tenferro-tensor** — `Tensor<T>` with `DataBuffer<T>` (opaque struct: Owned `Vec<T>` or External with DLPack release callback), shape/strides, zero-copy view ops (permute, broadcast, diagonal, reshape), `CompletionEvent` for async execution, `TensorView<'a, T>` for borrowed views, consuming variants (`into_contiguous`, `into_conj`). Implements `Differentiable` for `Tensor<T>`. No strided-rs dependency.
 - **tenferro-einsum** — High-level einsum on `Tensor<T>` with string notation, parenthesized contraction order, `Subscripts`, `ContractionTree`. Nine API functions: allocating, accumulating (`_into` with alpha/beta), and consuming (`_owned` for buffer reuse). Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`.
 - **tenferro-linalg** — Tensor-level SVD, QR, LU, eigendecomposition with left/right dimension indices (matricize → decompose → unmatricize pattern). Full AD rules: `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule`, and same for QR/LU/eigen.
-- **tenferro-capi** — C-API (FFI) for Julia/Python: opaque `TfeTensorF64` handle, `tfe_status_t` error codes. 14 functions: tensor lifecycle (8) + einsum (3) + SVD (3). Stateless `rrule`/`frule` only (no tape exposure). f64 only in POC phase.
+- **tenferro-capi** — C-API (FFI) for Julia/Python: opaque `TfeTensorF64` handle, `tfe_status_t` error codes. 16 functions: tensor lifecycle (8) + DLPack interop (2: `tfe_tensor_f64_to_dlpack`, `tfe_tensor_f64_from_dlpack`) + einsum (3) + SVD (3). DLPack v1.0 zero-copy tensor exchange (CPU/CUDA/ROCm/managed memory). Stateless `rrule`/`frule` only (no tape exposure). f64 only in POC phase.
 
 ---
 
@@ -418,7 +426,7 @@ pub struct MaxMul<T>(pub T);     // sem_add = max, sem_mul = *
 impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus; }
 
 impl TensorPrims<MaxPlus> for CpuBackend {
-    type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Plan<T: Scalar> = TropicalPlan<T>;
     // SIMD-optimized tropical-gemm kernels
     ...
 }
@@ -459,7 +467,7 @@ All decomposition functions will:
 3. Call faer's decomposition
 4. Wrap result back into Tensor
 
-**Trait bound**: `T: Scalar + faer::ComplexField` (enforced here, not in strided-traits/tenferro-tensor).
+**Trait bound**: `T: Scalar + faer::ComplexField` (enforced here, not in tenferro-algebra/tenferro-tensor).
 
 **GPU path**: cuSOLVER/rocSOLVER via runtime-loaded vendor library (same dlopen pattern).
 
@@ -570,8 +578,9 @@ primitive operation:
 
 ## tenferro-capi (POC exists)
 
-> **POC API skeleton exists**: 14 functions covering tensor lifecycle,
-> einsum, and SVD (including AD rules). f64 only, stateless rrule/frule.
+> **POC API skeleton exists**: 16 functions covering tensor lifecycle,
+> DLPack interop, einsum, and SVD (including AD rules). f64 only,
+> stateless rrule/frule.
 
 ### Design Principles
 
@@ -579,11 +588,11 @@ primitive operation:
 - **Naming convention**: `tfe_` prefix (tenferro), `_f64` suffix for scalar type.
 - **Status codes**: `tfe_status_t` (i32) — `TFE_SUCCESS` (0), `TFE_INVALID_ARGUMENT` (-1), `TFE_SHAPE_MISMATCH` (-2), `TFE_INTERNAL_ERROR` (-3).
 - **Stateless AD rules**: Only `rrule` (VJP) and `frule` (JVP) are exposed. `Tape` / `TrackedTensor` / `DualTensor` are **not** exposed. Host languages manage their own AD tapes (ChainRules.jl, PyTorch autograd, JAX custom_vjp).
-- **Column-major order** (Julia/BLAS convention) for data layout.
-- **Copy semantics** at FFI boundary: `tfe_tensor_f64_from_data` copies the caller's data.
+- **DLPack v1.0** for zero-copy tensor exchange (CPU, CUDA, ROCm, managed memory). Memory layout communicated via strides (no explicit memory order parameter).
+- **Copy semantics** for convenience functions: `tfe_tensor_f64_from_data` copies the caller's data. For zero-copy, use DLPack.
 - **Panic safety**: All functions use `catch_unwind` and convert panics to `TFE_INTERNAL_ERROR`.
 
-### Implemented API (14 functions)
+### Implemented API (16 functions)
 
 ```c
 // Opaque type
@@ -602,6 +611,12 @@ size_t tfe_tensor_f64_ndim(const tfe_tensor_f64* tensor);
 void tfe_tensor_f64_shape(const tfe_tensor_f64* tensor, size_t* out_shape);
 size_t tfe_tensor_f64_len(const tfe_tensor_f64* tensor);
 const double* tfe_tensor_f64_data(const tfe_tensor_f64* tensor);
+
+// DLPack interop (2 functions) — zero-copy tensor exchange
+DLManagedTensorVersioned* tfe_tensor_f64_to_dlpack(
+    tfe_tensor_f64* tensor, tfe_status_t* status);  // consuming
+tfe_tensor_f64* tfe_tensor_f64_from_dlpack(
+    DLManagedTensorVersioned* managed, tfe_status_t* status);  // takes ownership
 
 // Einsum (3 functions) — uses string notation
 tfe_tensor_f64* tfe_einsum_f64(const char* subscripts,
@@ -799,14 +814,14 @@ in hot loops.
 use tenferro_tensor::Tensor;
 use mdarray::Array;
 
-impl<T: ScalarBase> From<&Tensor<T>> for Array<T, Dyn> {
+impl<T: Scalar> From<&Tensor<T>> for Array<T, Dyn> {
     fn from(tensor: &Tensor<T>) -> Self {
         let t = tensor.contiguous(MemoryOrder::RowMajor);  // mdarray is row-major
         Array::from_slice(t.as_slice(), t.dims())
     }
 }
 
-impl<T: ScalarBase> From<&Array<T, Dyn>> for Tensor<T> {
+impl<T: Scalar> From<&Array<T, Dyn>> for Tensor<T> {
     fn from(array: &Array<T, Dyn>) -> Self {
         Tensor::from_slice(array.as_slice(), array.shape(), MemoryOrder::RowMajor).unwrap()
     }
@@ -818,14 +833,14 @@ impl<T: ScalarBase> From<&Array<T, Dyn>> for Tensor<T> {
 use tenferro_tensor::Tensor;
 use ndarray::ArrayD;
 
-impl<T: ScalarBase> From<&Tensor<T>> for ArrayD<T> {
+impl<T: Scalar> From<&Tensor<T>> for ArrayD<T> {
     fn from(tensor: &Tensor<T>) -> Self {
         let t = tensor.contiguous(MemoryOrder::RowMajor);  // ndarray is row-major
         ArrayD::from_shape_vec(t.dims().to_vec(), t.as_slice().to_vec()).unwrap()
     }
 }
 
-impl<T: ScalarBase> From<&ArrayD<T>> for Tensor<T> {
+impl<T: Scalar> From<&ArrayD<T>> for Tensor<T> {
     fn from(array: &ArrayD<T>) -> Self {
         // ndarray may not be contiguous; make contiguous first
         let standard = array.as_standard_layout();
@@ -852,7 +867,7 @@ tensor4all-rs without pulling in application-level dependencies.
 ### tenferro-diag
 
 ```rust
-pub struct DiagTensor<T: ScalarBase> {
+pub struct DiagTensor<T: Scalar> {
     diag: Tensor<T>,
     full_sizes: Vec<usize>,
 }
@@ -863,7 +878,7 @@ pub struct DiagTensor<T: ScalarBase> {
 Follows the **ITensors.jl/NDTensors pattern**: all blocks in a **single contiguous `DataBuffer`** with block offset mapping.
 
 ```rust
-pub struct BlockSparseTensor<T: ScalarBase> {
+pub struct BlockSparseTensor<T: Scalar> {
     buffer: DataBuffer<T>,
     block_offsets: HashMap<BlockIndex, usize>,
     block_sizes: HashMap<BlockIndex, Vec<usize>>,
@@ -1000,8 +1015,8 @@ Users extend the system at the appropriate level:
 
 | Level | What to implement | Result |
 |-------|-------------------|--------|
-| `ScalarBase` only | Basic trait bounds | Einsum via naive loop, map/reduce work |
-| `ScalarBase` + custom GEMM | Custom `batched_gemm` in tenferro-prims | Einsum decomposes to diag → trace → permute → custom batched_gemm |
+| `Scalar` only | Basic trait bounds | Einsum via naive loop, map/reduce work |
+| `Scalar` + custom GEMM | Custom `batched_gemm` in tenferro-prims | Einsum decomposes to diag → trace → permute → custom batched_gemm |
 | Full `TensorPrims` | Custom backend implementation | Complete control over all core operations |
 | Full `TensorPrims<A>` with extensions | Custom backend with extended ops (contract, elementwise_mul) | Maximum performance (has_extension_for returns true) |
 
@@ -1070,9 +1085,9 @@ cd tenferro-rs && cargo test --workspace
 
 | Component | Source | Destination |
 |---|---|---|
-| ScalarBase trait | `strided-rs/strided-traits/src/scalar.rs` | Stays in strided-rs; used by tenferro via dependency |
-| ElementOp | `strided-rs/strided-traits/src/element_op.rs` | Stays in strided-rs; used by tenferro via dependency |
-| StridedArray/View | `strided-rs/strided-view/src/` | Stays in strided-rs; used directly in tenferro-tensor (DataBuffer), tenferro-prims (TensorPrims), tenferro-device (StridedError) |
+| Scalar trait | `tenferro-rs/tenferro-algebra/src/lib.rs` | tenferro-owned (replaces strided-traits' ScalarBase). strided-rs' ScalarBase still used internally by tenferro-prims |
+| Conjugate trait | `tenferro-rs/tenferro-algebra/src/lib.rs` | tenferro-owned (replaces strided-traits' ElementOpApply) |
+| StridedArray/View | `strided-rs/strided-view/src/` | Stays in strided-rs; used directly in tenferro-prims only (not tensor/device/einsum/linalg) |
 | map/reduce kernels | `strided-rs/strided-kernel/src/` | Stays in strided-rs; tenferro-prims will depend on it |
 | einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | **Absorbed** into tenferro-prims `PrimDescriptor::Contract` (CPU contraction) [future] |
 | BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | **Absorbed** into tenferro-prims `TensorPrims::batched_gemm` [future] |
