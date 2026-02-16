@@ -569,6 +569,49 @@ If you need to decompose a tensor along arbitrary legs:
 - `ndtensors-rs/crates/ndtensors/src/backend/faer_interop.rs` -- faer bridge pattern
 - `ndtensors-rs/crates/ndtensors/src/linalg/` -- SVD, QR implementations + AD rules
 
+### Feature subset plan (based on `torch.linalg` analysis)
+
+Following the [libtorch reference](libtorch_reference.md), the implementation
+plan is prioritized as follows (see also
+[Issue #12](https://github.com/tensor4all/tensor4all-meta/issues/12)):
+
+**P0 — POC (current skeleton)**:
+
+| Function | Description | AD (rrule/frule) |
+|---|---|---|
+| `svd` | SVD decomposition | Yes / Yes |
+| `qr` | QR decomposition | Yes / Yes |
+| `lu` | LU with partial pivoting | Yes / Yes |
+| `eigen` | Eigendecomposition (general) | Yes / Yes |
+
+**P1 — Post-POC, high value**:
+
+| Function | Description | Notes |
+|---|---|---|
+| `svdvals` | Singular values only | Numerically stable gradients; faster |
+| `eigvals` | Eigenvalues only | Faster than full decomposition |
+| `eigh` | Eigendecomp (Hermitian) | More stable for symmetric matrices |
+| `cholesky` | Cholesky (Hermitian PD) | For positive-definite systems |
+| `solve` | Solve AX = B | Common; can use LU internally |
+| `solve_triangular` | Triangular solve | Needed internally for some AD rules |
+| `inv` | Matrix inverse | Common (but `solve` often preferred) |
+| `det` / `slogdet` | Determinant / sign+log-abs-det | `slogdet` important for AD stability |
+| `norm` / `vector_norm` | Vector/matrix norms | Useful; can be built from reduce ops |
+
+**P2 — Lower priority**:
+
+| Function | Description | Notes |
+|---|---|---|
+| `lstsq` | Least squares | Less common in tensor networks |
+| `pinv` | Moore-Penrose pseudoinverse | Can be built from SVD |
+| `matrix_rank` | Numerical rank | Diagnostic tool |
+| `cond` | Condition number | Diagnostic tool |
+| `matrix_norm` | Matrix norms (Frobenius, nuclear, etc.) | Specialized |
+
+**Not planned**: `lu_factor`, `lu_solve`, `ldl_*`, `tensorsolve`, `tensorinv`,
+`matrix_power`, `multi_dot`, `cross`, `householder_product`, `_ex` variants
+(Rust uses `Result<>` natively).
+
 ---
 
 ## chainrules-core + chainrules (POC exists)
