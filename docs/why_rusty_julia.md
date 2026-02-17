@@ -2,7 +2,11 @@
 
 This note explains why we are building **tenferro-rs** as a Rust core with a C API, even when the primary users may be Julia tensor network libraries.
 
-A recurring theme is *feedback rate*: how many edit→run→observe cycles a developer (human or AI agent) can complete per unit time. As agentic coding becomes mainstream, feedback rate is a first class design constraint, and it shapes many of the choices below.
+Until recently, asking computational physicists to maintain a large Rust codebase would have been unrealistic. Rust's ownership model and strict compiler are powerful, but the learning curve is steep for scientists whose primary job is physics, not systems programming. What changed is **agentic coding**: AI agents (Claude Code, Cursor, etc.) now handle the mechanical complexity of Rust (ownership annotations, lifetime bounds, trait implementations) while **humans focus on algorithms, abstractions, design, and correctness**. The compiler then validates everything the agent wrote, catching memory and concurrency bugs at compile time rather than at runtime.
+
+This shift reveals Rust's strengths in a new light. A compiled Rust binary has near-zero startup time with no JIT and no precompile wait. That means an AI agent can edit code, run the full test suite, and get feedback in seconds, a tight loop that is hard to achieve with large Julia codebases where precompilation latency is a bottleneck. We call this **feedback rate** (edit→run→observe cycles per unit time), and it is a first class design constraint throughout this document.
+
+The result is a combination that would have seemed unlikely a few years ago: **Julia for the frontend, Rust for the backend**, each playing to its strengths, with AI agents bridging the gap.
 
 Repository: https://github.com/tensor4all/tenferro-rs
 API docs: https://tensor4all.org/tenferro-rs/
@@ -54,9 +58,9 @@ In Julia, we can integrate via ChainRules style rules in the wrapper layer. In P
 
 Rust is a good fit here because the resulting binary has no JIT and no GC, so any language can call AD primitives via C FFI without pulling in a heavy runtime. For example, correct AD rules for complex SVD are nontrivial, and some existing implementations get them wrong. Having one well tested implementation of these delicate rules in a small, self contained binary benefits every host language.
 
-## Why not just use libtorch (or Torch.jl)?
+## Why not just use libtorch?
 
-We see libtorch/Torch.jl as excellent tools, especially for deep learning workloads, but they are not a perfect fit for the role we want a tensor network backend to play.
+We see `libtorch` with its C++ API as an excellent tool, especially for deep learning workloads, but it is not a perfect fit for the role we want a tensor network backend to play.
 
 The main reason is that libtorch's autograd is tightly coupled to its own Tensor type with fixed dtypes. It cannot natively differentiate through custom algebraic types (e.g., symmetric tensors with quantum number labels, block sparse structures). Tensor network workloads often need AD over such types, which is why tenferro-rs implements its own AD primitives from the ground up.
 
