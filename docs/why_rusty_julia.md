@@ -58,9 +58,7 @@ Rust is a good fit here because the resulting binary has no JIT and no GC, so an
 
 We see libtorch/Torch.jl as excellent tools, especially for deep learning workloads, but they are not a perfect fit for the role we want a tensor network backend to play.
 
-The main reason is that libtorch's autograd is tightly coupled to its own Tensor type with fixed dtypes. It cannot natively differentiate through custom algebraic types (e.g., symmetric tensors with quantum number labels, block sparse structures). Tensor network workloads often need AD over such types.
-
-One could delegate AD to Julia (e.g., Zygote.jl) while using libtorch only as a tensor computation engine. However, for a backend that is meant to be self sufficient and language agnostic, AD over custom types needs to live inside the backend itself rather than relying on any particular host language.
+The main reason is that libtorch's autograd is tightly coupled to its own Tensor type with fixed dtypes. It cannot natively differentiate through custom algebraic types (e.g., symmetric tensors with quantum number labels, block sparse structures). Tensor network workloads often need AD over such types, which is why tenferro-rs implements its own AD primitives from the ground up.
 
 ## Why the two-language problem does not come back
 
@@ -76,9 +74,9 @@ In short, the combination does not recreate the pain of C++ interop because both
 
 ## Shifting the Julia/Rust boundary
 
-As AI agents and LLMs continue to improve, the way we interact with scientific computing code will change. Today, Julia serves as both the exploration layer and the orchestration layer. In the future, much of the orchestration (trial and error, hyperparameter search, workflow composition) will increasingly be handled by natural language interfaces driving AI agents directly.
+As AI agents and LLMs continue to improve, the way we interact with scientific computing code will change. Today, Julia serves as both the exploration layer and the orchestration layer. In the future, much of the orchestration (trial and error, hyperparameter search, workflow composition) will increasingly be handled by natural language interfaces driving AI agents directly. When that happens, the role of a dynamic programming language as a bridge between humans and machines is replaced by natural language, and the Julia surface layer shrinks.
 
-This means the Julia surface layer will likely shrink over time. The backend, on the other hand, will need to be more self sufficient: it must handle not just tensor operations but also AD over custom types, contraction planning, and decomposition strategies internally. Building these capabilities into a compiled, language agnostic backend now positions tenferro-rs for a future where the "frontend" is no longer a specific programming language but a natural language interface.
+One might argue that, for now, AD can be delegated to Julia (e.g., Zygote.jl) while the Rust backend handles only tensor computation. But as the boundary shifts, that Julia runtime dependency becomes unnecessary baggage. Building AD and contraction planning into the compiled backend from the start avoids a costly migration later.
 
 Fortunately, moving code between Julia and Rust is smoother than one might expect, because the two type systems are surprisingly similar. Neither language has classical OOP inheritance; both use trait based polymorphism (multiple dispatch + abstract types in Julia, traits in Rust), parametric types with type constraints (`where T <: Number` vs `where T: Num`), and composition over inheritance. This means abstractions written in Julia often translate almost directly into Rust traits and generics, making it practical to shift the boundary incrementally.
 
