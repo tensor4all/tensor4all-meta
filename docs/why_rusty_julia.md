@@ -22,7 +22,7 @@ If any of these sound familiar, a Rust backend can help:
 - You want to ship a library or a tool as a small, self-contained binary — without bundling the Julia runtime
 - An AI agent edits your code, but then you wait minutes for Julia to recompile before you can see if it worked
 
-For comparison: tenferro-rs (the full workspace including all dependencies) compiles from scratch in ~2 minutes. After that, the entire test suite runs in tens of seconds. In an agentic coding workflow where you need dozens of edit→test cycles per hour, this difference is decisive.
+For comparison: tenferro-rs compiles the full workspace from scratch in ~2 minutes — and that is the worst case. In practice, Rust's incremental compilation means only changed crates are recompiled, so a typical edit→test cycle takes tens of seconds. On CI, dependency build artifacts are cached, so only your own code is compiled on each run. Compilation is never the bottleneck.
 
 > **In the era of AI agents, rewriting is nearly free. The bottleneck is no longer writing code — it is deciding what to build.**
 
