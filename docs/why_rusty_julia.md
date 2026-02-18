@@ -131,7 +131,7 @@ Rust's workspace system keeps all crates in a single repository with a single CI
 
 Once these fundamental libraries are production-ready, any tensor network ecosystem can use them as a backend. Each ecosystem keeps its own abstractions (named indices, block sparse storage, quantum number grading) while delegating the heavy computation to the shared Rust core.
 
-As a concrete example, we have analyzed how the ITensor Julia ecosystem could do this — see the proposal: [ITensor backend analysis](docs/design/itensor_backend_analysis.md)
+As a concrete example, we have analyzed how the ITensor Julia ecosystem could do this — see the proposal: [ITensor backend analysis](design/itensor_backend_analysis.md)
 
 ### Invitation
 
