@@ -49,7 +49,7 @@ The reason to write this shared core in Rust rather than C or C++ is maintainabi
 
 Rust's workspace system lets you manage multiple related crates in a single repository and publish them to the registry together. In the Julia ecosystem, coordinating version bumps across multiple packages spread over separate repositories is not straightforward: registry registration is not instant, and synchronizing a batch of interdependent package upgrades can be tedious. AI agents can help with the mechanical parts, but the underlying workflow friction remains. A Rust workspace sidesteps this by keeping everything in one place with a single CI pipeline.
 
-### 4) Stable AD primitives that can serve multiple hosts
+### 4) Stable AD primitives that can serve multiple hosts — and a path to pure Rust AD
 
 Tensor network AD often needs careful control over primitives and performance.
 If the same VJP/JVP primitives exist in one backend, multiple ecosystems can share them.
@@ -57,6 +57,8 @@ If the same VJP/JVP primitives exist in one backend, multiple ecosystems can sha
 In Julia, we can integrate via ChainRules style rules in the wrapper layer. In Python, we can integrate via JAX custom_vjp/jvp or PyTorch autograd adapters. The key is that the **primitive implementation is shared**, even if each host exposes it differently.
 
 Rust is a good fit here because the resulting binary has no JIT and no GC, so any language can call AD primitives via C FFI without pulling in a heavy runtime. For example, correct AD rules for complex SVD are nontrivial, and some existing implementations get them wrong. Having one well tested implementation of these delicate rules in a small, self contained binary benefits every host language.
+
+Beyond primitives, tenferro-rs also provides a pure Rust tape based AD system that can compose these primitives into full computation graphs. This means host languages can start by using individual primitives through their own AD frameworks (e.g., Zygote.jl, JAX), but as the Julia/Rust boundary shifts over time (see below), high level AD orchestration can seamlessly move into the Rust backend as well — without a costly rewrite, because the same primitives underpin both modes.
 
 ## Why not just use libtorch?
 
@@ -79,8 +81,6 @@ In short, the combination does not recreate the pain of C++ interop because both
 ## Shifting the Julia/Rust boundary
 
 As AI agents and LLMs continue to improve, the way we interact with scientific computing code will change. Today, Julia serves as both the exploration layer and the orchestration layer. In the future, much of the orchestration (trial and error, hyperparameter search, workflow composition) will increasingly be handled by natural language interfaces driving AI agents directly. When that happens, the role of a dynamic programming language as a bridge between humans and machines is replaced by natural language, and the Julia surface layer shrinks.
-
-One might argue that, for now, AD can be delegated to Julia (e.g., Zygote.jl) while the Rust backend handles only tensor computation. But as the boundary shifts, that Julia runtime dependency becomes unnecessary baggage. Building AD and contraction planning into the compiled backend from the start avoids a costly migration later.
 
 Fortunately, moving code between Julia and Rust is smoother than one might expect, because the two type systems are surprisingly similar. Neither language has classical OOP inheritance; both use trait based polymorphism (multiple dispatch + abstract types in Julia, traits in Rust), parametric types with type constraints (`where T <: Number` vs `where T: Num`), and composition over inheritance. This means abstractions written in Julia often translate almost directly into Rust traits and generics, making it practical to shift the boundary incrementally.
 
