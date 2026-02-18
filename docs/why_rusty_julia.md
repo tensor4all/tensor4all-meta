@@ -17,19 +17,12 @@ API docs: https://tensor4all.org/tenferro-rs/
 
 If any of these sound familiar, a Rust backend can help:
 
-- `using ITensors` takes minutes every time you start a new Julia session
+- Running all tests of your Julia package takes more than 10 minutes
 - Your CI spends more time on precompilation than on actual tests
 - You want to ship a library or a tool as a small, self-contained binary — without bundling the Julia runtime
 - An AI agent edits your code, but then you wait minutes for Julia to recompile before you can see if it worked
 
-|  | Pure Julia (ITensors.jl) | Rust backend (tenferro-rs) |
-|--|--------------------------|----------------------------|
-| Cold start | ~10 min | ~2 min (full build from scratch) |
-| Edit→test cycle | minutes (recompilation) | tens of seconds |
-| Binary distribution | Julia runtime required | single `.so` / `.dylib` |
-| Migration cost | — | **nearly free with AI agents** (given a good design plan or a good existing codebase to port from) |
-
-In an agentic coding workflow where you need dozens of edit→test cycles per hour, this difference is decisive.
+For comparison: tenferro-rs (the full workspace including all dependencies) compiles from scratch in ~2 minutes. After that, the entire test suite runs in tens of seconds. In an agentic coding workflow where you need dozens of edit→test cycles per hour, this difference is decisive.
 
 > **In the era of AI agents, rewriting is nearly free. The bottleneck is no longer writing code — it is deciding what to build.**
 
