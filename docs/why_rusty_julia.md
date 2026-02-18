@@ -82,14 +82,15 @@ Pure Rust avoids the worst of this, for two reasons.
 
 **The Rust code integrates into the host's package system.** Pure Rust dependencies are resolved entirely by `cargo` — no system libraries, no CMake, no pkg-config. On the Julia side, `RustToolChain.jl` (or the approach used by [sparse-ir-rs](https://github.com/SpM-lab/sparse-ir-rs)) builds the Rust code on the fly inside `Pkg.build()`, so users never touch `cargo` directly. For release distribution, the compiled binary can be packaged as a JLL artifact. Either way, the Rust code lives inside the host's package ecosystem, not beside it.
 
-**C library dependencies are injected from the host, not linked at Rust build time.** When Rust code needs HDF5, BLAS, or MPI, it does not link against system-installed C libraries at compile time. Instead, the host language — which already has these libraries loaded — injects them at runtime:
+**C library dependencies are injected from the host, not linked at Rust build time.** When Rust code needs HDF5, BLAS, MPI, or CUDA, it does not link against system-installed C libraries at compile time. Instead, the libraries are obtained directly from the host language's own packages — HDF5.jl, MPI.jl, CUDA.jl, LinearAlgebra — and injected at runtime:
 
-- [hdf5-rt](https://github.com/tensor4all/hdf5-rt): loads libhdf5 via `dlopen` at runtime, so the Rust binary has no build-time HDF5 dependency. Julia's HDF5.jl (or Python's h5py) already has libhdf5 loaded; hdf5-rt finds and reuses it.
-- [cblas-inject](https://crates.io/crates/cblas-inject): BLAS function pointers are registered at runtime by the host. Julia's LinearAlgebra (or Python's NumPy/SciPy) already has CBLAS loaded; the Rust code calls the same functions via injected pointers.
+- [hdf5-rt](https://github.com/tensor4all/hdf5-rt): loads libhdf5 via `dlopen` at runtime. HDF5.jl already has libhdf5 loaded; hdf5-rt finds and reuses it.
+- [cblas-inject](https://crates.io/crates/cblas-inject): BLAS function pointers are registered at runtime by the host. Julia's LinearAlgebra already has CBLAS loaded; the Rust code calls the same functions via injected pointers.
+- CUDA: the same pattern applies. CUDA.jl manages the CUDA toolkit; the Rust code receives the runtime libraries from the host.
 
-This pattern — pure Rust for all Rust dependencies, runtime injection for C libraries from the host — eliminates the build-time dependency hell that makes traditional two-language setups painful.
+This pattern — pure Rust for all Rust dependencies, runtime injection for C/CUDA libraries from the host's packages — eliminates the build-time dependency hell that makes traditional two-language setups painful.
 
-The two-language problem does not disappear entirely. Issues at the FFI boundary will still occur — version mismatches, ABI changes, edge cases in wrapper code. But these are the kind of mechanical problems that AI agents handle routinely: detect the failure, read the error, apply the fix, run the tests. What used to require a specialist debugging a C++ segfault for days becomes a routine automated repair.
+The two-language problem does not disappear entirely — bugs at the FFI boundary will still occur. But both Julia and Rust have strong versioning systems, so the classic headaches (version mismatches, ABI breakage) do not arise. What remains are ordinary bugs, and AI agents handle those routinely: detect the failure, read the error, apply the fix, run the tests.
 
 ### Shifting the Julia/Rust boundary
 
