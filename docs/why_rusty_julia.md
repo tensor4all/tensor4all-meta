@@ -76,15 +76,20 @@ We see `libtorch` as an excellent tool for deep learning workloads, but libtorch
 
 ### The two-language problem is manageable
 
-Combining two languages historically invites the "two-language problem": painful builds, fragile FFI wrappers, and version mismatches. Combining C++ with Python or Julia is something many of us would never want to do again.
+Combining two languages historically invites the "two-language problem": painful builds, fragile FFI wrappers, and version mismatches. The typical pain looks like this: a C++ library with its own CMake build system, a Python wrapper that must be compiled separately, system dependencies that may or may not be installed, and version conflicts that surface only at link time. The result is a build process that lives outside the host language's package manager and breaks in ways that are hard to diagnose.
 
-The two-language problem does not disappear entirely with Rust and Julia, but it shrinks to a size that AI agents can handle routinely:
+Pure Rust avoids the worst of this, for two reasons.
 
-1. **Interop through a plain C ABI.** Rust can export `extern "C"` functions with no runtime dependency (no GC, no JIT). Julia calls them via `ccall` with zero overhead. The boundary is thin and stable.
-2. **Both have excellent package systems.** Rust's `cargo publish` is instant and atomic; Rust workspaces keep interdependent crates in sync. On the Julia side, `RustToolChain.jl` automates the Rust build step inside Julia's package manager, so end users never touch `cargo` directly.
-3. **Memory safety makes debugging tractable.** In Rust, `unsafe` is confined to the thin C-FFI boundary. When something does crash, the problem is localized — and an AI agent can diagnose and fix it automatically, because the surface area to inspect is small.
+**The Rust code integrates into the host's package system.** Pure Rust dependencies are resolved entirely by `cargo` — no system libraries, no CMake, no pkg-config. On the Julia side, `RustToolChain.jl` (or the approach used by [sparse-ir-rs](https://github.com/SpM-lab/sparse-ir-rs)) builds the Rust code on the fly inside `Pkg.build()`, so users never touch `cargo` directly. For release distribution, the compiled binary can be packaged as a JLL artifact. Either way, the Rust code lives inside the host's package ecosystem, not beside it.
 
-Issues at the FFI boundary will still occur — version mismatches, ABI changes, edge cases in wrapper code. But these are the kind of mechanical problems that AI agents excel at: detect the failure, read the error, apply the fix, run the tests. What used to require a specialist debugging a C++ segfault for days becomes a routine automated repair.
+**C library dependencies are injected from the host, not linked at Rust build time.** When Rust code needs HDF5, BLAS, or MPI, it does not link against system-installed C libraries at compile time. Instead, the host language — which already has these libraries loaded — injects them at runtime:
+
+- [hdf5-rt](https://github.com/tensor4all/hdf5-rt): loads libhdf5 via `dlopen` at runtime, so the Rust binary has no build-time HDF5 dependency. Julia's HDF5.jl (or Python's h5py) already has libhdf5 loaded; hdf5-rt finds and reuses it.
+- [cblas-inject](https://crates.io/crates/cblas-inject): BLAS function pointers are registered at runtime by the host. Julia's LinearAlgebra (or Python's NumPy/SciPy) already has CBLAS loaded; the Rust code calls the same functions via injected pointers.
+
+This pattern — pure Rust for all Rust dependencies, runtime injection for C libraries from the host — eliminates the build-time dependency hell that makes traditional two-language setups painful.
+
+The two-language problem does not disappear entirely. Issues at the FFI boundary will still occur — version mismatches, ABI changes, edge cases in wrapper code. But these are the kind of mechanical problems that AI agents handle routinely: detect the failure, read the error, apply the fix, run the tests. What used to require a specialist debugging a C++ segfault for days becomes a routine automated repair.
 
 ### Shifting the Julia/Rust boundary
 
