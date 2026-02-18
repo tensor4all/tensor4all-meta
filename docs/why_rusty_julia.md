@@ -22,9 +22,9 @@ If any of these sound familiar, a Rust backend can help:
 - You want to ship a library or a tool as a small, self-contained binary — without bundling the Julia runtime
 - An AI agent edits your code, but then you wait minutes for Julia to recompile before you can see if it worked
 
-For comparison: tenferro-rs compiles the full workspace from scratch in ~2 minutes — and that is the worst case. In practice, Rust's incremental compilation means only changed crates are recompiled, so a typical edit→test cycle takes tens of seconds. On CI, dependency build artifacts are cached, so only your own code is compiled on each run. Compilation is never the bottleneck.
+For comparison: tensor4all-rs — a sizable Rust workspace containing quantics, TCI, and tree tensor network solvers — compiles the entire workspace from scratch in ~2 minutes. And that is the worst case. In practice, Rust's incremental compilation means only changed crates are recompiled, so a typical edit→test cycle takes tens of seconds. On CI, dependency build artifacts are cached, so only your own code is compiled on each run. For codebases at the scale of tensor network libraries, compilation is not a bottleneck.
 
-> **In the era of AI agents, rewriting is nearly free. The bottleneck is no longer writing code — it is deciding what to build.**
+> **In the era of AI agents, rewriting is nearly free. The bottleneck is no longer writing code — it is finding the right abstractions and designs.** And because rewriting is free, you do not need to get the design perfect upfront. You can iterate: review, refactor, redesign — cycles that used to take months now take hours.
 
 ### What tenferro-rs is trying to be
 
@@ -74,17 +74,17 @@ Beyond primitives, tenferro-rs also provides a pure Rust tape based AD system th
 
 We see `libtorch` as an excellent tool for deep learning workloads, but libtorch's autograd is tightly coupled to its own Tensor type with fixed dtypes. It cannot natively differentiate through custom algebraic types (e.g., symmetric tensors with quantum number labels, block sparse structures). Tensor network workloads often need AD over such types, which is why tenferro-rs implements its own AD primitives from the ground up.
 
-### Why the two-language problem does not come back
+### The two-language problem is manageable
 
 Combining two languages historically invites the "two-language problem": painful builds, fragile FFI wrappers, and version mismatches. Combining C++ with Python or Julia is something many of us would never want to do again.
 
-Rust and Julia sidestep most of these issues:
+The two-language problem does not disappear entirely with Rust and Julia, but it shrinks to a size that AI agents can handle routinely:
 
 1. **Interop through a plain C ABI.** Rust can export `extern "C"` functions with no runtime dependency (no GC, no JIT). Julia calls them via `ccall` with zero overhead. The boundary is thin and stable.
 2. **Both have excellent package systems.** Rust's `cargo publish` is instant and atomic; Rust workspaces keep interdependent crates in sync. On the Julia side, `RustToolChain.jl` automates the Rust build step inside Julia's package manager, so end users never touch `cargo` directly.
-3. **Memory safety makes debugging tractable.** A segfault inside a C++ backend is notoriously hard to diagnose, even for AI agents. In Rust, `unsafe` is confined to the thin C-FFI boundary, so crashes are rare and easy to localize.
+3. **Memory safety makes debugging tractable.** In Rust, `unsafe` is confined to the thin C-FFI boundary. When something does crash, the problem is localized — and an AI agent can diagnose and fix it automatically, because the surface area to inspect is small.
 
-In short, the combination does not recreate the pain of C++ interop because both ecosystems were designed for composable, versioned packaging from the start.
+Issues at the FFI boundary will still occur — version mismatches, ABI changes, edge cases in wrapper code. But these are the kind of mechanical problems that AI agents excel at: detect the failure, read the error, apply the fix, run the tests. What used to require a specialist debugging a C++ segfault for days becomes a routine automated repair.
 
 ### Shifting the Julia/Rust boundary
 
