@@ -86,6 +86,7 @@ Pure Rust avoids the worst of this, for two reasons.
 
 - [hdf5-rt](https://github.com/tensor4all/hdf5-rt): loads libhdf5 via `dlopen` at runtime. HDF5.jl already has libhdf5 loaded; hdf5-rt finds and reuses it.
 - [cblas-inject](https://crates.io/crates/cblas-inject): BLAS function pointers are registered at runtime by the host. Julia's LinearAlgebra already has CBLAS loaded; the Rust code calls the same functions via injected pointers.
+- [rsmpi-rt](https://github.com/tensor4all/rsmpi-rt): MPI bindings with runtime loading. MPI.jl already has libmpi loaded; rsmpi-rt reuses it.
 - CUDA: the same pattern applies. CUDA.jl manages the CUDA toolkit; the Rust code receives the runtime libraries from the host.
 
 This pattern — pure Rust for all Rust dependencies, runtime injection for C/CUDA libraries from the host's packages — eliminates the build-time dependency hell that makes traditional two-language setups painful.
