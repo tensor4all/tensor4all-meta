@@ -4,7 +4,7 @@ This document makes two arguments:
 
 1. **Use Rust as a backend.** Julia tensor network libraries can gain significant benefits — faster precompilation, higher development feedback rate, and cross-language reuse — by moving their compute and storage layers to a shared Rust backend via C-FFI, while keeping Julia as the frontend.
 
-2. **Build this together.** No single group can sustain a healthy tensor ecosystem alone. A shared Rust core, co-developed across communities, lets optimization effort be paid once and correctness improvements benefit everyone.
+2. **Build the foundations together.** A small set of well-maintained low-level Rust libraries — dense tensors, linear algebra, AD with custom type support — can serve as shared infrastructure for researchers worldwide. Once built, maintaining them is easy. Building them in the first place takes real effort and Rust+Julia know-how. Let's coordinate on that.
 
 Repository: https://github.com/tensor4all/tenferro-rs
 API docs: https://tensor4all.org/tenferro-rs/
@@ -122,21 +122,17 @@ These are the foundations. Higher-level constructs — block sparse tensors, dia
 
 ### Why build them together
 
-Tensor network tooling tends to fragment: multiple packages reimplement the same contractions, decompositions, and AD glue. Even with excellent contributors, the maintenance burden compounds.
+With AI agents, even a small group can maintain these libraries once they exist. The hard part is building them in the first place: getting the APIs right, accumulating Rust+Julia integration know-how (runtime dependency injection, C-FFI patterns, package system integration), and testing against real workloads. That initial effort benefits from coordination across groups who need the same foundations.
 
-A shared Rust implementation of the fundamentals means optimization effort (kernel tuning, memory layout, GPU offloading) is paid once and available to every host language via C-FFI. Correctness improvements — especially for subtle AD rules — benefit everyone.
-
-Rust's workspace system keeps all crates in a single repository with a single CI pipeline, and its compiler enforces memory safety at compile time, so the codebase stays maintainable as it grows.
+Once the low-level core is solid, many researchers worldwide can build on it — each ecosystem adding its own high-level constructs (index systems, block sparse storage, quantum number grading) without reimplementing dense contractions, decompositions, or AD from scratch.
 
 ### What becomes possible
 
-Once these fundamental libraries are production-ready, any tensor network ecosystem can use them as a backend. Each ecosystem keeps its own abstractions (named indices, block sparse storage, quantum number grading) while delegating the heavy computation to the shared Rust core.
-
-As a concrete example, we have analyzed how the ITensor Julia ecosystem could do this — see the proposal: [ITensor backend analysis](design/itensor_backend_analysis.md)
+As a concrete example, we have analyzed how the ITensor Julia ecosystem could use these foundations as a backend — see the proposal: [ITensor backend analysis](design/itensor_backend_analysis.md)
 
 ### Invitation
 
-tenferro-rs is open and designed to be co-developed. We welcome contributions from any tensor network community — whether that means improving the dense kernels, contributing AD rules, hardening the C API, or simply filing issues about what your ecosystem needs from a shared backend.
+If you need the same foundations, let's coordinate. Whether that means improving the dense kernels, contributing AD rules, hardening the C API, or sharing Rust+Julia integration patterns — the goal is to build this initial layer together so everyone can move faster afterward.
 
 ## References
 
