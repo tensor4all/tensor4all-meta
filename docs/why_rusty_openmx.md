@@ -113,8 +113,11 @@ Rust コンパイラは、エージェントが書いたコードを検証し、
 | HDF5 | [hdf5](https://crates.io/crates/hdf5) | スレッドセーフなラッパー。[hdf5-rt](https://github.com/tensor4all/hdf5-rt) によるランタイムロードも可 |
 | FFT | [fftw](https://crates.io/crates/fftw) / [rustfft](https://crates.io/crates/rustfft) | FFTW3 バインディング、または純 Rust 実装 |
 | CUDA | [cudarc](https://crates.io/crates/cudarc) | cuBLAS, cuSOLVER, cuSPARSE, cuRAND 等を含む安全なラッパー |
+| OpenMP 相当 | [rayon](https://crates.io/crates/rayon) | データ並列ライブラリ。ネスト並列とスレッドプールの分類が可能 |
 
-いずれも既存の C/Fortran ライブラリを呼び出す薄いラッパーであり、Rust で再実装しているわけではない。
+BLAS/LAPACK、MPI、HDF5、FFT、CUDA については既存の C/Fortran ライブラリを呼び出す薄いラッパーだ。Rayon は純 Rust 実装で、OpenMP の `parallel for` に相当する機能を提供する。OpenMP と異なり、ネスト並列が自然に書ける。スレッドプールを用途別に分離できるため、「MPI 通信用」「行列演算用」「I/O 用」のようにスレッドを分類して管理できる。
+
+また、CUDA の独自カーネルを埋め込んで nvcc でコンパイル・呼び出しすることも可能だし、一部を C や C++ として書いて（OpenMP 並列も含め）Rust から呼び出すこともできる。Rust で同等の性能が出るので通常は必要ないが、既存の高度に最適化されたカーネルをそのまま使いたい場合の選択肢として残っている。
 
 ### テンソル演算: tenferro-rs
 
@@ -160,6 +163,8 @@ cargo build --release    # 全依存関係をダウンロードし、すべて�
 2. **分野横断的なアーキテクチャの知見。** 第一原理計算とテンソルネットワークの両方で研究を行ってきた品岡らは、単一の分野からは見えないパターンを見出せる。[tenferro-rs](https://github.com/tensor4all/tenferro-rs) が提供する密テンソル演算、einsum 縮約、バッチ線形代数、AD プリミティブはテンソルネットワーク固有ではなく、DFT コードが必要とするのと同じ演算だ。「共有すべき計算基盤」と「DFT 固有のロジック」の境界を引くには、両方の世界での経験が要る。
 
 3. **AI による高速な具現化。** AI エージェントは「運動エネルギーとポテンシャルのハミルトニアン構築を別々のトレイトに分けて」という指示から、数秒でコンパイル可能な Rust コードを生成する。物理学者は Rust を書く必要はない。出来上がった API を見て「物理を捉えている」か「スピンの構造が違う」と言えばよい。関数本体が `todo!()` なので即座にコンパイルされる。議論 → 具現化 → `cargo check` → 評価 → 再設計、のループが回る。
+
+`cargo doc --open` を実行すれば、スケルトンの段階でも全 crate の公開 API が HTML ドキュメントとして即座に生成される。物理学者はブラウザで全体構造を俯瞰し、crate 間の依存関係、型の定義、関数シグネチャを確認できる。コードを読む必要はない。
 
 crate 構造と公開インターフェース（関数シグネチャ、トレイト定義、データ型）を `todo!()` の本体で定義する。
 
