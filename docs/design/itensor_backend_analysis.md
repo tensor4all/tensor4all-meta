@@ -213,24 +213,35 @@ indices).
 ### 3.2 Where the Boundary Sits
 
 ```
-                                                     Julia │ Rust
-                                                           │
-  ITensorMPS.jl ── DMRG, TDVP                             │
-  ITensorNetworks.jl ── graph TN                           │
-  ITensors.jl ── user API, physics sites                   │
-  ITensorBase.jl ── ITensor struct                         │
-    Index ── id, tags, prime, QN (PURE JULIA)              │
-    index matching ── which dims to contract (JULIA)       │
-    permutation computation (JULIA, trivial metadata)      │
-  ═══════════════════════════════════════ FFI boundary ═════╡
-                                                           │
-    TensorHandle (opaque) ─ Dense / BlockSparse / Diag /   │
-                             Graded                        │
-    contract(h1, perm1, h2, perm2)                         │
-    svd(h, codomain_dims)                                  │
-    qr, norm, add, permutedims, ...                        │
-    (Rust has NO concept of Index. Only shapes and perms.) │
-                                                           │
+  ┌─ Julia ──────────────────────────────────────────────┐
+  │                                                      │
+  │  ITensorMPS.jl ── DMRG, TDVP                        │
+  │  ITensorNetworks.jl ── graph TN                     │
+  │  ITensors.jl ── user API, physics sites             │
+  │  ITensorBase.jl ── ITensor struct                   │
+  │    Index ── id, tags, prime, QN (PURE JULIA)        │
+  │    index matching ── which dims to contract          │
+  │    permutation computation                           │
+  │    Array(T, i...) ── permute → data export → reshape │
+  │    T[i=>1, j=>2]  ── index → linear offset → read   │
+  │                                                      │
+  ├─ FFI boundary ───────────────────────────────────────┤
+  │  opaque handles + integer arrays                     │
+  │  AND data export (DLPack / pointer + shape)          │
+  ├──────────────────────────────────────────────────────┤
+  │                                                      │
+  │  TensorHandle ─ Dense / BlockSparse / Diag / Graded  │
+  │    contract(h1, perm1, h2, perm2)                    │
+  │    svd(h, codomain_dims)                             │
+  │    qr, norm, add, permutedims, ...                   │
+  │    data_ptr(h) → raw pointer + shape + strides       │
+  │    getindex(h, linear_idx) → scalar                  │
+  │    setindex!(h, linear_idx, val)                     │
+  │    to_dense(h) → new Dense handle                    │
+  │    (Rust has NO concept of Index.                    │
+  │     Only shapes, perms, and raw data access.)        │
+  │                                                      │
+  └─ Rust ───────────────────────────────────────────────┘
 ```
 
 ### 3.3 What Lives Where
@@ -445,11 +456,47 @@ int    tfe_ndim(TfeTensorHandle *h);
 void   tfe_shape(TfeTensorHandle *h, int64_t *dims_out);
 int    tfe_storage_type(TfeTensorHandle *h);  /* Dense=0, BlockSparse=1, ... */
 
+/* Data export — needed for Array(T), data(T), T[i,j] */
+int tfe_data_ptr(TfeTensorHandle *h,
+                 void **ptr_out, int64_t *len_out,
+                 tfe_status_t *status);
+    /* Dense: returns pointer to contiguous data buffer (zero-copy view).
+       BlockSparse/Diag/Graded: returns NULL → caller must use
+       tfe_to_dense() or per-block access instead.
+       Julia wraps the returned pointer as unsafe_wrap(Array, ptr, shape). */
+
+int tfe_to_dlpack(TfeTensorHandle *h,
+                  DLManagedTensorVersioned **dl_out,
+                  tfe_status_t *status);
+    /* Exports as DLPack for zero-copy Array interop.
+       Dense only; others must call tfe_to_dense() first. */
+
+int tfe_to_dense(TfeTensorHandle *h,
+                 TfeTensorHandle **result, tfe_status_t *status);
+    /* BlockSparse/Diag/Graded → Dense conversion (allocates).
+       dense(T::ITensor) calls this. */
+
+double tfe_getindex(TfeTensorHandle *h,
+                    const int64_t *indices, int ndim,
+                    tfe_status_t *status);
+    /* Element access: T[i=>1, j=>2] → Julia computes linear offset,
+       calls this. Works for all storage types. */
+
+int tfe_setindex(TfeTensorHandle *h,
+                 const int64_t *indices, int ndim,
+                 double value, tfe_status_t *status);
+    /* Element write: T[i=>1, j=>2] = val. */
+
 /* Block structure query (for constructing output Index with QN) */
 int    tfe_n_stored_blocks(TfeTensorHandle *h);
 void   tfe_stored_block_indices(TfeTensorHandle *h, int64_t *out);
 void   tfe_block_range(TfeTensorHandle *h, int dim, int block,
                        int64_t *start, int64_t *stop);
+int    tfe_block_data_ptr(TfeTensorHandle *h,
+                          const int64_t *block_idx, int ndim,
+                          void **ptr_out, int64_t *len_out,
+                          tfe_status_t *status);
+    /* Per-block raw pointer access for BlockSparse/Graded. */
 
 /* Lifecycle */
 void   tfe_release(TfeTensorHandle *h);
@@ -500,6 +547,49 @@ end
 
 # norm: pure Rust
 norm(A::ITensor) = tfe_norm(A.handle)
+
+# Array(T, i, j, ...): permute in Rust, then export data to Julia
+function Base.Array{ElT,N}(T::ITensor, is::Index...) where {ElT,N}
+    perm = [findfirst(==(idx), inds(T)) for idx in is]
+    permuted = tfe_permutedims(T.handle, perm)
+    ptr, len = tfe_data_ptr(permuted)
+    if ptr !== C_NULL
+        # Dense: zero-copy wrap
+        shape = Tuple(dim.(is))
+        return unsafe_wrap(Array{ElT,N}, Ptr{ElT}(ptr), shape)
+    else
+        # BlockSparse/Diag/Graded: convert to dense first
+        dense_h = tfe_to_dense(permuted)
+        ptr2, len2 = tfe_data_ptr(dense_h)
+        shape = Tuple(dim.(is))
+        return copy(unsafe_wrap(Array{ElT,N}, Ptr{ElT}(ptr2), shape))
+    end
+end
+
+# data(T): raw data view (Dense only, else error)
+function data(T::ITensor)
+    ptr, len = tfe_data_ptr(T.handle)
+    ptr === C_NULL && error("data() requires Dense storage; call dense(T) first")
+    return unsafe_wrap(Vector{Float64}, Ptr{Float64}(ptr), len)
+end
+
+# dense(T): BlockSparse/Diag/Graded → Dense (1 FFI call)
+function dense(A::ITensor)
+    new_handle = tfe_to_dense(A.handle)
+    return ITensor(new_handle, removeqns(inds(A)))
+end
+
+# Element access: T[i=>1, j=>2]
+function Base.getindex(T::ITensor, ivs::Pair{Index,Int}...)
+    linear = compute_linear_index(inds(T), ivs)
+    return tfe_getindex(T.handle, linear)
+end
+
+function Base.setindex!(T::ITensor, val, ivs::Pair{Index,Int}...)
+    linear = compute_linear_index(inds(T), ivs)
+    tfe_setindex(T.handle, linear, val)
+    return T
+end
 ```
 
 ### 3.7 Scorecard
@@ -512,7 +602,7 @@ norm(A::ITensor) = tfe_norm(A.handle)
 | Julia packages unchanged | ITensors.jl (user API), ITensorMPS.jl, ITensorNetworks.jl |
 | Index | **Pure Julia — non-negotiable** |
 | FFI calls per DMRG step | ~3 (contract + svd + contract), constant regardless of storage |
-| FFI surface complexity | Simple: opaque handles + integer arrays |
+| FFI surface complexity | Opaque handles + integer arrays + data export (DLPack/pointer) |
 | Precompilation reduction | **Maximum** — 10+ Julia packages eliminated |
 
 ---
