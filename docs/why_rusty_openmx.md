@@ -306,6 +306,3 @@ AI エージェントがこの二分探索を自律的に回せる。DFT の決�
 - [Why Rust for Julia tensor network developers](why_rusty_julia.md): テンソルネットワークコミュニティ向けの姉妹ドキュメント
 - [tenferro-rs](https://github.com/tensor4all/tenferro-rs): Rust テンソル計算ワークスペース（POC）
 - [OpenMX](https://www.openmx-square.org/): ケーススタディに使用した DFT コード
-- [cblas-inject](https://crates.io/crates/cblas-inject): Rust 用 BLAS ラッパー
-- [rsmpi-rt](https://github.com/tensor4all/rsmpi-rt): Rust 用 MPI バインディング
-- [hdf5-rt](https://github.com/tensor4all/hdf5-rt): Rust 用 HDF5 バインディング
