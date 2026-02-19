@@ -4,7 +4,7 @@ This document makes two arguments:
 
 1. **Use Rust as a backend.** Julia tensor network libraries can gain significant benefits — faster precompilation, higher development feedback rate, and cross-language reuse — by moving their compute and storage layers to a shared Rust backend via C-FFI, while keeping Julia as the frontend.
 
-2. **Build the foundations together.** A small set of well-maintained low-level Rust libraries — dense tensors, linear algebra, AD with custom type support — can serve as shared infrastructure for researchers worldwide. Once built, maintaining them is easy. Building them in the first place takes real effort and Rust+Julia know-how. Let's coordinate on that.
+2. **Fix the standard, then build together.** Collaboration starts with consensus on what tensor operations *are* and what correctness *means*. Fix the standard operations, fix the reference test sets, and then any contributor — human or AI — can build, verify, and interoperate with confidence. The standard is the shared language; implementations follow.
 
 Repository: https://github.com/tensor4all/tenferro-rs
 API docs: https://tensor4all.org/tenferro-rs/
@@ -78,6 +78,10 @@ We see `libtorch` as an excellent tool for deep learning workloads, but libtorch
 
 Combining two languages historically invites the "two-language problem": painful builds, fragile FFI wrappers, and version mismatches. The typical pain looks like this: a C++ library with its own CMake build system, a Python wrapper that must be compiled separately, system dependencies that may or may not be installed, and version conflicts that surface only at link time. The result is a build process that lives outside the host language's package manager and breaks in ways that are hard to diagnose.
 
+But there is a deeper problem beyond builds: **the [bus factor](https://en.wikipedia.org/wiki/Bus_factor)**. When a two-language project depends on a C++ backend, and the maintainer who understands that C++ code leaves, finding a successor is extremely difficult. The knowledge barrier — build systems, ABI conventions, platform-specific workarounds, undocumented assumptions — is high enough that most potential contributors never start. Projects have died this way.
+
+This changes when the infrastructure is well-standardized and AI agents can maintain it. Infrastructure-level work — fixing build regressions, updating dependencies, adapting to new platform targets, maintaining FFI bindings — is the kind of work that requires the least creativity and the most patience. It is exactly what AI agents are good at, and they are getting stronger at an accelerating rate. A well-standardized backend with clear operation contracts and comprehensive test suites can be maintained by AI agents indefinitely. The bus factor drops to zero: the infrastructure does not depend on any single person's specialized knowledge, because the standard and tests encode that knowledge explicitly.
+
 Pure Rust avoids the worst of this, for two reasons.
 
 **The Rust code integrates into the host's package system.** Pure Rust dependencies are resolved entirely by `cargo` — no system libraries, no CMake, no pkg-config. On the Julia side, [RustToolChain.jl](https://github.com/AtelierArith/RustToolChainExamples.jl) (or the approach used by [sparse-ir-rs](https://github.com/SpM-lab/sparse-ir-rs)) builds the Rust code on the fly inside `Pkg.build()`, so users never touch `cargo` directly. For release distribution, the compiled binary can be packaged as a JLL artifact. Either way, the Rust code lives inside the host's package ecosystem, not beside it.
@@ -101,30 +105,50 @@ Fortunately, moving code between Julia and Rust is smoother than one might expec
 
 ---
 
-## Part II: Let's build the fundamental Rust tensor libraries together
+## Part II: Fix the standard, then build together
+
+### Standards before implementations
+
+The point of collaboration is not to write code together — it is to agree on what the operations *are* and what correctness *means*.
+
+Without a shared standard for tensor-level operations, collaboration is impossible. Not difficult — impossible. If two groups implement "SVD" but disagree on edge-case behavior (truncation semantics, degenerate singular values, complex phase conventions), their code cannot interoperate, their tests cannot be shared, and their results cannot be compared. This is true whether the contributor is a human researcher or an AI agent. The standard is the prerequisite for collaboration, not the outcome.
+
+> **Fix the standard. Fix the test sets. Then the community can share consensus.**
+
+Once a standard exists — a precise specification of each operation's contract, with a comprehensive test suite that any implementation must pass — the collaboration problem changes fundamentally. Anyone can contribute an implementation, verify it against the shared tests, and trust that it composes with everyone else's work. The standard and its test sets *are* the collaboration artifact. Code is just one way to satisfy the standard.
+
+### What the standard covers
+
+The tensor computation community needs agreed-upon specifications for a small set of fundamental operations. These are not tensor-network-specific; they are general-purpose building blocks that every ecosystem depends on:
+
+- **Dense tensor with strided views** — N-dimensional array with zero-copy slicing: what are the layout conventions, memory semantics, and edge cases?
+- **Einsum with contraction tree optimization** — general Einstein summation: what is the contract for index matching, broadcasting, and contraction ordering?
+- **Batched linear algebra** — SVD, QR, LU, eigen: what are the truncation semantics, phase conventions for complex scalars, and behavior at degeneracies?
+- **AD primitives** — VJP/JVP rules for einsum, SVD, QR, and other decompositions: what are the correct gradients (including the notoriously tricky complex SVD case), and how are they tested?
+- **Stable C-FFI** — a well-defined C API surface: what are the opaque handle conventions, lifecycle management rules, and DLPack interop contracts?
+- **Device abstraction** — CPU and GPU execution: what does the unified interface promise about numerical equivalence and precision?
+
+For each of these, the standard specifies the operation's contract (inputs, outputs, edge cases, error conditions) and provides a reference test suite. An implementation passes the standard if it passes the tests. This is how industrial standards work, and it is what enables a community — human and AI contributors alike — to build with confidence.
+
+Higher-level constructs — block sparse tensors, diagonal tensors, symmetry sectors, graded tensors — are domain-specific. Each ecosystem (ITensor, TensorKit, etc.) defines these on top of the standard foundations, either in Rust or in their host language.
+
+### AI is a community member
+
+Part I described AI agents as handling "mechanical complexity" while humans focus on design. That framing is useful but incomplete. The deeper point is that **AI is a community member** — an extremely active contributor that can write implementations, run test suites, propose fixes, and iterate on designs at high throughput. But like any community member, an AI agent can only contribute effectively when there is a shared standard to work against.
+
+Without a standard, an AI agent is just generating code in isolation — fast, but unverifiable. With a standard and its test sets, an AI agent becomes a powerful contributor: it can implement a candidate, run the reference tests, identify failures, and fix them — all in a tight loop. The same is true for a human contributor. The standard is what makes collaboration possible regardless of who the contributor is.
+
+This is why fixing the standard comes first. It is the shared language that lets a global community — researchers in different groups, developers in different ecosystems, AI agents working on different codebases — converge on correct, interoperable implementations.
 
 ### Current status: proof of concept
 
-tenferro-rs is currently a POC implementation. It demonstrates that the approach works — dense tensors, einsum, linear algebra, AD, and C-FFI — but it is not yet production-ready. The codebase needs hardening, broader scalar type support, thorough benchmarking, GPU backends beyond the abstraction layer, and a stable, well-documented C API surface.
+tenferro-rs is currently a POC implementation. It demonstrates that the approach works — dense tensors, einsum, linear algebra, AD, and C-FFI — but it is not yet production-ready. The codebase needs hardening, broader scalar type support, thorough benchmarking, GPU backends beyond the abstraction layer, and a stable, well-documented C API surface. Most critically, it needs a well-defined standard and comprehensive test suite that any alternative implementation could also target.
 
-### What we need to build
+### Why coordinate now
 
-The Rust ecosystem lacks fundamental tensor computation libraries that the scientific computing community can depend on. These are not tensor-network-specific; they are general-purpose building blocks:
+The hard part is not maintaining libraries — with AI agents, even a small group can do that. The hard part is the *initial consensus*: agreeing on operation contracts, accumulating integration know-how (runtime dependency injection, C-FFI patterns, package system integration), and building reference test suites against real workloads. That effort benefits from coordination across groups who need the same foundations.
 
-- **Dense tensor with strided views** — production-quality N-dimensional array with zero-copy slicing, robust memory management, and efficient layout
-- **Einsum with contraction tree optimization** — general Einstein summation with automatic contraction ordering for arbitrary numbers of operands
-- **Batched linear algebra** — SVD, QR, LU, eigen with batching, truncation, and support for real and complex scalars
-- **AD primitives** — correct VJP/JVP rules for einsum, SVD, QR, and other decompositions (including the notoriously tricky complex SVD case)
-- **Stable C-FFI** — a well-defined C API with opaque handles, DLPack interop, and clear lifecycle management, so any language can call these kernels
-- **Device abstraction** — CPU and GPU execution behind a unified interface
-
-These are the foundations. Higher-level constructs — block sparse tensors, diagonal tensors, symmetry sectors, graded tensors — are domain-specific and should be defined by each ecosystem (ITensor, TensorKit, etc.) on top of these fundamentals, either in Rust or in their host language.
-
-### Why build them together
-
-With AI agents, even a small group can maintain these libraries once they exist. The hard part is building them in the first place: getting the APIs right, accumulating Rust+Julia integration know-how (runtime dependency injection, C-FFI patterns, package system integration), and testing against real workloads. That initial effort benefits from coordination across groups who need the same foundations.
-
-Once the low-level core is solid, many researchers worldwide can build on it — each ecosystem adding its own high-level constructs (index systems, block sparse storage, quantum number grading) without reimplementing dense contractions, decompositions, or AD from scratch.
+Once the standard is solid, many researchers worldwide can build on it — each ecosystem adding its own high-level constructs (index systems, block sparse storage, quantum number grading) without reimplementing dense contractions, decompositions, or AD from scratch. And every contributor, human or AI, can verify their work against the same reference tests.
 
 ### What becomes possible
 
@@ -132,7 +156,7 @@ As a concrete example, we have analyzed how the ITensor Julia ecosystem could us
 
 ### Invitation
 
-If you need the same foundations, let's coordinate. Whether that means improving the dense kernels, contributing AD rules, hardening the C API, or sharing Rust+Julia integration patterns — the goal is to build this initial layer together so everyone can move faster afterward.
+If you need the same foundations, let's coordinate. Whether that means defining operation contracts, contributing reference test cases, improving implementations, hardening the C API, or sharing Rust+Julia integration patterns — the goal is to fix the standard together so everyone can build with confidence afterward.
 
 ## References
 
