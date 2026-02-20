@@ -13,4 +13,4 @@ under [`docs/design/`](https://github.com/tensor4all/tenferro-rs/tree/main/docs/
 - [Einsum Internal Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_einsum_internal_design.md) — tenferro-prims and tenferro-einsum internals
 - [chainrules-core Design](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/chainrules_core_design.md) — AD trait design
 - [libtorch Reference](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/libtorch_reference.md) — PyTorch feature survey for design reference
-- [Contract as Core Operation](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/contract-as-core-op.md) — why fused contraction is a core primitive (source-stride-order optimization)
+- [Contract as Extended Operation](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/contract-as-core-op.md) — fused contraction design and copy strategy benchmarks
