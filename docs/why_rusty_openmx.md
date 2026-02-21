@@ -221,10 +221,10 @@ Phase 1: Design        Phase 2: Ref Data    Phase 3: Implement     Phase 4: Vali
 ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
 │ Physicist directs    │ │ AI instruments       │ │ Parallel AI agents:  │ │ Same input to        │
 │ AI generates Rust    │ │ OpenMX C code        │ │ edit→compile→test    │ │ C and Rust           │
-│ cargo check (fast)   │ │ Run test suite       │ │ (seconds per cycle)  │ │ Compare outputs      │
-│ Physicist reviews    │ │ Collect into         │ │ fail? fix and retry  │ │ mismatch? AI binary  │
-│ "wrong" → repeat     │ │ HDF5 reference DB    │ │ (crate-isolated)     │ │ search → fix         │
-│                      │ │                      │ │                      │ │                      │
+│ skeletons (todo!())  │ │ Run test suite       │ │ (seconds per cycle)  │ │ Compare outputs      │
+│ cargo check (fast)   │ │ Collect into         │ │ fail? fix and retry  │ │ mismatch? AI binary  │
+│ Physicist reviews    │ │ HDF5 reference DB    │ │ (crate-isolated)     │ │ search → fix         │
+│ "wrong" → repeat     │ │                      │ │                      │ │                      │
 │ ● minutes per loop   │ │ ● AI-driven          │ │ ● seconds per loop   │ │ ● fully automated    │
 └──────────────────────┘ └──────────────────────┘ └──────────────────────┘ └──────────────────────┘
 ```
