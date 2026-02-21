@@ -1,313 +1,366 @@
-# なぜ第一原理計算コードを Rust で書き直すのか
+# Why Rewrite First-Principles Codes in Rust
 
-C や Fortran で書かれた大規模なレガシー第一原理計算コード（数十万行、数百のグローバル変数）を、AI エージェントを活用して Rust で新たに設計・実装できる。そしてそれは、第一原理計算コミュニティが直面している問題を解決する。
+Large-scale legacy first-principles codes written in C and Fortran (hundreds of thousands of lines, hundreds of global variables) can be redesigned and reimplemented in Rust using AI agents. This solves the problems facing the first-principles computation community.
 
-[OpenMX](https://www.openmx-square.org/)（DFT コード、C 言語約39万行）をケーススタディとして取り上げるが、同様の特徴を持つあらゆる大規模計算科学コードに適用可能な戦略だ。
+We use [OpenMX](https://www.openmx-square.org/) (a DFT code, ~390,000 lines of C) as a case study, but the strategy applies to any large-scale computational science code with similar characteristics.
 
-Rust の知識がなくても読める。
+No prior knowledge of Rust is required to read this document.
 
-> **第一原理計算コードの書き直しで最も難しいのは、書き直し作業そのものではなく、正しい抽象化を見つけることだ。** crate（モジュール）の境界をどこに引くか。どの演算が計算科学の共通基盤に属し、どれが DFT 固有のロジックか。ハミルトニアン構築のインターフェースはどうあるべきか。これらは物理の問いであって、プログラミングの問いではない。正しい答えを出すには、第一原理計算の物理学者の直感、第一原理からテンソルネットワークまで横断的な経験を持つ研究者（品岡ら）の知見、AI エージェントによる候補設計の高速な具現化、この三者の融合が必要だ。
-
----
-
-## Part I: レガシー第一原理計算コードの問題
-
-### 思い当たる節はないだろうか
-
-大規模な第一原理計算コードを保守・利用していれば、以下のいくつかには身に覚えがあるだろう。
-
-- **ビルドシステムを理解しているのは一人だけ。** MPI、BLAS/LAPACK、ScaLAPACK、FFTW、ELPA への依存があり、新しいマシンでのコンパイルに暗黙知が必要。
-- **コアに手を出す勇気がない。** SCF ループ、力の計算、Poisson ソルバーは動いているが、コードが絡み合っていて、一箇所の修正が別の場所を壊しかねない。
-- **テストが遅く浅い。** フルの統合テスト（「バルク Si の全エネルギーが合うか？」）しかなく、ユニットテストは存在しない。コンポーネントを分離できないからだ。
-- **新しい物理の追加が苦痛。** 新しい交換相関汎関数の追加に7ファイルの修正と50個のグローバル変数の理解が必要。
-- **オリジナルの開発者が引退しようとしている。** バスファクターは1。その人がいなくなれば、コードは死ぬ。
-
-### 具体例: OpenMX 3.9
-
-OpenMX は擬原子局在基底関数に基づく多機能 DFT コードで、コリニア・非コリニア磁性、O(N) 法、量子輸送（NEGF）、LDA+U、ハイブリッド汎関数、分子動力学をサポートする。世界中で使われている本格的なプロダクションコードだ。
-
-| 指標 | 値 |
-|------|-----|
-| C ソースファイル | 346 |
-| ヘッダファイル | 36 |
-| Fortran ファイル | 4（ELPA バインディング） |
-| C の総行数 | 390,782 |
-| 最大単一ファイル | `DFTD3vdW_init.c`（33,727行） |
-| `openmx_common.h` 内のグローバル変数 | 330以上 |
-
-346個すべてのソースファイルが `openmx_common.h` を include している。このヘッダに330を超える `extern` グローバル変数が宣言されており、原子座標、基底関数データ、グリッド情報、MPI 分散テーブル、SCF 制御フラグ、スピンパラメータ、Hubbard U の値などが含まれる。どのファイルのどの関数からも自由に読み書きできる。関数のシグネチャを読んでも、その関数がどの状態に依存し何を変更するかはわからない。
-
-ビルドシステムは手書きの Makefile で、Intel MKL、ScaLAPACK、FFTW3、ELPA、MPI、OpenMP にリンクしている。7つの異なるスパコン向け設定がコメントアウトされており、自分のマシンで通すには手作業で編集が必要だ。
-
-これは OpenMX への批判ではない。数十年かけて進化した大規模第一原理計算コードの標準的な姿だ。物理は優れている。ソフトウェア工学はその時代の産物にすぎない。
-
-### 現状維持は持続不可能
-
-第一原理計算コミュニティでは、以下の問題が同時に進行している。
-
-1. **コードは大きくなる一方。** 輸送、光学特性、トポロジカル不変量、機械学習ポテンシャルが次々と追加される。
-2. **メンテナは減る一方。** オリジナル開発者が引退・異動していく。
-3. **ハードウェアは多様化する一方。** CPU、GPU、ARM、ヘテロジニアスノードへの対応が増える。
-4. **ユーザの期待は高まる一方。** Python インターフェース、再現可能なワークフロー、クラウドデプロイが求められる。
-
-330個のグローバル変数を抱える39万行の C コードにパッチを当て続けるのは、現実的な道ではない。
+> **The hardest part of rewriting a first-principles code is not the rewriting itself, but finding the right abstractions.** Where to draw crate (module) boundaries. Which operations belong to a shared computational foundation and which are DFT-specific logic. What the Hamiltonian construction interface should look like. These are physics questions, not programming questions. Finding the right answers requires a fusion of three things: the intuition of first-principles physicists, the insights of researchers with cross-cutting experience spanning first-principles to tensor networks (such as Shinaoka et al.), and the rapid materialisation of candidate designs by AI agents.
 
 ---
 
-## Part II: なぜ Rust なのか（そしてなぜ C++ ではないのか）
+## Part I: The Problem with Legacy First-Principles Codes
 
-### Rust を学ぶ必要はない
+### Does this sound familiar?
 
-最も重要な点なので最初に述べる。
+If you maintain or use a large first-principles code, some of the following will ring true:
 
-AI エージェント（Claude Code、Cursor、GitHub Copilot など）の時代に、**人間が Rust を一行ずつ書く必要はない**。AI エージェントが所有権アノテーション、ライフタイム境界、トレイト実装といった機械的な複雑さを処理し、人間は**物理、アルゴリズム、抽象化、正しさ**に集中する。
+- **Only one person understands the build system.** Dependencies on MPI, BLAS/LAPACK, ScaLAPACK, FFTW, and ELPA require tacit knowledge to compile on new machines.
+- **Nobody dares to touch the core.** The SCF loop, force calculation, and Poisson solver work, but the code is so entangled that a fix in one place can break another.
+- **Tests are slow and shallow.** Only full integration tests exist ("does the total energy of bulk Si match?"). Unit tests do not exist because components cannot be isolated.
+- **Adding new physics is painful.** Adding a new exchange-correlation functional requires editing 7 files and understanding 50 global variables.
+- **The original developer is about to retire.** The bus factor is 1. When they leave, the code dies.
 
-Rust コンパイラは、エージェントが書いたコードを検証し、メモリバグ、データ競合、型エラーをコンパイル時に検出する。疲れることなくバグのクラスを見逃さない自動レビュアーだ。
+### Concrete example: OpenMX 3.9
 
-物理学者が**できる必要があること**：
+OpenMX is a versatile DFT code based on pseudo-atomic localised basis functions, supporting collinear and non-collinear magnetism, O(N) methods, quantum transport (NEGF), LDA+U, hybrid functionals, and molecular dynamics. It is a serious production code used worldwide.
 
-- Rust の関数シグネチャを読む（型、入力、出力）。数学の記法に似ている
-- 抽象化が物理的に正しいか判断する
-- `cargo test` を実行して出力を読む
-- AI エージェントに何を変えるべきか伝える
+| Metric | Value |
+|--------|-------|
+| C source files | 346 |
+| Header files | 36 |
+| Fortran files | 4 (ELPA bindings) |
+| Total C lines | 390,782 |
+| Largest single file | `DFTD3vdW_init.c` (33,727 lines) |
+| Global variables in `openmx_common.h` | 330+ |
 
-物理学者が**できる必要のないこと**：
+All 346 source files include `openmx_common.h`. This header declares over 330 `extern` global variables covering atomic coordinates, basis function data, grid information, MPI distribution tables, SCF control flags, spin parameters, and Hubbard U values. Any function in any file can freely read or write them. Reading a function signature tells you nothing about what state it depends on or modifies.
 
-- 所有権ルールの暗記
-- ライフタイムアノテーションの記述
-- 借用チェッカーのエラーのデバッグ
-- トレイトディスパッチの内部動作の理解
+The build system is a hand-written Makefile linking Intel MKL, ScaLAPACK, FFTW3, ELPA, MPI, and OpenMP. Seven different supercomputer configurations are commented out; getting it to compile on your machine requires manual editing.
 
-これらは AI が処理し、コンパイラが検証する。
+This is not a criticism of OpenMX. It is the standard state of large first-principles codes that have evolved over decades. The physics is excellent. The software engineering is a product of its era.
 
-### なぜ C++ ではないのか
+#### GPU version: OpenMX 3.9.9
 
-計算物理学者が必ず問う質問だ。
+An analysis of the GPU-enabled variant (OpenMX 3.9.9 GPU) reveals the computational primitives that a DFT code demands from its linear algebra backend:
 
-**C のコードは C++ としてそのままコンパイルできるため、何も改善しない。** OpenMX の346個の C ファイルを C++ コンパイラでコンパイルしても、同一に動作する。C++ には安全機能（RAII、スマートポインタ、`std::vector`）があるが、コンパイラはそれらの使用を強制しない。安全性はオプトインだ。C++ に移植されたレガシー C コードは、拡張子が `.cpp` に変わっただけの安全でない C コードのままである。
+| Priority | Kernel | OpenMX usage | Call frequency |
+|----------|--------|-------------|----------------|
+| **Highest** | Symmetric/Hermitian eigenvalue | SCF bottleneck (`dsyev`/`zheev` on CPU, `cusolverDnXsyevd` on GPU) | 1000s per SCF |
+| **Highest** | Matrix multiply (GEMM) | H-C, S-C, C^H-H-C etc. (`dgemm`/`zgemm`, `cublasDgemm`/`cublasZgemm`) | 100s per SCF |
+| **High** | 3D FFT | Poisson equation (rho -> V_H via FFTW3/cuFFT) | A few per SCF |
+| **High** | LU decomposition + inversion | Overlap regularisation, Green's functions | 10s per SCF |
+| **Medium** | Cholesky decomposition | Overlap matrix (`dpotrf`) | A few per SCF |
+| **Medium** | Sparse block operations | Hamiltonian/overlap construction | Every SCF step |
+| **Medium** | MPI distributed parallel | Node-level distribution (`pdsyev`, `pzgemm`, ScaLAPACK) | All computation |
+| **Low** | NEGF (Green's functions) | Transport properties | Special purpose |
 
-**Rust の安全性はデフォルトだ。** すべてのコードがメモリ安全であり、安全でない操作が必要な箇所だけ `unsafe {}` と明示する。すべての unsafe が可視的で監査可能になる。リファクタリングを進めるにつれて `unsafe` が減り、コンパイラの保証が増えていく。
+The GPU version uses cuBLAS for GEMM, cuSOLVER for eigenvalue problems, OpenACC directives for data management, and CUDA streams for asynchronous execution. GPU acceleration targets the two most expensive kernels: eigenvalue decomposition and matrix multiplication.
 
-**グローバルな可変状態はコンパイルエラーになる。** C/C++ では330個のグローバル変数は合法だが、Rust では可変なグローバル状態には `unsafe` か同期プリミティブが必要になる。crate に分割すると、330個のグローバル変数というパターンは物理的に生き残れない。コンパイラがそれを排除する。
+### The status quo is unsustainable
 
-**crate 境界がモジュール性を強制する。** Rust のワークスペースは明示的な依存関係宣言を持つ crate で構成される。crate A は crate B の非公開部分にアクセスできず、循環依存は禁止。12個の crate に分割すると、コンパイラがクリーンなインターフェースを**強制する**。C++ ではヘッダやライブラリの境界はビルドシステムの慣習にすぎない。
+The first-principles computation community faces these problems simultaneously:
 
-**差分コンパイルが crate 単位で効く。** 一つの crate を変更すると、その crate と依存先だけが再コンパイルされる。交換相関 crate を変えても Poisson ソルバーや I/O 層の再コンパイルは発生しない。`openmx_common.h` のような共有ヘッダを持つ C/C++ では、そのヘッダの変更で全346ファイルが再コンパイルされる。
+1. **Code keeps growing.** Transport, optical properties, topological invariants, and machine-learning potentials are added one after another.
+2. **Maintainers keep shrinking.** Original developers retire or move on.
+3. **Hardware keeps diversifying.** CPU, GPU, ARM, and heterogeneous nodes must all be supported.
+4. **User expectations keep rising.** Python interfaces, reproducible workflows, and cloud deployment are demanded.
 
-**C++ には標準的なパッケージシステムがない。** C++ の依存関係管理は CMake に頼ることが多いが、CMakeLists.txt の書き方に標準はなく、プロジェクトごとにやり方が異なる。依存関係が正しく解決されているかを機械的に検証するのが難しい。AI に検証させることはできるが、時間がかかる。Rust の `cargo` では `Cargo.toml` に依存を宣言するだけで、解決・ビルド・バージョン整合性の検証が一瞬で完了する。12個の crate からなるワークスペースでも `cargo build` 一発でビルドが通る。
-
-**AI エージェントは C++ より Rust で効果的に動く。** 両言語とも AI にとって「書く」コストは同じだ。違いは「検証」にある。AI が書いた C++ コードがコンパイルを通っても、未定義動作や use-after-free が残りうる。Rust コードがコンパイルを通れば、メモリ安全性バグのクラス全体が排除される。AI の edit→compile→test サイクルの生産性が劇的に上がる。
+Continuing to patch 390,000 lines of C code with 330 global variables is not a viable path.
 
 ---
 
-## Part III: エコシステムは準備ができている
+## Part II: Why Rust (and Why Not C++)
 
-### 外部ライブラリ
+### You do not need to learn Rust
 
-第一原理計算コードに必要な外部ライブラリは、すべて Rust から利用可能だ。
+The most important point, stated first.
 
-| ライブラリ | Rust crate | 備考 |
-|-----------|-----------|------|
-| BLAS/LAPACK | [blas](https://crates.io/crates/blas) / [lapack](https://crates.io/crates/lapack) | OpenBLAS, MKL 等に対応。[cblas-inject](https://crates.io/crates/cblas-inject) によるランタイム注入も可 |
-| MPI | [rsmpi](https://github.com/rsmpi/rsmpi) (crate名: [mpi](https://crates.io/crates/mpi)) | MPI-3.1 準拠。[rsmpi-rt](https://github.com/tensor4all/rsmpi-rt) によるランタイムロードも可 |
-| HDF5 | [hdf5](https://crates.io/crates/hdf5) | スレッドセーフなラッパー。[hdf5-rt](https://github.com/tensor4all/hdf5-rt) によるランタイムロードも可 |
-| FFT | [fftw](https://crates.io/crates/fftw) / [rustfft](https://crates.io/crates/rustfft) | FFTW3 バインディング、または純 Rust 実装 |
-| CUDA | [cudarc](https://crates.io/crates/cudarc) | cuBLAS, cuSOLVER, cuSPARSE, cuRAND 等を含む安全なラッパー |
-| OpenMP 相当 | [rayon](https://crates.io/crates/rayon) | データ並列ライブラリ。ネスト並列とスレッドプールの分類が可能 |
+In the age of AI agents (Claude Code, Cursor, GitHub Copilot, etc.), **humans do not need to write Rust line by line**. AI agents handle the mechanical complexity of ownership annotations, lifetime bounds, and trait implementations, while humans focus on **physics, algorithms, abstractions, and correctness**.
 
-BLAS/LAPACK、MPI、HDF5、FFT、CUDA については既存の C/Fortran ライブラリを呼び出す薄いラッパーだ。Rayon は純 Rust 実装で、OpenMP の `parallel for` に相当する機能を提供する。OpenMP と異なり、ネスト並列が自然に書ける。スレッドプールを用途別に分離できるため、「MPI 通信用」「行列演算用」「I/O 用」のようにスレッドを分類して管理できる。
+The Rust compiler verifies the code written by agents, catching memory bugs, data races, and type errors at compile time. It is a tireless automated reviewer that never misses an entire class of bugs.
 
-また、CUDA の独自カーネルを埋め込んで nvcc でコンパイル・呼び出しすることも可能だし、一部を C や C++ として書いて（OpenMP 並列も含め）Rust から呼び出すこともできる。Rust で同等の性能が出るので通常は必要ないが、既存の高度に最適化されたカーネルをそのまま使いたい場合の選択肢として残っている。
+What physicists **need to be able to do**:
 
-### テンソル演算: tenferro-rs
+- Read Rust function signatures (types, inputs, outputs) -- they resemble mathematical notation
+- Judge whether an abstraction is physically correct
+- Run `cargo test` and read the output
+- Tell the AI agent what should change
 
-密テンソル演算は、あらゆる第一原理計算コードが依存する計算の中核だ。[tenferro-rs](https://github.com/tensor4all/tenferro-rs) がこの中核を提供する Rust ワークスペースとして開発が進んでいる。
+What physicists **do not need to be able to do**:
 
-- **密テンソル**: ストライドビューとゼロコピースライシング
-- **Einsum**: 縮約ツリー最適化付き
-- **バッチ線形代数**: SVD、QR、LU、固有値分解
-- **自動微分プリミティブ**（VJP/JVP）: 複素 SVD、QR 等の正しい微分規則付き
-- **C-FFI**: DLPack 相互運用
-- **デバイス抽象化**: CPU と GPU
+- Memorise ownership rules
+- Write lifetime annotations
+- Debug borrow checker errors
+- Understand the internals of trait dispatch
 
-tenferro-rs は12個の crate からなるワークスペースとして構成されており、DFT コードに対して提案するのと同じパターンだ。
+These are handled by AI and verified by the compiler.
 
-### パッケージ配布
+### Why not C++
 
-Rust のパッケージマネージャ `cargo` が純粋な Rust の依存関係をすべて自動処理する。CMake も `pkg-config` も `configure` も不要。
+The question every computational physicist asks.
+
+**C code compiles as C++ unchanged, so nothing improves.** Compiling OpenMX's 346 C files with a C++ compiler produces identical behaviour. C++ has safety features (RAII, smart pointers, `std::vector`), but the compiler does not enforce their use. Safety is opt-in. Legacy C code ported to C++ remains unsafe C code with a `.cpp` extension.
+
+**Rust's safety is the default.** All code is memory-safe, and only places that need unsafe operations are marked with `unsafe {}`. All unsafe blocks are visible and auditable. As refactoring progresses, `unsafe` decreases and compiler guarantees increase.
+
+**Mutable global state is a compile error.** In C/C++, 330 global variables are legal. In Rust, mutable global state requires `unsafe` or synchronisation primitives. Splitting into crates makes the 330-global-variable pattern physically unable to survive. The compiler eliminates it.
+
+**Crate boundaries enforce modularity.** A Rust workspace consists of crates with explicit dependency declarations. Crate A cannot access crate B's private internals, and cyclic dependencies are forbidden. Splitting into 12 crates means the compiler **enforces** clean interfaces. In C++, header and library boundaries are build-system conventions.
+
+**Incremental compilation works at crate granularity.** Changing one crate recompiles only that crate and its dependents. Modifying the exchange-correlation crate does not trigger recompilation of the Poisson solver or I/O layer. In C/C++ with a shared header like `openmx_common.h`, changing that header recompiles all 346 files.
+
+**C++ lacks a standard package system.** C++ dependency management often relies on CMake, but there is no standard for how CMakeLists.txt should be written, and every project does it differently. Mechanically verifying that dependencies are correctly resolved is difficult. AI can verify this, but it takes time. With Rust's `cargo`, you declare dependencies in `Cargo.toml` and resolution, building, and version consistency verification complete instantly. A workspace of 12 crates builds with a single `cargo build`.
+
+**AI agents are more effective in Rust than C++.** The cost of "writing" code is the same for AI in both languages. The difference is in "verification." When AI-written C++ code compiles, undefined behaviour and use-after-free may remain. When Rust code compiles, the entire class of memory safety bugs is eliminated. The productivity of the AI's edit-compile-test cycle improves dramatically.
+
+---
+
+## Part III: The Ecosystem is Ready
+
+### External libraries
+
+Every external library needed by a first-principles code is available from Rust.
+
+| Library | Rust crate | Notes |
+|---------|-----------|-------|
+| BLAS/LAPACK | [blas](https://crates.io/crates/blas) / [lapack](https://crates.io/crates/lapack) | Supports OpenBLAS, MKL, etc. Runtime injection via [cblas-inject](https://crates.io/crates/cblas-inject) |
+| MPI | [rsmpi](https://github.com/rsmpi/rsmpi) (crate: [mpi](https://crates.io/crates/mpi)) | MPI-3.1 compliant. Runtime loading via [rsmpi-rt](https://github.com/tensor4all/rsmpi-rt) |
+| HDF5 | [hdf5](https://crates.io/crates/hdf5) | Thread-safe wrapper. Runtime loading via [hdf5-rt](https://github.com/tensor4all/hdf5-rt) |
+| FFT | [fftw](https://crates.io/crates/fftw) / [rustfft](https://crates.io/crates/rustfft) | FFTW3 bindings or pure Rust implementation |
+| CUDA | [cudarc](https://crates.io/crates/cudarc) | Safe wrapper for cuBLAS, cuSOLVER, cuSPARSE, cuRAND, etc. |
+| OpenMP equivalent | [rayon](https://crates.io/crates/rayon) | Data-parallel library with nested parallelism and thread pool separation |
+
+BLAS/LAPACK, MPI, HDF5, FFT, and CUDA are thin wrappers calling existing C/Fortran libraries. Rayon is a pure Rust implementation providing functionality equivalent to OpenMP's `parallel for`. Unlike OpenMP, nested parallelism is natural. Thread pools can be separated by purpose -- "MPI communication," "matrix operations," "I/O" -- enabling structured concurrency.
+
+Custom CUDA kernels can also be embedded and compiled with nvcc, and parts can be written in C or C++ (including OpenMP parallelism) and called from Rust. Since Rust achieves equivalent performance this is normally unnecessary, but the option remains for reusing highly optimised existing kernels.
+
+### Tensor operations: tenferro-rs
+
+Dense tensor operations are the computational core that every first-principles code depends on. [tenferro-rs](https://github.com/tensor4all/tenferro-rs) is the Rust workspace being developed to provide this core.
+
+- **Dense tensors**: strided views with zero-copy slicing
+- **Einsum**: with contraction tree optimisation
+- **Batched linear algebra**: SVD, QR, LU, Cholesky, eigenvalue decomposition, linear solve, matrix inversion
+- **Automatic differentiation primitives** (VJP/JVP): with correct differentiation rules for complex SVD, QR, etc.
+- **C-FFI**: DLPack interop
+- **Device abstraction**: CPU and GPU (CUDA/HIP)
+
+tenferro-rs is structured as a workspace of 13 crates, following the same pattern we propose for DFT codes.
+
+#### Gap analysis against OpenMX GPU
+
+We analysed the GPU-enabled OpenMX 3.9.9 source code to evaluate whether tenferro-rs provides a sufficient computational foundation for DFT applications. The analysis compared OpenMX's computational primitives against tenferro-rs's existing API surface.
+
+**Already covered by tenferro-rs:**
+
+| OpenMX need | tenferro equivalent |
+|-------------|---------------------|
+| Dense GEMM (`dgemm`/`zgemm`, `cublasDgemm`) | `TensorPrims::BatchedGemm`, einsum |
+| Standard eigenvalue (`dsyev`/`zheev`, `cusolverDnXsyevd`) | `tenferro-linalg::eigen()` |
+| SVD, QR, LU | `tenferro-linalg` |
+| Complex128 arithmetic | `num-complex::Complex64` |
+| GPU memory model | `LogicalMemorySpace::GpuMemory` |
+| Async GPU execution | `CompletionEvent` on `Tensor<T>` |
+| C FFI + DLPack | `tenferro-capi` |
+
+**Added to tenferro-rs as a result of this analysis:**
+
+| Operation | Rationale | Backend mapping |
+|-----------|-----------|-----------------|
+| `cholesky()` | Overlap matrix S factorisation (`dpotrf` in OpenMX) | faer (CPU), cuSOLVER (GPU) |
+| `solve()` | General linear solve A-x = b (Green's functions, NEGF) | faer (CPU), cuSOLVER (GPU) |
+| `inv()` | Explicit matrix inversion (LU-based, used in OpenMX for overlap regularisation) | Composed from `lu()` + `solve()` |
+
+**Deferred -- to be introduced when application development requires them:**
+
+| Feature | Why deferred | Where it belongs |
+|---------|-------------|------------------|
+| Generalised eigenvalue (`geig`: A-x = lambda-B-x) | Core of SCF loop but requires application-level validation first | `tenferro-linalg` |
+| FFT (3D forward/inverse) | Poisson solver; orthogonal to tensor contraction; better served by external `rustfft` + `cuFFT` via `Tensor::view()` | Application layer or thin wrapper crate |
+| Sparse / block-sparse matrices | Hamiltonian construction; application manages sparsity, passes dense blocks to tenferro | Application layer + external crates (`sprs`) |
+| MPI / distributed parallel | Node-level distribution; tenferro stays single-node (CPU/GPU) | Application layer |
+| ScaLAPACK-equivalent distributed solvers | Distributed eigenvalue (`pdsyev`/`pzheev`) | External crate (e.g. ELPA Rust binding) |
+
+**Architectural assessment:** tenferro-rs's layered structure (device -> algebra -> prims -> tensor -> einsum/linalg -> capi) is natural and sufficient for DFT applications. No structural changes are needed. The `TensorPrims<A>` describe-plan-execute pattern maps directly to the cuTENSOR API used by GPU DFT codes, and the `CompletionEvent` mechanism naturally corresponds to CUDA stream management. Application-specific concerns (sparsity, MPI, FFT) belong in the application layer, keeping tenferro-rs slim as a general-purpose tensor library.
+
+### Package distribution
+
+Rust's package manager `cargo` automatically handles all pure Rust dependencies. No CMake, no `pkg-config`, no `configure`.
 
 ```bash
-cargo build --release    # 全依存関係をダウンロードし、すべてをビルド
+cargo build --release    # Download all dependencies and build everything
 ```
 
-`cargo build --release` が実行時依存関係のない単一の実行ファイルを生成する。スパコン向けには `cargo vendor` で全依存関係のソースコードをローカルにコピーし、完全オフラインの再現可能ビルドが可能だ。7つのスパコン設定がコメントアウトされた Makefile は不要になる。
+`cargo build --release` produces a single executable with no runtime dependencies. For supercomputers, `cargo vendor` copies all dependency source code locally, enabling fully offline reproducible builds. The Makefile with seven commented-out supercomputer configurations becomes unnecessary.
 
 ---
 
-## Part IV: 書き直しの戦略
+## Part IV: Rewrite Strategy
 
-ここで提案するのは、レガシーコードを逐語的に Rust に翻訳する戦略ではない。39万行の C コードを少しずつ crate に分解していくのは現実的ではないし、その必要もない。
+What we propose is not a verbatim translation of legacy code to Rust. Incrementally decomposing 390,000 lines of C into crates is neither realistic nor necessary.
 
-**元の C コードはそのまま残す。** 手を入れるのは、検証用の数値データを出力するコードを加えるときだけだ。一方、Rust 側では正しい抽象化を一から設計する。これにより、巨大なレガシーコードを段階的に改修するという長大な過程を丸ごとスキップできる。
+**The original C code is left untouched.** The only modifications are adding code to output numerical data for verification. On the Rust side, the right abstractions are designed from scratch. This lets us skip entirely the long process of gradually refactoring a massive legacy codebase.
 
-### Phase 1: API スケルトンの設計（最も重要なフェーズ）
+### Phase 1: API skeleton design (the most important phase)
 
-最も重要なフェーズであり、自動化できないフェーズだ。
+The most important phase, and the one that cannot be automated.
 
-問いは「`Force.c` をどう Rust にするか」ではない。真の問いは**正しい抽象化は何か**だ。crate の境界をどこに引くか。ハミルトニアン構築と固有値ソルバーの間でどんなデータが流れるべきか。運動エネルギーとポテンシャルの寄与は別の型にすべきか。密度行列はインターフェース境界で実空間にあるべきか、逆格子空間にあるべきか。
+The question is not "how to convert `Force.c` to Rust." The real question is **what are the right abstractions?** Where to draw crate boundaries. What data should flow between Hamiltonian construction and the eigenvalue solver. Whether kinetic and potential energy contributions should be separate types. Whether the density matrix should be in real space or reciprocal space at interface boundaries.
 
-これらは物理の問いだ。三種類の専門性の融合が必要になる。
+These are physics questions. Three kinds of expertise must fuse:
 
-1. **第一原理計算の物理学者の直感。** DFT の実践者は、重なり行列とハミルトニアン行列が一般化固有値問題において異なる役割を持つことを知っている。それらはおそらく別の構築パイプラインに属すべきだと判断できる。OpenMX では類似した構造で構築されていたとしてもだ。API が「物理的に意味をなすか」を判断できるのは、物理を理解している人だけだ。
+1. **The intuition of first-principles physicists.** DFT practitioners know that the overlap matrix and the Hamiltonian matrix play different roles in the generalised eigenvalue problem. They should probably belong to separate construction pipelines, even if OpenMX constructs them similarly. Only someone who understands the physics can judge whether an API "makes physical sense."
 
-2. **分野横断的なアーキテクチャの知見。** 第一原理計算とテンソルネットワークの両方で研究を行ってきた品岡らは、単一の分野からは見えないパターンを見出せる。[tenferro-rs](https://github.com/tensor4all/tenferro-rs) が提供する密テンソル演算、einsum 縮約、バッチ線形代数、AD プリミティブはテンソルネットワーク固有ではなく、DFT コードが必要とするのと同じ演算だ。「共有すべき計算基盤」と「DFT 固有のロジック」の境界を引くには、両方の世界での経験が要る。
+2. **Cross-disciplinary architectural insight.** Researchers like Shinaoka et al., who work in both first-principles and tensor networks, can identify patterns invisible from a single field. The dense tensor operations, einsum contractions, batched linear algebra, and AD primitives provided by [tenferro-rs](https://github.com/tensor4all/tenferro-rs) are not tensor-network-specific -- they are the same operations DFT codes need. Drawing the boundary between "shared computational foundation" and "DFT-specific logic" requires experience in both worlds.
 
-3. **AI による高速な具現化。** AI エージェントは「運動エネルギーとポテンシャルのハミルトニアン構築を別々のトレイトに分けて」という指示から、数秒でコンパイル可能な Rust コードを生成する。物理学者は Rust を書く必要はない。出来上がった API を見て「物理を捉えている」か「スピンの構造が違う」と言えばよい。関数本体が `todo!()` なので即座にコンパイルされる。議論 → 具現化 → `cargo check` → 評価 → 再設計、のループが回る。
+3. **Rapid materialisation by AI.** An AI agent can generate compilable Rust code from an instruction like "separate kinetic and potential Hamiltonian construction into different traits" in seconds. The physicist does not need to write Rust. They examine the resulting API and say "this captures the physics" or "the spin structure is wrong." Function bodies are `todo!()`, so compilation is instant. The loop of discuss -> materialise -> `cargo check` -> evaluate -> redesign runs at the speed of thought.
 
-`cargo doc --open` を実行すれば、スケルトンの段階でも全 crate の公開 API が HTML ドキュメントとして即座に生成される。物理学者はブラウザで全体構造を俯瞰し、crate 間の依存関係、型の定義、関数シグネチャを確認できる。コードを読む必要はない。
+Running `cargo doc --open` generates HTML documentation for all crates' public APIs even at the skeleton stage. Physicists can survey the overall structure in a browser, checking inter-crate dependencies, type definitions, and function signatures. No need to read code.
 
-crate 構造と公開インターフェース（関数シグネチャ、トレイト定義、データ型）を `todo!()` の本体で定義する。
+Crate structure and public interfaces (function signatures, trait definitions, data types) are defined with `todo!()` bodies.
 
 ```
 openmx-rs/
-├── openmx-basis/           # PAO 基底関数、擬ポテンシャル
-├── openmx-grid/            # 実空間グリッド操作
-├── openmx-hamiltonian/     # ハミルトニアン構築
-├── openmx-xc/              # 交換相関汎関数
-├── openmx-poisson/         # FFT ベース Poisson ソルバー
-├── openmx-eigen/           # 固有値ソルバー（tenferro-rs を利用）
-├── openmx-mixing/          # SCF mixing（DIIS, Kerker, Pulay）
-├── openmx-scf/             # SCF ループ制御
-├── openmx-force/           # 力・応力（または AD ベース）
-├── openmx-transport/       # NEGF 量子輸送
-├── openmx-md/              # 分子動力学
-└── openmx-io/              # 入出力（OpenMX フォーマット互換）
+├── openmx-basis/           # PAO basis functions, pseudopotentials
+├── openmx-grid/            # Real-space grid operations
+├── openmx-hamiltonian/     # Hamiltonian construction
+├── openmx-xc/              # Exchange-correlation functionals
+├── openmx-poisson/         # FFT-based Poisson solver
+├── openmx-eigen/           # Eigenvalue solver (uses tenferro-rs)
+├── openmx-mixing/          # SCF mixing (DIIS, Kerker, Pulay)
+├── openmx-scf/             # SCF loop control
+├── openmx-force/           # Forces and stress (or AD-based)
+├── openmx-transport/       # NEGF quantum transport
+├── openmx-md/              # Molecular dynamics
+└── openmx-io/              # Input/output (OpenMX format compatible)
 ```
 
-スケルトンは数秒でコンパイルされる。本体が `todo!()` なので、再設計ループは思考速度で回る。物理学者が昼食前に5つの API 設計を却下しても、AI は5つすべてを具現化し終えている。
+The skeleton compiles in seconds. With `todo!()` bodies, the redesign loop runs at the speed of thought. If the physicist rejects five API designs before lunch, the AI has materialised all five.
 
-**最初から完璧な抽象化は必要ない。** スケルトンフェーズで速やかに収束するが、後で crate 境界が間違っていたとわかっても、境界を移動すればよい。C で39万行のコードを再構築するのは恐怖だ。何が壊れるかわからず、検出するテストもない。Rust では型システムとテストスイートの組み合わせで再構築が安全になる。コンパイラがインターフェース違反をコンパイル時に検出し、テストが数値回帰を実行時に検出する。
+**A perfect abstraction is not required from the start.** The skeleton phase converges quickly, but if a crate boundary turns out to be wrong later, it can be moved. Restructuring 390,000 lines of C is terrifying -- you cannot know what will break, and there are no tests to detect it. In Rust, the combination of the type system and the test suite makes restructuring safe. The compiler detects interface violations at compile time, and tests detect numerical regressions at runtime.
 
-### Phase 2: 参照テストデータベースの構築
+### Phase 2: Building a reference test database
 
-Rust の実装を書く前に、「正しい」とは何かを定義する。各 crate について参照入力と期待出力のセットを用意する。このデータはオリジナルの OpenMX から生成する。
+Before writing Rust implementations, define what "correct" means. Prepare sets of reference inputs and expected outputs for each crate. This data is generated from the original OpenMX.
 
-この作業は機械的だ。OpenMX には既にテスト入力ファイルがある（`work/` に格納）。インプットファイルさえ決めれば、あとは AI エージェントが自律的に行える。
+This work is mechanical. OpenMX already has test input files (stored in `work/`). Once the input files are chosen, an AI agent can do the rest autonomously.
 
-1. OpenMX の C コードに、各 SCF ステップ後の密度、ハミルトニアン行列要素、固有値、XC ポテンシャル、Hartree ポテンシャル、力などを出力するコードを追加する
-2. 標準的な入力セット（バルク Si、分子、表面スラブ、磁性系）で実行する
-3. 出力を参照データベース（HDF5 等）に収集する
+1. Add code to OpenMX's C source to output the density, Hamiltonian matrix elements, eigenvalues, XC potential, Hartree potential, forces, etc. after each SCF step
+2. Run with standard input sets (bulk Si, molecules, surface slabs, magnetic systems)
+3. Collect outputs into a reference database (HDF5 or similar)
 
-結果として、crate ごとのテスト契約が得られる。
+The result is a per-crate test contract:
 
-- `openmx-xc`: グリッド上の電子密度 → 交換相関エネルギーとポテンシャル
-- `openmx-poisson`: 電荷密度 → Hartree ポテンシャル
-- `openmx-eigen`: ハミルトニアンと重なり行列 → 固有値
-- `openmx-scf`: 入力構造 → N SCF ステップ後の全エネルギーと力
+- `openmx-xc`: electron density on grid -> exchange-correlation energy and potential
+- `openmx-poisson`: charge density -> Hartree potential
+- `openmx-eigen`: Hamiltonian and overlap matrices -> eigenvalues
+- `openmx-scf`: input structure -> total energy and forces after N SCF steps
 
-テストが存在すれば、実装は「テストをパスさせる」仕事になる。AI エージェントが最も得意とするタスクだ。
+Once tests exist, implementation becomes "make the tests pass." This is the task AI agents excel at.
 
-### Phase 3: Rust による新規実装（AI エージェント、並列）
+### Phase 3: New Rust implementation (AI agents, in parallel)
 
-API とテスト契約が定まったら、AI エージェントが crate ごとに実装を書く。crate は独立しているので、複数エージェントが並列に作業できる。
+Once the API and test contracts are established, AI agents write implementations crate by crate. Since crates are independent, multiple agents can work in parallel.
 
-- エージェント A が `openmx-xc` を実装
-- エージェント B が `openmx-poisson` を実装
-- エージェント C が `openmx-mixing` を実装
+- Agent A implements `openmx-xc`
+- Agent B implements `openmx-poisson`
+- Agent C implements `openmx-mixing`
 
-オリジナルの C コードはアルゴリズムの参考にはなるが、逐語的に翻訳するのではない。正しい抽象化の上に、正しいアルゴリズムを新たに実装する。差分コンパイルにより、各エージェントの edit→compile→test サイクルは秒単位で回る。
+The original C code serves as an algorithmic reference, but is not translated verbatim. Correct algorithms are implemented anew on top of the correct abstractions. Incremental compilation ensures each agent's edit-compile-test cycle runs in seconds.
 
-### Phase 4: オリジナルとの照合検証（AI エージェント、自動化）
+### Phase 4: Cross-validation against the original (AI agents, automated)
 
-ここで第一原理計算コードの決定的な強みが活きる。**DFT 計算は決定的だ。** 同じ入力は浮動小数点精度の範囲で同じ出力を生む。乱数もモンテカルロノイズも統計誤差もない。
+Here a decisive strength of first-principles codes comes into play. **DFT calculations are deterministic.** The same input produces the same output to floating-point precision. No random numbers, no Monte Carlo noise, no statistical error.
 
-この決定性のおかげで、自動検証が明快に成立する。
+This determinism makes automated verification straightforward:
 
-1. OpenMX（C）と openmx-rs（Rust）に同じ入力を与える
-2. 各 SCF ステップの中間量（全エネルギー、固有値、密度行列、力）を比較する
-3. 不一致が見つかったら、**二分探索**で原因を特定する
+1. Feed the same input to OpenMX (C) and openmx-rs (Rust)
+2. Compare intermediate quantities (total energy, eigenvalues, density matrix, forces) at each SCF step
+3. When a mismatch is found, **binary search** for the cause
 
 ```
-SCF ステップ 5:
-  total_energy:  C = -1234.56789012   Rust = -1234.56789012   一致
-  force[0].x:    C = +0.00123456      Rust = +0.00123489      不一致
+SCF step 5:
+  total_energy:  C = -1234.56789012   Rust = -1234.56789012   match
+  force[0].x:    C = +0.00123456      Rust = +0.00123489      mismatch
 
-AI 二分探索: "力の不一致。個別の寄与をテスト..."
-  kinetic:       一致
-  Hartree:       一致
-  nonlocal:      不一致 → "L=2 の Gaunt 係数の位相規約が異なる。
-                  OpenMX は Condon-Shortley 規約、Rust 側は
-                  (-1)^m 因子を省略。修正中..."
-  [修正適用、3秒で再コンパイル、再検証]
-  nonlocal:      一致
-  force[0].x:    一致
+AI binary search: "Force mismatch. Testing individual contributions..."
+  kinetic:       match
+  Hartree:       match
+  nonlocal:      mismatch -> "Phase convention differs for L=2 Gaunt coefficients.
+                  OpenMX uses Condon-Shortley convention; Rust side
+                  omits the (-1)^m factor. Fixing..."
+  [Fix applied, recompile in 3 seconds, re-verify]
+  nonlocal:      match
+  force[0].x:    match
 ```
 
-AI エージェントがこの二分探索を自律的に回せる。DFT の決定性により、各比較に曖昧さがない。「ただのノイズかもしれない」という問題がそもそも存在しない。
+AI agents can run this binary search autonomously. The determinism of DFT means there is no ambiguity in each comparison. The problem of "it might just be noise" simply does not exist.
 
-### 最終的に得られるもの
+### What you get in the end
 
-| 変更前（OpenMX C） | 変更後（openmx-rs） |
+| Before (OpenMX C) | After (openmx-rs) |
 |--------------------|--------------------|
-| 346ファイルに39万行 | Rust ワークスペース（約12 crate） |
-| 330個のグローバル変数 | グローバル状態ゼロ。データは関数引数で流れる |
-| 手書き Makefile（7スパコン設定） | `cargo build --release` |
-| ヘッダ変更で全ファイル再コンパイル | crate 変更でその crate だけ再コンパイル |
-| ユニットテストなし | 各 crate が独立にテスト可能 |
-| バスファクター = 1 | AI エージェントがメンテナンス可能 |
-| 手書きの力計算（12,000行） | 自動微分で置き換え可能 |
-| 新 XC 汎関数追加に7ファイル修正 | `openmx-xc` で1トレイトを実装 |
+| 390,000 lines in 346 files | Rust workspace (~12 crates) |
+| 330 global variables | Zero global state; data flows through function arguments |
+| Hand-written Makefile (7 supercomputer configs) | `cargo build --release` |
+| Header change recompiles all files | Crate change recompiles only that crate |
+| No unit tests | Each crate independently testable |
+| Bus factor = 1 | AI agents can maintain the code |
+| Hand-written force calculation (12,000 lines) | Replaceable by automatic differentiation |
+| Adding a new XC functional requires editing 7 files | Implement one trait in `openmx-xc` |
 
-**数値結果はオリジナルと同一**であることが、自動比較により検証済みだ。
-
----
-
-## Part V: AI・人間統合型の開発
-
-ここで述べた戦略は推測ではなく、既に機能しているパターンだ。
-
-### 三つの役割
-
-| 役割 | 担い手 |
-|------|--------|
-| **設計判断** | |
-| 正しい抽象化を決める | 第一原理計算の物理学者 |
-| crate 境界が物理的に妥当か判断する | 第一原理計算の物理学者 |
-| **アーキテクチャの知見** | |
-| 共有基盤と DFT 固有ロジックの境界を引く | 分野横断的研究者（第一原理 + テンソルネットワーク） |
-| 分野を超えた再利用可能パターンを見出す | 分野横断的研究者 |
-| DFT の crate と tenferro-rs の基盤を接続する | 分野横断的研究者 + AI |
-| **実装と検証** | |
-| Rust での新規実装 | AI エージェント |
-| テストの記述 | AI エージェント |
-| オリジナルとの二分探索検証 | AI エージェント |
-| 数値の不一致の原因特定 | 物理学者 + AI |
-| **自動保証** | |
-| メモリ安全性 | Rust コンパイラ |
-| データ競合の不在 | Rust コンパイラ |
-| crate 境界とインターフェース契約の強制 | Rust コンパイラ |
-
-### なぜ融合が重要か
-
-人間、AI、コンパイラのいずれも、単独ではこれを成し遂げられない。
-
-第一原理の物理学者は39万行を書き直せないし、自分が必要とする固有値ソルバーがテンソルネットワーク研究者の日常的な演算と同一であることに気づかないかもしれない。品岡らはこのつながりを見出せる。DFT とテンソルネットワークの両方を構築してきた経験から、密テンソル縮約、バッチ SVD、AD プリミティブが共有基盤であることを知っている。しかし一人で DFT コード全体を再設計・再実装はできない。AI エージェントは高速に実装できるが、抽象化が物理的に正しいかは判断できない。Rust コンパイラはメモリバグを検出しモジュール性を強制するが、物理は知らない。
-
-三者が合わさると、完全なループが回る。
-
-1. 物理学者：「重なり行列とハミルトニアンは別のパイプラインで構築すべきだ」
-2. 分野横断的研究者：「固有値計算は tenferro-rs のバッチ線形代数を通すべきだ。テンソルネットワークと同じバックエンドを共有できる」
-3. AI エージェントがコンパイル可能な Rust のトレイトと型を数秒で具現化
-4. コンパイラが12 crate すべてのインターフェース整合性を検証
-5. 物理学者が評価：「物理を捉えている」か「スピンの自由度の位置が違う」
-6. このループが月単位ではなく分単位で回る
-
-> **AI エージェントの時代では、書き直しはほぼ無料だ。ボトルネックはコードを書くことではなく、正しい抽象化と設計を見つけることだ。** その抽象化を見つけるには、第一原理計算の直感、分野横断的なアーキテクチャの知見、AI による高速な反復、この三者の融合が必要だ。本ドキュメント自体が、その融合の産物である。
+**Numerical results are identical to the original**, verified by automated comparison.
 
 ---
 
-## 参考文献
+## Part V: Human-AI Integrated Development
 
-- [Why Rust for Julia tensor network developers](why_rusty_julia.md): テンソルネットワークコミュニティ向けの姉妹ドキュメント
-- [tenferro-rs](https://github.com/tensor4all/tenferro-rs): Rust テンソル計算ワークスペース（POC）
-- [OpenMX](https://www.openmx-square.org/): ケーススタディに使用した DFT コード
+The strategy described here is not speculation -- it is a pattern that already works.
+
+### Three roles
+
+| Role | Performed by |
+|------|-------------|
+| **Design decisions** | |
+| Determine the right abstractions | First-principles physicists |
+| Judge whether crate boundaries are physically sound | First-principles physicists |
+| **Architectural insight** | |
+| Draw the boundary between shared foundation and DFT-specific logic | Cross-disciplinary researchers (first-principles + tensor networks) |
+| Identify reusable patterns across fields | Cross-disciplinary researchers |
+| Connect DFT crates to the tenferro-rs foundation | Cross-disciplinary researchers + AI |
+| **Implementation and verification** | |
+| New implementation in Rust | AI agents |
+| Writing tests | AI agents |
+| Binary-search verification against original | AI agents |
+| Root-cause analysis of numerical mismatches | Physicists + AI |
+| **Automated guarantees** | |
+| Memory safety | Rust compiler |
+| Absence of data races | Rust compiler |
+| Enforcement of crate boundaries and interface contracts | Rust compiler |
+
+### Why the fusion matters
+
+Neither humans, AI, nor the compiler can accomplish this alone.
+
+First-principles physicists cannot rewrite 390,000 lines, and may not realise that the eigenvalue solver they need is the same operation that tensor network researchers use daily. Researchers like Shinaoka et al. can identify this connection. From experience building both DFT and tensor networks, they know that dense tensor contractions, batched SVD, and AD primitives are shared infrastructure. But they cannot redesign and reimplement an entire DFT code alone. AI agents implement fast but cannot judge whether an abstraction is physically correct. The Rust compiler detects memory bugs and enforces modularity but knows no physics.
+
+When the three come together, a complete loop emerges:
+
+1. Physicist: "The overlap matrix and Hamiltonian should be built in separate pipelines"
+2. Cross-disciplinary researcher: "The eigenvalue computation should go through tenferro-rs's batched linear algebra. It can share the same backend as tensor networks"
+3. AI agent materialises compilable Rust traits and types in seconds
+4. Compiler verifies interface consistency across all 12 crates
+5. Physicist evaluates: "this captures the physics" or "the spin degrees of freedom are in the wrong place"
+6. This loop runs in minutes, not months
+
+> **In the age of AI agents, rewriting is nearly free. The bottleneck is not writing code, but finding the right abstractions and designs.** Finding those abstractions requires a fusion of first-principles intuition, cross-disciplinary architectural insight, and rapid iteration by AI. This document itself is a product of that fusion.
+
+---
+
+## References
+
+- [Why Rust for Julia tensor network developers](why_rusty_julia.md): sister document for the tensor network community
+- [tenferro-rs](https://github.com/tensor4all/tenferro-rs): Rust tensor computation workspace (POC)
+- [OpenMX](https://www.openmx-square.org/): DFT code used as case study
