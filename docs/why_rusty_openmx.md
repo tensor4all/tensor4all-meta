@@ -1,5 +1,7 @@
 # Why Rewrite First-Principles Codes in Rust
 
+**Disclaimer: This document is a hypothetical exploration of strategies for rewriting domain-specific applications in Rust using tenferro-rs as a shared computational foundation. It is not an official implementation plan for any of the applications discussed.**
+
 Large-scale legacy first-principles codes written in C and Fortran (hundreds of thousands of lines, hundreds of global variables) can be redesigned and reimplemented in Rust using AI agents. This solves the problems facing the first-principles computation community.
 
 We use [OpenMX](https://www.openmx-square.org/) (a DFT code, ~390,000 lines of C) as a case study, but the strategy applies to any large-scale computational science code with similar characteristics.
@@ -202,6 +204,39 @@ cargo build --release    # Download all dependencies and build everything
 What we propose is not a verbatim translation of legacy code to Rust. Incrementally decomposing 390,000 lines of C into crates is neither realistic nor necessary.
 
 **The original C code is left untouched.** The only modifications are adding code to output numerical data for verification. On the Rust side, the right abstractions are designed from scratch. This lets us skip entirely the long process of gradually refactoring a massive legacy codebase.
+
+```
+ Phase 1                 Phase 2          Phase 3              Phase 4
+ API skeleton design     Reference data   Implementation       Cross-validation
+ ┌─────────────────────┐ ┌──────────────┐ ┌──────────────────┐ ┌────────────────────┐
+ │ Physicist            │ │ AI adds data │ │ AI Agent A:      │ │ Same input         │
+ │  "overlap and H     │ │ output to    │ │  openmx-xc       │ │  ┌───┐     ┌───┐  │
+ │   need separate     │ │ OpenMX C     │ │ AI Agent B:      │ │  │ C │────→│Cmp│  │
+ │   pipelines"        │ │      │       │ │  openmx-poisson  │ │  └───┘     └─┬─┘  │
+ │       │             │ │      ↓       │ │ AI Agent C:      │ │  ┌────┐    ↗ │    │
+ │       ↓             │ │ Run standard │ │  openmx-mixing   │ │  │Rust│───┘  │    │
+ │ AI materialises     │ │ test suite   │ │       │          │ │  └────┘      │    │
+ │ Rust traits in sec  │ │      │       │ │       ↓          │ │         mismatch?  │
+ │       │             │ │      ↓       │ │ ┌──────────────┐ │ │              │     │
+ │       ↓             │ │ Collect into │ │ │ edit→compile  │ │ │     ┌───────↓───┐ │
+ │ cargo check (fast!) │ │ HDF5 ref DB  │ │ │ →test (secs) │ │ │     │ AI binary │ │
+ │       │             │ └──────────────┘ │ └──────┬───────┘ │ │     │ search    │ │
+ │       ↓             │                  │        │ fail?   │ │     │ → fix     │ │
+ │ Physicist evaluates │        ──→       │        ↓         │ │     └───────────┘ │
+ │  "spin structure    │                  │    fix and retry  │ └────────────────────┘
+ │   is wrong"         │                  │  (crate-isolated) │
+ │       │             │                  └──────────────────┘
+ │       ↓             │
+ │ Repeat (minutes,    │
+ │  not months)        │
+ └─────────────────────┘
+```
+
+Each phase features fast AI-human iteration loops. Phase 1 runs the
+physicist-AI design loop in minutes per iteration. Phase 3 runs the AI's
+edit-compile-test loop in seconds per iteration (incremental compilation
+at crate granularity). Phase 4 runs automated binary search to pinpoint
+the source of numerical mismatches without human intervention.
 
 ### Phase 1: API skeleton design (the most important phase)
 
