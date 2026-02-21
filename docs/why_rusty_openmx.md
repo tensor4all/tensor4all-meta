@@ -2,6 +2,16 @@
 
 **Disclaimer: This document is a hypothetical exploration of strategies for rewriting domain-specific applications in Rust using tenferro-rs as a shared computational foundation. It is not an official implementation plan for any of the applications discussed.**
 
+## Table of Contents
+
+- [Part I: The Problem with Legacy First-Principles Codes](#part-i-the-problem-with-legacy-first-principles-codes)
+- [Part II: Why Rust (and Why Not C++)](#part-ii-why-rust-and-why-not-c)
+- [Part III: The Ecosystem is Ready](#part-iii-the-ecosystem-is-ready)
+- [Part IV: Rewrite Strategy](#part-iv-rewrite-strategy)
+- [Part V: Human-AI Integrated Development](#part-v-human-ai-integrated-development)
+
+---
+
 Large-scale legacy first-principles codes written in C and Fortran (hundreds of thousands of lines, hundreds of global variables) can be redesigned and reimplemented in Rust using AI agents. This solves the problems facing the first-principles computation community.
 
 We use [OpenMX](https://www.openmx-square.org/) (a DFT code, ~390,000 lines of C) as a case study, but the strategy applies to any large-scale computational science code with similar characteristics.
@@ -206,30 +216,17 @@ What we propose is not a verbatim translation of legacy code to Rust. Incrementa
 **The original C code is left untouched.** The only modifications are adding code to output numerical data for verification. On the Rust side, the right abstractions are designed from scratch. This lets us skip entirely the long process of gradually refactoring a massive legacy codebase.
 
 ```
- Phase 1                 Phase 2          Phase 3              Phase 4
- API skeleton design     Reference data   Implementation       Cross-validation
- ┌─────────────────────┐ ┌──────────────┐ ┌──────────────────┐ ┌────────────────────┐
- │ Physicist            │ │ AI adds data │ │ AI Agent A:      │ │ Same input         │
- │  "overlap and H     │ │ output to    │ │  openmx-xc       │ │  ┌───┐     ┌───┐  │
- │   need separate     │ │ OpenMX C     │ │ AI Agent B:      │ │  │ C │────→│Cmp│  │
- │   pipelines"        │ │      │       │ │  openmx-poisson  │ │  └───┘     └─┬─┘  │
- │       │             │ │      ↓       │ │ AI Agent C:      │ │  ┌────┐    ↗ │    │
- │       ↓             │ │ Run standard │ │  openmx-mixing   │ │  │Rust│───┘  │    │
- │ AI materialises     │ │ test suite   │ │       │          │ │  └────┘      │    │
- │ Rust traits in sec  │ │      │       │ │       ↓          │ │         mismatch?  │
- │       │             │ │      ↓       │ │ ┌──────────────┐ │ │              │     │
- │       ↓             │ │ Collect into │ │ │ edit→compile  │ │ │     ┌───────↓───┐ │
- │ cargo check (fast!) │ │ HDF5 ref DB  │ │ │ →test (secs) │ │ │     │ AI binary │ │
- │       │             │ └──────────────┘ │ └──────┬───────┘ │ │     │ search    │ │
- │       ↓             │                  │        │ fail?   │ │     │ → fix     │ │
- │ Physicist evaluates │        ──→       │        ↓         │ │     └───────────┘ │
- │  "spin structure    │                  │    fix and retry  │ └────────────────────┘
- │   is wrong"         │                  │  (crate-isolated) │
- │       │             │                  └──────────────────┘
- │       ↓             │
- │ Repeat (minutes,    │
- │  not months)        │
- └─────────────────────┘
+Phase 1: Design        Phase 2: Ref Data    Phase 3: Implement     Phase 4: Validate
+
+┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
+│ Physicist directs    │ │ AI instruments       │ │ Parallel AI agents:  │ │ Same input to        │
+│ AI generates Rust    │ │ OpenMX C code        │ │ edit→compile→test    │ │ C and Rust           │
+│ cargo check (fast)   │ │ Run test suite       │ │ (seconds per cycle)  │ │ Compare outputs      │
+│ Physicist reviews    │ │ Collect into         │ │ fail? fix and retry  │ │ mismatch? AI binary  │
+│ "wrong" → repeat     │ │ HDF5 reference DB    │ │ (crate-isolated)     │ │ search → fix         │
+│                      │ │                      │ │                      │ │                      │
+│ ● minutes per loop   │ │ ● AI-driven          │ │ ● seconds per loop   │ │ ● fully automated    │
+└──────────────────────┘ └──────────────────────┘ └──────────────────────┘ └──────────────────────┘
 ```
 
 Each phase features fast AI-human iteration loops. Phase 1 runs the
