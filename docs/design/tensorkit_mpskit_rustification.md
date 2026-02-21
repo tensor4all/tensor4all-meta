@@ -1,5 +1,7 @@
 # Rustifying TensorKit.jl / MPSKit.jl on top of tenferro-rs
 
+**Disclaimer: This document is a hypothetical exploration of strategies for rewriting domain-specific applications in Rust using tenferro-rs as a shared computational foundation. It is not an official implementation plan for any of the applications discussed.**
+
 Date: 2026-02-21
 
 ## Executive Summary

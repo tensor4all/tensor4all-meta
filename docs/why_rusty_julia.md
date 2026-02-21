@@ -1,5 +1,7 @@
 # Why Rust for Julia tensor network developers
 
+**Disclaimer: This document is a hypothetical exploration of strategies for rewriting domain-specific applications in Rust using tenferro-rs as a shared computational foundation. It is not an official implementation plan for any of the applications discussed.**
+
 This document makes two arguments:
 
 1. **Use Rust as a backend.** Julia tensor network libraries can gain significant benefits — faster precompilation, higher development feedback rate, and cross-language reuse — by moving their compute and storage layers to a shared Rust backend via C-FFI, while keeping Julia as the frontend.
