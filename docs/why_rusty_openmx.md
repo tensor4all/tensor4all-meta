@@ -10,6 +10,8 @@
 - [Part IV: Rewrite Strategy](#part-iv-rewrite-strategy)
 - [Part V: Human-AI Integrated Development](#part-v-human-ai-integrated-development)
 
+> **Related:** [OpenMX Code Analysis](openmx_analysis.md) - Detailed source code analysis for Rust migration planning
+
 ---
 
 Large-scale legacy first-principles codes written in C and Fortran (hundreds of thousands of lines, hundreds of global variables) can be redesigned and reimplemented in Rust using AI agents. This solves the problems facing the first-principles computation community.

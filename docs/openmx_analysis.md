@@ -2,6 +2,8 @@
 
 **Date: 2026-02-26**
 
+> **Related:** [Why Rewrite First-Principles Codes in Rust](why_rusty_openmx.md) - Strategy and motivation for Rust migration
+
 This document summarizes the detailed analysis of OpenMX 3.9 source code for planning a Rust migration using tenferro-rs.
 
 ## 1. Code Scale Overview
