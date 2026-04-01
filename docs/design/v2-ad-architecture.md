@@ -36,11 +36,21 @@ Six operations:
 
 ```
 build          construct a primal graph
-differentiate  graph → NEW linear graph (JVP)
-transpose      linear graph → NEW linear graph (flip direction)
-merge          unify multiple graphs by content-addressable ID (CSE)
-compile        merged graph → CompiledProgram (flat SSA IR)
-eval           CompiledProgram + input values → output values
+differentiate  graph → NEW linear graph (JVP), references primal values
+merge          resolve external references + CSE (must precede next differentiate)
+transpose      linear graph → NEW linear graph (flip tangent I/O direction)
+compile        merged graph → TenferroIR (flat SSA)
+eval           TenferroIR + input values → output values
+```
+
+**Pipeline for higher-order AD**: `merge` after each `differentiate` to
+resolve external references before the next `differentiate` can trace
+through primal dependencies.
+
+```
+1st order:  build → differentiate → merge → transpose → compile → eval
+2nd order:  build → differentiate → merge → differentiate → merge → compile → eval
+n-th order: build → (differentiate → merge) × n → [transpose] → compile → eval
 ```
 
 Three crates, strictly layered:
@@ -159,58 +169,71 @@ not depending on `wrt`.
 
 ### `transpose`: flip a linear graph
 
-Takes a linear graph and produces a NEW graph with reversed data flow.
-Each linear op is replaced by its transpose (adjoint).
+Takes a linear graph and produces a NEW graph with **tangent I/O reversed**.
+Coefficients (primal values) stay the same; only the tangent data flow
+direction flips.
 
-**Real case**: transpose = matrix transpose.
+#### Linear primitives
 
-```
-Add       ↔  Dup          (sum ↔ broadcast)
-Scale(c)  ↔  Scale(c)     (self-adjoint)
-Mul(a, ·) ↔  Mul(a, ·)    (self-adjoint)
-```
-
-**Complex case**: transpose = Hermitian adjoint (conjugate transpose).
-The adjoint of a linear map on a complex inner product space `<u,v> = u†v`
-requires conjugation. `Conj` nodes are inserted during transpose.
+The linear graph produced by `differentiate` uses dedicated linear
+primitives that explicitly distinguish **coefficient** (fixed, from primal)
+from **tangent** (linear variable):
 
 ```
-Scale(c)  ↔  Scale(Conj(c))     ← conjugate the coefficient
-Mul(a, ·) ↔  Mul(Conj(a), ·)    ← conjugate the primal
-Add       ↔  Dup                 ← unchanged (real-valued structure)
+Scale(coeff, tangent)   — multiply tangent by coefficient
+AddLin(tangent_a, tangent_b)  — sum two tangent values
+Dup(tangent)            — duplicate tangent (1 → 2 outputs)
+Conj(val)               — complex conjugate
 ```
 
-Example: `f(z) = c * z` where `c = 2+3i`, `z ∈ C`.
+`Scale` (not generic `Mul`) makes the role of each operand explicit.
+This is essential for transpose: the coefficient stays, the tangent flips.
+
+#### Transpose rules
+
+**Real case:**
 
 ```
-Linearize (same as primal, linear op):
-  G_linear:
-    dz = Input(tangent)
-    dy = Scale(c, dz)          // (2+3i) * dz
-
-Transpose (real):               Transpose (complex):
-  ct_z = Scale(c, ct_y)          ct_z = Scale(Conj(c), ct_y)
-       = (2+3i) * ct_y                = (2-3i) * ct_y
-                                         ← Conj node inserted
+Scale(c, ·)   ↔  Scale(c, ·)      (self-adjoint)
+AddLin(·, ·)  ↔  Dup(·)           (sum ↔ broadcast)
+Dup(·)        ↔  AddLin(·, ·)     (broadcast ↔ sum)
 ```
 
-The graph for the complex transpose:
+**Complex case** (Hermitian adjoint — conjugate the coefficient):
 
 ```
-G_transposed:
-  ct_y = Input(cotangent)
-  c_conj = Conj(c)              // ← NEW: conjugate of primal value c
-  ct_z = Mul(c_conj, ct_y)      // (2-3i) * ct_y
+Scale(c, ·)   ↔  Scale(Conj(c), ·)
+AddLin(·, ·)  ↔  Dup(·)
+Dup(·)        ↔  AddLin(·, ·)
 ```
+
+#### Tangent I/O reversal
+
+Transpose swaps tangent inputs and outputs. Coefficients are unchanged.
+
+```
+Forward linear graph:
+  v4 = Input(dx)               ← tangent INPUT
+  v5 = Scale(v1, v4)           ← v1 = a (coefficient, fixed)
+  v6 = Scale(v3, v5)           ← v3 = exp(a*x) (coefficient, fixed)
+                                  v6 = tangent OUTPUT
+
+Transposed graph (reversed, new variable names):
+  v7 = Input(ct_dy)            ← was OUTPUT, now INPUT
+  v8 = Scale(Conj(v3), v7)     ← reverse order, same coefficients
+  v9 = Scale(Conj(v1), v8)     ← was INPUT, now OUTPUT (= ct_dx)
+```
+
+**Only tangent I/O flips. Coefficients (v1, v3) remain as external
+references to the primal graph.**
 
 `differentiate` is identical for real and complex — no conjugation.
-`transpose` is the only operation that differs: it inserts `Conj` for
-complex-valued primal coefficients. `Conj` must be an IR primitive.
+`transpose` is the only operation that differs for complex: it wraps
+coefficients in `Conj`.
 
 The transposed graph references the same primal values as the original
-linear graph (with `Conj` wrappers for complex). With a sufficiently rich
-primitive set (including `Dup` and `Conj`), all transposes are expressible
-as IR ops.
+linear graph (with `Conj` wrappers for complex). With the linear primitive
+set (`Scale`, `AddLin`, `Dup`, `Conj`), all transposes are expressible.
 
 ### `merge`: unify graphs before evaluation
 
@@ -231,17 +254,19 @@ merge(G_primal, G_transposed):
 ### Linearization of binary ops
 
 Most ops have at most 2 inputs. For `y = f(a, b)`, the linearization is
-`dy = ∂f/∂a · da + ∂f/∂b · db`. With `Option<ValId>` tangent inputs
-(None = zero), there are 4 cases handled uniformly:
+`dy = ∂f/∂a · da + ∂f/∂b · db`, expressed using linear primitives:
 
-| da | db | dy |
+| da | db | dy (using Scale + AddLin) |
 |----|----|----|
 | 0 | 0 | 0 (skip) |
-| da | 0 | ∂f/∂a · da |
-| 0 | db | ∂f/∂b · db |
-| da | db | Add(∂f/∂a · da, ∂f/∂b · db) |
+| da | 0 | `Scale(∂f/∂a, da)` |
+| 0 | db | `Scale(∂f/∂b, db)` |
+| da | db | `AddLin(Scale(∂f/∂a, da), Scale(∂f/∂b, db))` |
 
-Zero propagation (case 1) avoids creating unnecessary nodes.
+Zero propagation (case 1) avoids creating unnecessary nodes. `Scale`
+explicitly marks which operand is the coefficient (∂f/∂a, from primal)
+and which is the tangent (da, linear variable). This is required for
+`transpose` to know what to flip.
 
 ### Higher-order AD = repeat `differentiate`
 
@@ -267,32 +292,51 @@ v2 = Mul(v0, v1)    // a*x
 v3 = Exp(v2)         // y = exp(a*x)
 ```
 
-**Step 2 — differentiate(G_primal) → G_linear (independent graph):**
+**Step 2 — differentiate(G_primal) → G_linear (new graph fragment):**
+
+Uses `Scale(coeff, tangent)` to distinguish coefficient from tangent:
 
 ```
 v4 = Input(t_x)
-v5 = Mul(v1, v4)     // a * t_x         (references v1 from G_primal)
-v6 = Mul(v3, v5)     // exp(a*x) * a*t_x (references v3 from G_primal)
+v5 = Scale(v1, v4)       // a * t_x         (v1 = a, external ref)
+v6 = Scale(v3, v5)       // exp(a*x) * a*t_x (v3 = exp(a*x), external ref)
 ```
 
-**Step 3 — transpose(G_linear) → G_transposed (independent graph):**
+**Step 3 — merge(G_primal, G_linear) → resolve external refs:**
+
+Required before transpose or further differentiate.
+
+```
+v0 = Input(x)
+v1 = Input(a)
+v2 = Mul(v0, v1)
+v3 = Exp(v2)          ← v5, v6 can now trace through v3 to x
+v4 = Input(t_x)
+v5 = Scale(v1, v4)
+v6 = Scale(v3, v5)
+```
+
+**Step 4 — transpose(linear part of merged graph) → G_transposed:**
+
+Tangent I/O flips. Coefficients stay. Reverse order.
 
 ```
 v7 = Input(ct_y)
-v8 = Mul(v3, v7)     // exp(a*x) * ct_y  (references v3 from G_primal)
-v9 = Mul(v1, v8)     // a*exp(a*x)*ct_y  (references v1 from G_primal)
+v8 = Scale(v3, v7)       // reverse of v6: coeff=v3, tangent=ct_y
+v9 = Scale(v1, v8)       // reverse of v5: coeff=v1, tangent=v8
+                          // v9 = ct_dx
 ```
 
-**Step 4 — merge(G_primal, G_transposed) → unified graph:**
+**Step 5 — merge(previous, G_transposed) → final graph:**
 
 ```
 v0 = Input(x)
 v1 = Input(a)        ← shared
 v2 = Mul(v0, v1)
-v3 = Exp(v2)          ← shared: computed once
+v3 = Exp(v2)          ← shared: computed once, used by v6, v8
 v7 = Input(ct_y)
-v8 = Mul(v3, v7)
-v9 = Mul(v1, v8)     = ct_x
+v8 = Scale(v3, v7)
+v9 = Scale(v1, v8)   = ct_x
 ```
 
 **Step 5 — compile → TenferroIR → backend → eval:**
