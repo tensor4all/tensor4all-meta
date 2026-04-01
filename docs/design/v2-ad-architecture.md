@@ -477,6 +477,70 @@ Graph construction and transformation happen once. The compiled SSA IR can be:
 - Lowered to StableHLO for GPU/TPU compilation
 - Serialized and cached
 
+### Compile-once-eval-many: Laplacian example
+
+Computing the Laplacian Tr(H) = Σᵢ ∂²f/∂xᵢ² showcases the graph-based
+design's compile-once-eval-many advantage.
+
+**Key insight**: `differentiate` twice with the same tangent direction v gives
+vᵀHv directly. No `transpose`, no dot product.
+
+```
+t_y = differentiate(y, wrt=x, tangent=v)     // ∇f · v
+vHv = differentiate(t_y, wrt=x, tangent=v)   // vᵀHv
+```
+
+This works because:
+
+```
+1st: Σᵢ (∂f/∂xᵢ) vᵢ = ∇f · v
+2nd: Σⱼ ∂(∇f · v)/∂xⱼ · vⱼ = Σᵢⱼ Hᵢⱼ vᵢ vⱼ = vᵀHv
+```
+
+**Stochastic Laplacian (Hutchinson)**: compile the FoF graph once, eval with
+random Rademacher vectors. E[vᵀHv] = Tr(H).
+
+```rust
+let v = graph.input();
+let t_y = graph.differentiate(&[y], &[(x, v)])[0];
+let vhv = graph.differentiate(&[t_y], &[(x, v)])[0];
+
+let prog = graph.compile(&[vhv], &[x, v]);  // compile once
+
+for _ in 0..k {                               // eval k times (k << n)
+    estimates.push(prog.eval(&[x_val, random_rademacher(n)]));
+}
+let laplacian = estimates.mean();
+```
+
+**Exact Laplacian**: same compiled program, eval with basis vectors eᵢ.
+
+```rust
+let laplacian: f64 = (0..n)
+    .map(|i| prog.eval(&[x_val, basis_vector(i, n)]))
+    .sum();
+```
+
+Graph transformation: 2 (`differentiate` × 2). Compile: 1. Eval: n (exact) or
+k << n (stochastic). With tape AD, the graph would be rebuilt each time.
+
+| Method | Transformations | Compile | Eval | Total cost |
+|--------|----------------|---------|------|------------|
+| Naive (n × differentiate²) | 2n | n | n | O(n) all heavy |
+| FoF + compile once (exact) | 2 | 1 | n | O(n) eval only |
+| FoF + Hutchinson (stochastic) | 2 | 1 | k | O(k), k << n |
+| Forward Laplacian (future) | 1 (special) | 1 | 1 | **O(1)** |
+
+Forward Laplacian propagates (value, tangent, Laplacian) simultaneously:
+
+```
+u = a * b:   Lap(u) = a·Lap(b) + 2·da·db + b·Lap(a)
+u = exp(a):  Lap(u) = exp(a)·(Lap(a) + da²)
+```
+
+One forward pass gives the exact Laplacian. Implementable as a specialized
+graph transformation that emits the propagation rules as IR nodes.
+
 ---
 
 ## Appendix: Design Notes
