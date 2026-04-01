@@ -296,6 +296,10 @@ TenferroIR:   Transpose(A)     ← logical operation
 Each backend independently optimizes memory layout. The user and TenferroIR
 see only logical operations. This is a clean separation of concerns.
 
+**Contract**: the final output of any backend is always contiguous. Internal
+intermediates may be non-contiguous (e.g., faer may defer transpose via
+strides), but this is invisible to the caller.
+
 ### Custom backend (Tropical / custom algebra)
 
 Executes TenferroIR (Tier 1 ops only) directly:
