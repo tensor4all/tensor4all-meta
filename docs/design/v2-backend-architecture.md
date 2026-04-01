@@ -264,6 +264,20 @@ StableHLO instruction    →   faer/BLAS dispatch
 ```
 
 No fusion, no JIT. Op-by-op execution. Sufficient for most CPU workloads.
+
+**Why faer is the default, not XLA CPU**: XLA's CPU backend (via
+elixir-nx/xla) uses oneDNN only on x86_64 Linux. All other platforms
+fall back to Eigen (unoptimized). faer has optimized kernels everywhere:
+
+| Platform | XLA CPU backend | faer |
+|----------|----------------|------|
+| x86_64 Linux | oneDNN (fast) | fast (AVX/AVX-512) |
+| aarch64 Linux | Eigen (slow) | fast (NEON/SVE) |
+| aarch64 macOS | Eigen (slow) | fast (NEON) |
+| x86_64 macOS | Eigen (slow) | fast (AVX) |
+
+XLA is optional, primarily for GPU. Its CPU path is useful only for
+fusion optimization, not raw kernel performance.
 If performance is insufficient for specific patterns, **fast paths** can
 be added that bypass StableHLO for hot operations (e.g., direct BLAS call
 for fused matmul chains).
