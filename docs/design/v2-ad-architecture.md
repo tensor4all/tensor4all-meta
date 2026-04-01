@@ -160,17 +160,57 @@ not depending on `wrt`.
 ### `transpose`: flip a linear graph
 
 Takes a linear graph and produces a NEW graph with reversed data flow.
-Each linear op is replaced by its transpose:
+Each linear op is replaced by its transpose (adjoint).
+
+**Real case**: transpose = matrix transpose.
 
 ```
-Add  ↔  Dup          (sum ↔ broadcast)
-Scale(c) ↔ Scale(c)  (self-adjoint)
-Mul(a, ·) ↔ Mul(a, ·)  (self-adjoint)
+Add       ↔  Dup          (sum ↔ broadcast)
+Scale(c)  ↔  Scale(c)     (self-adjoint)
+Mul(a, ·) ↔  Mul(a, ·)    (self-adjoint)
 ```
+
+**Complex case**: transpose = Hermitian adjoint (conjugate transpose).
+The adjoint of a linear map on a complex inner product space `<u,v> = u†v`
+requires conjugation. `Conj` nodes are inserted during transpose.
+
+```
+Scale(c)  ↔  Scale(Conj(c))     ← conjugate the coefficient
+Mul(a, ·) ↔  Mul(Conj(a), ·)    ← conjugate the primal
+Add       ↔  Dup                 ← unchanged (real-valued structure)
+```
+
+Example: `f(z) = c * z` where `c = 2+3i`, `z ∈ C`.
+
+```
+Linearize (same as primal, linear op):
+  G_linear:
+    dz = Input(tangent)
+    dy = Scale(c, dz)          // (2+3i) * dz
+
+Transpose (real):               Transpose (complex):
+  ct_z = Scale(c, ct_y)          ct_z = Scale(Conj(c), ct_y)
+       = (2+3i) * ct_y                = (2-3i) * ct_y
+                                         ← Conj node inserted
+```
+
+The graph for the complex transpose:
+
+```
+G_transposed:
+  ct_y = Input(cotangent)
+  c_conj = Conj(c)              // ← NEW: conjugate of primal value c
+  ct_z = Mul(c_conj, ct_y)      // (2-3i) * ct_y
+```
+
+`differentiate` is identical for real and complex — no conjugation.
+`transpose` is the only operation that differs: it inserts `Conj` for
+complex-valued primal coefficients. `Conj` must be an IR primitive.
 
 The transposed graph references the same primal values as the original
-linear graph. With a sufficiently rich primitive set (including `Dup`),
-all transposes are expressible as IR ops.
+linear graph (with `Conj` wrappers for complex). With a sufficiently rich
+primitive set (including `Dup` and `Conj`), all transposes are expressible
+as IR ops.
 
 ### `merge`: unify graphs before evaluation
 
@@ -361,7 +401,7 @@ A primitive's `linearize` must be **linear in the tangent inputs**. It may:
 **Tier 1 — Semiring Core**: sufficient for einsum-based computation. Compatible
 with custom algebraic backends (tropical, p-adic, polynomial rings, etc.).
 
-- Elementwise: `Add`, `Mul`, `Scale`, `Neg`
+- Elementwise: `Add`, `Mul`, `Scale`, `Neg`, `Conj`
 - Tensor: `Einsum`, `Transpose`, `Reshape`, `BroadcastInDim`, `Dup`
 - Reduction: `Sum`, `Prod`
 
