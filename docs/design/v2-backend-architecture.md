@@ -32,16 +32,18 @@ without graph transformations. Even eager execution (`apply_op`-equivalent)
 is internally a single-node graph compiled and evaluated through this
 pipeline.
 
-### Current GPU backend status
+### Backend matrix
 
 | Algebra | CPU | GPU |
 |---------|-----|-----|
-| Standard | DefaultBackend → BLAS/LAPACK | **Deprecated** — unoptimized CUDA kernels removed. CPU fallback until IREE. |
-| Tropical | DefaultBackend → custom kernels | Custom CUDA kernels (**retained** — optimized, production-ready) |
+| Standard | StableHLO → faer/LAPACK (default) | StableHLO → XLA (optional, Phase 3) |
+| Tropical | Custom backend → custom kernels | Custom backend → optimized CUDA kernels |
 
-Standard GPU will be reintroduced via StableHLO → IREE (Phase 3 of AD
-architecture roadmap). Tropical GPU kernels are hand-optimized and remain
-as-is.
+Standard GPU: current unoptimized CUDA kernels are deprecated. GPU support
+returns via StableHLO → XLA in Phase 3.
+
+Tropical GPU: hand-optimized CUDA kernels are retained as-is. They bypass
+StableHLO (Tier 1 only, custom backend).
 
 ---
 
