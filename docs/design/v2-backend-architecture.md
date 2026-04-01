@@ -274,8 +274,10 @@ TenferroIR is purely logical — it describes WHAT to compute, not HOW
 memory is laid out. Operations like `Transpose`, `Slice`, `BroadcastInDim`
 are logical transformations, not memory operations.
 
-**`MakeContiguous` does not exist in TenferroIR or StableHLO.** Memory
-layout is a backend concern:
+`MakeContiguous` MAY exist in TenferroIR as an optional hint, but is
+**ignored on the Standard (StableHLO) path** — both faer and XLA backends
+treat all tensors as contiguous. It is only meaningful on the **Custom
+backend path** (e.g., Tropical) where strides are used internally:
 
 ```
 TenferroIR:   Transpose(A)     ← logical operation
