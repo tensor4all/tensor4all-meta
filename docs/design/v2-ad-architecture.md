@@ -1,6 +1,6 @@
 # v2 AD Architecture
 
-**Date:** 2026-04-01
+**Date:** 2026-04-01 (updated 2026-04-02)
 **Status:** Draft
 **Repos:** chainrules-rs, tidu-rs, tenferro-rs
 
@@ -10,17 +10,19 @@
 
 Build a differentiable programming stack in Rust where:
 
-- **`differentiate` is the only derivative operation.** It is a graph-to-graph
-  transformation that adds tangent nodes by linearizing each Op. Applying it
+- **`differentiate` is the only derivative operation.** It takes a graph and
+  produces a NEW independent linear graph representing the JVP. Applying it
   n times gives the n-th derivative. All derivative information comes from
   this single operation.
 - **`transpose` is not differentiation — it is an evaluation strategy.** It
-  rewrites a linear map to flow in the reverse direction (JVP → VJP). It is
+  flips a linear graph to reverse the data flow direction (JVP → VJP). It is
   always optional, always at the end, and does not add derivative information.
-- **Forward and backward are unified.** Both are graph transformations on the
-  same DAG. Evaluation is always upstream to downstream. No special backward
-  evaluation mode.
-- The same graph can be **compiled to CPU execution or lowered to StableHLO**
+- **Graphs are independent until merge.** `differentiate` and `transpose`
+  produce new graphs. Graphs reference values from other graphs by name
+  (content-addressable ID). Only at evaluation time are graphs **merged**,
+  unifying same-named nodes (automatic CSE).
+- **Evaluation is always forward** (upstream to downstream), after merge.
+- The merged graph can be **compiled to CPU execution or lowered to StableHLO**
   for GPU/TPU.
 
 | Goal | Transformations |
@@ -30,12 +32,23 @@ Build a differentiable programming stack in Rust where:
 | n-th derivative | `differentiate` × n |
 | n-th derivative as gradient | `differentiate` × n → `transpose` |
 
+Six operations:
+
+```
+build          construct a primal graph
+differentiate  graph → NEW linear graph (JVP)
+transpose      linear graph → NEW linear graph (flip direction)
+merge          unify multiple graphs by content-addressable ID (CSE)
+compile        merged graph → CompiledProgram (flat SSA IR)
+eval           CompiledProgram + input values → output values
+```
+
 Three crates, strictly layered:
 
 ```
 chainrules2    PrimitiveOp trait (op contract)
     ↓
-tidu2          Graph engine (build, differentiate, transpose, compile, eval)
+tidu2          Graph engine (build, differentiate, transpose, merge, compile, eval)
     ↓
 tenferro2      Tensor primitives + StableHLO lowering
 ```
@@ -49,7 +62,9 @@ tenferro2      Tensor primitives + StableHLO lowering
 A computation is a directed acyclic graph (DAG) with two node types:
 
 - **Val node** (circles): a value. External input or one output slot of an Op.
-- **Op node** (boxes): a primitive operation. Fixed input/output arity.
+  Can be consumed by any number of downstream Ops (fan-out).
+- **Op node** (boxes): a primitive operation. Fixed input/output arity per op
+  kind. At most 2 inputs is sufficient for most ops.
 
 ```
 f(x) = exp(a * x):
@@ -66,7 +81,6 @@ f(x) = exp(a * x):
 ```
 
 Val nodes `( )` carry values. Op nodes `[ ]` carry operations.
-A Val can fan out to multiple Ops (e.g., `v3` referenced by derivative nodes).
 
 ```rust
 type ValId = usize;
@@ -91,171 +105,236 @@ struct Graph<Op: PrimitiveOp> {
 
 ### No constant/variable distinction
 
-All leaf nodes are `Input`. Whether an input is a "constant" or a "differentiable variable" is decided at differentiation time (`wrt` argument), not in the graph structure.
+All leaf nodes are `Input`. Whether an input is a "constant" or a
+"differentiable variable" is decided at differentiation time (`wrt` argument),
+not in the graph structure.
 
-### Content-addressable CSE
+### Content-addressable identity
 
-`OpId` is determined by `(op_kind, input_val_ids...)`. Adding the same op with the same inputs returns the existing node. Duplicate computation is structurally impossible.
+`OpId` is determined by `(op_kind, input_val_ids...)`.
+`ValId` is determined by `(op_id, output_slot)`.
 
-### Single graph for all levels
+Adding the same op with the same inputs returns the existing node.
+**This identity is used across graphs**: when two independent graphs contain
+the same `(op_kind, input_val_ids...)`, `merge` unifies them into a single
+node. This is how CSE works across primal, tangent, and cotangent graphs.
 
-Primal, tangent, cotangent, and higher-order derivative nodes all live in the **same graph**. Shared values (e.g., `exp(x)`) are computed once and referenced by all levels.
+### Graphs are independent until merge
+
+Each graph is self-contained. `differentiate` and `transpose` produce NEW
+graphs that reference values from other graphs by content-addressable ID
+(dangling references). These references are resolved at `merge` time.
+
+```
+G_primal:     v0=Input(x), v1=Input(a), v2=Mul(v0,v1), v3=Exp(v2)
+G_linear:     v4=Input(dx), v5=Mul(v1,v4), v6=Mul(v3,v5)
+                                     ^^          ^^
+                            references v1, v3 from G_primal (by name)
+
+merge(G_primal, G_linear) → unified graph with shared v1, v3
+```
 
 ---
 
 ## III. Differentiation
 
-### Two graph transformations
+### `differentiate`: graph → NEW linear graph
 
-| Operation | Direction | What it does |
-|-----------|-----------|--------------|
-| `differentiate` | forward (upstream → downstream) | Linearize each Op, add tangent nodes |
-| `transpose` | backward (downstream → upstream) | Reverse the linear map, add cotangent nodes |
-
-Both are **graph → graph** transformations. They add new nodes; they do not evaluate anything.
-
-### differentiate (forward linearize)
-
-Walks Ops in topological order. For each Op, calls `op.linearize()` which adds tangent nodes to the graph. Primal output vals are referenced as coefficients (not recomputed).
+Takes a primal graph and produces a NEW independent graph representing the
+linearized computation (JVP). The new graph references primal values by
+content-addressable ID.
 
 ```rust
 fn differentiate(
-    &mut self,
+    primal_graph: &Graph<Op>,
     outputs: &[ValId],
     wrt: &[(ValId, ValId)],    // (Input node, tangent Input node)
-) -> Vec<Option<ValId>>        // tangent per output
+) -> (Graph<Op>, Vec<Option<ValId>>)  // NEW graph + tangent outputs
 ```
 
-`wrt` restricted to Input nodes. Inputs not in `wrt` have tangent = zero → zero propagation skips downstream nodes.
+Walks Ops in topological order. For each Op, calls `op.linearize()` which
+adds tangent nodes to the NEW graph. Primal output vals are referenced (not
+recomputed). `wrt` restricted to Input nodes. Zero propagation skips nodes
+not depending on `wrt`.
 
-### transpose (backward)
+### `transpose`: flip a linear graph
 
-The linearized computation is a linear map `L: tangent_in → tangent_out`. Transpose produces `Lᵀ: cotangent_out → cotangent_in`.
-
-Transpose is also a graph transformation using IR primitives:
+Takes a linear graph and produces a NEW graph with reversed data flow.
+Each linear op is replaced by its transpose:
 
 ```
-Add  ↔  Dup        (sum ↔ broadcast)
+Add  ↔  Dup          (sum ↔ broadcast)
 Scale(c) ↔ Scale(c)  (self-adjoint)
 Mul(a, ·) ↔ Mul(a, ·)  (self-adjoint)
 ```
 
-With a sufficiently rich primitive set, all transposes are expressible as IR ops. No special backward evaluation mode needed.
+The transposed graph references the same primal values as the original
+linear graph. With a sufficiently rich primitive set (including `Dup`),
+all transposes are expressible as IR ops.
+
+### `merge`: unify graphs before evaluation
+
+Combines multiple independent graphs. Nodes with the same content-addressable
+ID are unified into a single node. This is automatic CSE across all levels.
+
+```
+merge(G_primal, G_transposed):
+  v0 = Input(x)
+  v1 = Input(a)        ← shared by G_primal and G_transposed
+  v2 = Mul(v0, v1)
+  v3 = Exp(v2)          ← shared: computed once, used by both graphs
+  v7 = Input(ct_y)
+  v8 = Mul(v3, v7)
+  v9 = Mul(v1, v8)
+```
+
+### Linearization of binary ops
+
+Most ops have at most 2 inputs. For `y = f(a, b)`, the linearization is
+`dy = ∂f/∂a · da + ∂f/∂b · db`. With `Option<ValId>` tangent inputs
+(None = zero), there are 4 cases handled uniformly:
+
+| da | db | dy |
+|----|----|----|
+| 0 | 0 | 0 (skip) |
+| da | 0 | ∂f/∂a · da |
+| 0 | db | ∂f/∂b · db |
+| da | db | Add(∂f/∂a · da, ∂f/∂b · db) |
+
+Zero propagation (case 1) avoids creating unnecessary nodes.
 
 ### Higher-order AD = repeat `differentiate`
 
-n-th derivative = apply `differentiate` n times. `transpose` is optional (evaluation choice).
+n-th derivative = apply `differentiate` n times to produce n independent
+linear graphs. `transpose` is optional (evaluation choice), applied to the
+final linear graph.
 
 ```
-1st derivative:   differentiate
-2nd derivative:   differentiate → differentiate
-3rd derivative:   differentiate → differentiate → differentiate
+1st derivative:   differentiate(G_primal) → G_linear
+2nd derivative:   differentiate(G_linear) → G_linear2
+gradient:         transpose(G_linear) → G_transposed
+Hessian-gradient: differentiate(G_transposed) → G_linear2, then transpose
 ```
-
-To evaluate any of these as a gradient (backward), append `transpose`:
-
-```
-gradient:              differentiate → transpose
-Hessian-vector product: differentiate → differentiate → transpose
-```
-
-FoR, RoR etc. are just different orderings of `differentiate` and `transpose`.
-The derivative content is identical — only the evaluation direction differs.
-
-### Zero propagation
-
-During differentiation, if all tangent inputs to a node are zero (node doesn't depend on `wrt`), skip it. Essential for efficiency in higher-order differentiation.
 
 ### Concrete example: `f(x) = exp(a * x)`
 
-**Primal graph:**
+**Step 1 — Build primal graph G_primal:**
 
 ```
-  (v0:x)  (v1:a)
-     \     /
-     [Mul]
-       |
-     (v2)
-       |
-     [Exp]
-       |
-     (v3:y)              y = exp(a*x)
+v0 = Input(x)
+v1 = Input(a)
+v2 = Mul(v0, v1)    // a*x
+v3 = Exp(v2)         // y = exp(a*x)
 ```
 
-**After differentiate (JVP w.r.t. x):**
-
-New nodes added (right side). `v3` is referenced from primal graph.
+**Step 2 — differentiate(G_primal) → G_linear (independent graph):**
 
 ```
-  (v0:x)  (v1:a)         (v4:t_x)  (v1:a)
-     \     /                  \     /
-     [Mul]                    [Mul]
-       |                        |
-     (v2)                     (v5)        a * t_x
-       |                        |
-     [Exp]               (v3)--[Mul]
-       |                 /      |
-     (v3)───────────────'     (v6)        exp(a*x) * a * t_x
+v4 = Input(t_x)
+v5 = Mul(v1, v4)     // a * t_x         (references v1 from G_primal)
+v6 = Mul(v3, v5)     // exp(a*x) * a*t_x (references v3 from G_primal)
 ```
 
-**After transpose (VJP):**
-
-Cotangent flows backward through the linearized map.
+**Step 3 — transpose(G_linear) → G_transposed (independent graph):**
 
 ```
-                              (v7:ct_y)
-                                |
-                         (v3)--[Mul]
-                         /      |
-  (v0:x)  (v1:a)       /     (v8)        exp(a*x) * ct_y
-     \     /           /        |
-     [Mul]            /   (v1)--[Mul]
-       |             /    /     |
-     (v2)           /    /    (v9:ct_x)   a * exp(a*x) * ct_y
-       |           /    /
-     [Exp]        /    /
-       |         /    /
-     (v3)───────'    /
-     (v1)───────────'
+v7 = Input(ct_y)
+v8 = Mul(v3, v7)     // exp(a*x) * ct_y  (references v3 from G_primal)
+v9 = Mul(v1, v8)     // a*exp(a*x)*ct_y  (references v1 from G_primal)
 ```
 
-**Full graph after FoR (2nd derivative):**
+**Step 4 — merge(G_primal, G_transposed) → unified graph:**
 
 ```
-v0  = Input(x)
-v1  = Input(a)
-v2  = Mul(v0, v1)                   // a*x                [primal]
-v3  = Exp(v2)                       // exp(a*x)            [primal]
-v4  = Input(t_x)
-v5  = Mul(v4, v1)                   // a*t_x               [fwd linearize]
-v6  = Mul(v3, v5)                   // exp(a*x)*a*t_x      [fwd linearize]
-v7  = Input(ct_y)
-v8  = Mul(v3, v7)                   // exp(a*x)*ct_y       [bwd transpose]
-v9  = Mul(v1, v8)                   // a*exp(a*x)*ct_y     [bwd transpose]
-v10 = Input(dt_x)
-v11 = Mul(v1, v10)                  // a*dt_x              [FoR linearize]
-v12 = Mul(v3, v11)                  // exp(a*x)*a*dt_x     [FoR linearize]
-v13 = Mul(v12, v7)                  // exp(a*x)*a*dt_x*ct_y [FoR linearize]
-v14 = Mul(v1, v13)                  // a²*exp(a*x)*dt_x*ct_y [FoR linearize]
+v0 = Input(x)
+v1 = Input(a)        ← shared
+v2 = Mul(v0, v1)
+v3 = Exp(v2)          ← shared: computed once
+v7 = Input(ct_y)
+v8 = Mul(v3, v7)
+v9 = Mul(v1, v8)     = ct_x
 ```
 
-`v3 = exp(a*x)` computed once, referenced by v6, v8, v12. All methods give `d²f/dx² = a² exp(ax)` ✓
+**Step 5 — compile + eval:**
+
+```rust
+let prog = merged.compile(&[v3, v9], &[v0, v1, v7]);
+let [y, ct_x] = prog.eval(&[x_val, a_val, 1.0]);
+```
+
+`v3 = exp(a*x)` computed once, referenced by both primal output and backward.
+All higher-order methods (FoF, FoR, RoF, RoR) give `d²f/dx² = a² exp(ax)` ✓
 
 ---
 
-## IV. Primitive Set
+## IV. Primitive Set and Operand
+
+### Operand: multi-dimensional array with StableHLO-compatible ops
+
+`Operand` is the type of data flowing through the graph. It must be a
+**multi-dimensional array** (tensor) of some scalar type. Scalars are
+0-dimensional arrays.
+
+Operand must support operations aligned 1:1 with StableHLO ops:
+
+```rust
+trait Operand: Clone + Send + Sync + 'static {
+    fn reshape(&self, shape: &[usize]) -> Self;                           // stablehlo.reshape
+    fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;  // stablehlo.broadcast_in_dim
+    fn add(&self, other: &Self) -> Self;                                   // stablehlo.add
+    fn multiply(&self, other: &Self) -> Self;                              // stablehlo.multiply
+    fn dot_general(&self, other: &Self, ...) -> Self;                      // stablehlo.dot_general
+}
+```
+
+This 1:1 alignment means `CompiledProgram` can be lowered to StableHLO
+trivially — each instruction maps directly to a StableHLO op.
+
+Why these operations are needed:
+
+| AD operation | Required Operand ops |
+|-------------|---------------------|
+| forward eval | multiply, add |
+| linearize | multiply, add |
+| transpose (Dup) | broadcast_in_dim |
+| batched JVP (all tangent dirs at once) | reshape (add axes) + multiply (broadcasting) |
+| cross-country composition | reshape + multiply (outer product) or dot_general (contraction) |
+
+### Placeholder evaluation and broadcasting
+
+When computing all tangent directions simultaneously, the tangent input is
+a placeholder representing an identity matrix:
+
+```
+x: shape [N]
+dx: placeholder → shape [N, N] (identity matrix, one direction per column)
+```
+
+Broadcasting propagates the batch dimension through the graph. For a
+2-input linearization `dy = ∂f/∂a · da + ∂f/∂b · db`:
+
+```
+∂f/∂a · da:  shape [N1]    →  reshape to [N1, 1]
+∂f/∂b · db:  shape [N2]    →  reshape to [1, N2]
+dy = Add:    [N1, 1] + [1, N2] = [N1, N2]  ← broadcast in Add
+```
+
+The Jacobian shape `[N_out, N_in]` emerges naturally from broadcasting.
+Shape conventions (which axis is which) follow StableHLO / JAX conventions.
 
 ### PrimitiveOp trait (defined in chainrules2)
 
 ```rust
 pub trait PrimitiveOp: Clone + Hash + Eq + Send + Sync + 'static {
-    type Operand: Clone + Send + Sync + 'static;
+    type Operand: Operand;
 
     fn n_inputs(&self) -> usize;
     fn n_outputs(&self) -> usize;
 
     fn eval(&self, inputs: &[&Self::Operand]) -> Vec<Self::Operand>;
 
+    /// Produce a NEW linear graph for the JVP.
+    /// Primal values are referenced by ValId (resolved at merge time).
     fn linearize(
         &self,
         graph: &mut Graph<Self>,
@@ -268,36 +347,25 @@ pub trait PrimitiveOp: Clone + Hash + Eq + Send + Sync + 'static {
 }
 ```
 
-Linearize rules are standalone functions; the trait impl is a `match` dispatch:
-
-```rust
-impl PrimitiveOp for ScalarOp {
-    fn linearize(&self, g: &mut Graph<Self>, p_in: &[ValId], p_out: &[ValId], t_in: &[Option<ValId>]) -> Vec<Option<ValId>> {
-        match self {
-            Exp => linearize_exp(g, p_in, p_out, t_in),
-            Mul => linearize_mul(g, p_in, p_out, t_in),
-            // ...
-        }
-    }
-}
-```
+Linearize rules are standalone functions; the trait impl is a `match` dispatch.
 
 ### Design principle
 
 A primitive's `linearize` must be **linear in the tangent inputs**. It may:
-- Reference primal output vals as coefficients (e.g., `Exp` references its own output `exp(x)`)
+- Reference primal output vals as coefficients (e.g., `Exp` references `exp(x)`)
 - Emit other primitives (e.g., `Exp` emits `Mul`)
 - NOT apply nonlinear ops to tangent inputs
 
 ### Two tiers (defined in tenferro2)
 
-**Tier 1 — Semiring Core**: sufficient for einsum-based computation. Compatible with custom algebraic backends (tropical, p-adic, polynomial rings, etc.).
+**Tier 1 — Semiring Core**: sufficient for einsum-based computation. Compatible
+with custom algebraic backends (tropical, p-adic, polynomial rings, etc.).
 
 - Elementwise: `Add`, `Mul`, `Scale`, `Neg`
-- Tensor: `Einsum`, `Transpose`, `Reshape`, `Broadcast`, `Dup`
+- Tensor: `Einsum`, `Transpose`, `Reshape`, `BroadcastInDim`, `Dup`
 - Reduction: `Sum`, `Prod`
 
-**Tier 2 — Standard = Core + JAX prims**: full JAX-compatible set for general-purpose differentiable programming.
+**Tier 2 — Standard = Core + JAX prims**: full JAX-compatible set.
 
 - Transcendental: `Exp`, `Log`, `Sin`, `Cos`, ...
 - Linalg: `SVD`, `Cholesky`, `QR`, `Eig`, `Solve`
@@ -305,50 +373,40 @@ A primitive's `linearize` must be **linear in the tangent inputs**. It may:
 - Control: `Cond`, `Scan`, `While`
 - Misc: `Sort`, `FFT`, `Conv`, ...
 
-Each tier 2 primitive's `linearize` is expressed in terms of tier 1 + tier 2 primitives.
-
-### Operand type
-
-`PrimitiveOp::Operand` is the type of data flowing through the graph. tidu2 does not inspect it.
-
-```
-Tropical:  Operand = Tensor<f64>    (Add=max, Mul=plus)
-Standard:  Operand = Tensor<f64>    (normal arithmetic)
-Standard:  Operand = DynTensor       (scalar type erased)
-Scalar:    Operand = f64             (Phase 1 testing)
-```
+Each primitive's `linearize` is expressed in terms of other primitives.
 
 ---
 
 ## V. Compilation & Execution
 
-### Two-stage compilation
+### Pipeline
 
 ```
-                     ┌─────────────────────────┐
-                     │  Graph (DAG)             │
-                     │  Val nodes + Op nodes    │
-                     └────────┬────────────────┘
-                              │ differentiate / transpose
-                              │ (graph → graph)
-                              ▼
-                     ┌─────────────────────────┐
-                     │  Transformed Graph       │
-                     │  primal + tangent + ...  │
-                     └────────┬────────────────┘
-                              │ compile (toposort + SSA)
-                              ▼
-                     ┌─────────────────────────┐
-                     │  CompiledProgram         │
-                     │  flat slot-based IR      │
-                     └────────┬────────────────┘
-                              │
-                 ┌────────────┴────────────┐
-                 ▼                         ▼
-        ┌────────────────┐      ┌─────────────────────┐
-        │  prog.eval()   │      │  lower to StableHLO  │
-        │  (CPU)         │      │  → IREE/XLA (GPU)    │
-        └────────────────┘      └─────────────────────┘
+                ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+                │  G_primal    │   │  G_linear    │   │  G_transposed│
+                │  (build)     │   │  (diff)      │   │  (transpose) │
+                └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
+                       │                  │                   │
+                       └─────────┬────────┘───────────────────┘
+                                 │ merge (unify by content-addressable ID)
+                                 ▼
+                       ┌─────────────────────┐
+                       │  Merged Graph       │
+                       │  (shared nodes, CSE) │
+                       └─────────┬───────────┘
+                                 │ compile (toposort + SSA)
+                                 ▼
+                       ┌─────────────────────┐
+                       │  CompiledProgram    │
+                       │  (flat slot-based)  │
+                       └─────────┬───────────┘
+                                 │
+                    ┌────────────┴────────────┐
+                    ▼                         ▼
+           ┌────────────────┐      ┌─────────────────────┐
+           │  prog.eval()   │      │  lower to StableHLO  │
+           │  (CPU)         │      │  → IREE/XLA (GPU)    │
+           └────────────────┘      └─────────────────────┘
 ```
 
 ### CompiledProgram (SSA IR)
@@ -368,13 +426,8 @@ struct Instruction<Op> {
 }
 ```
 
-`compile(target_nodes, input_nodes)` topologically sorts from targets, producing a flat instruction sequence. Compile once, eval many times with different input values.
-
-```rust
-let prog = g.compile(&[v9], &[x, a, ct_y]);
-let grad1 = prog.eval(&[2.0, 3.0, 1.0]);
-let grad2 = prog.eval(&[4.0, 3.0, 1.0]);
-```
+`compile(target_nodes, input_nodes)` topologically sorts from targets,
+producing a flat instruction sequence. Compile once, eval many times.
 
 ### Backend dispatch
 
@@ -383,7 +436,8 @@ let grad2 = prog.eval(&[4.0, 3.0, 1.0]);
 | Tier 1 only | Custom algebra backend | Tropical, p-adic, polynomial rings |
 | Tier 1 + 2 | StableHLO → IREE/XLA | Standard float/complex on GPU/TPU |
 
-tidu2 is backend-agnostic. It produces `CompiledProgram<Op>` without knowing the execution target.
+tidu2 is backend-agnostic. It produces `CompiledProgram<Op>`. StableHLO
+lowering is trivial because Operand ops are 1:1 with StableHLO ops.
 
 ---
 
@@ -391,26 +445,25 @@ tidu2 is backend-agnostic. It produces `CompiledProgram<Op>` without knowing the
 
 ### chainrules2
 
-**Role**: define the `PrimitiveOp` trait — the contract between tidu2 (engine) and tenferro2 (primitives).
+**Role**: define `PrimitiveOp` and `Operand` traits.
 
 Contains:
 - `PrimitiveOp` trait
+- `Operand` trait (StableHLO-aligned ops)
 - `ValId`, `OpId` types
 - Error types
 
-Does NOT contain: Graph, differentiation logic, compilation, or any concrete ops.
-
 ### tidu2
 
-**Role**: graph engine. Build, transform, compile, evaluate.
+**Role**: graph engine.
 
 Contains:
 - `Graph<Op>` data structure
-- `differentiate()`, `transpose()` (graph transformations)
+- `differentiate()` → new graph
+- `transpose()` → new graph
+- `merge()` → unified graph
 - `compile()` → `CompiledProgram`
 - `CompiledProgram::eval()` (CPU execution)
-
-Does NOT contain: concrete ops, StableHLO, tensor types.
 
 ### tenferro2
 
@@ -418,19 +471,18 @@ Does NOT contain: concrete ops, StableHLO, tensor types.
 
 Contains:
 - `TensorOp` enum implementing `PrimitiveOp` (Tier 1 + Tier 2)
-- `Tensor<T>`, `DynTensor` types
+- `Tensor<T>`, `DynTensor` implementing `Operand`
 - Linearize rules for each primitive
 - StableHLO lowering of `CompiledProgram<TensorOp>`
-- IREE/XLA backend integration
 
 ### Dependency graph
 
 ```
-chainrules2          (PrimitiveOp trait, no dependencies)
+chainrules2          (PrimitiveOp + Operand traits)
     ↓
-tidu2                (Graph engine, depends on chainrules2)
+tidu2                (Graph engine)
     ↓
-tenferro2            (Tensor prims + backends, depends on chainrules2 + tidu2)
+tenferro2            (Tensor prims + backends)
 ```
 
 ---
@@ -439,15 +491,25 @@ tenferro2            (Tensor prims + backends, depends on chainrules2 + tidu2)
 
 ### Cross-country evaluation
 
-The linearized graph can be **partially transposed**. Forward for the first half, backward for the second half, meeting at an optimal split point.
+Partially transpose a linear graph: forward for the first half, backward
+for the second half.
 
 ```
-Full forward:   t_x → L1 → L2 → L3 → L4 → t_y
-Full backward:  ct_y → L4ᵀ → L3ᵀ → L2ᵀ → L1ᵀ → ct_x
-Cross-country:  t_x → L1 → L2 → mid ← L4ᵀ ← L3ᵀ ← ct_y
+Linear graph:    dx → [L1] → [L2] → mid → [L3] → [L4] → dy
+
+Split and transpose L3, L4 only:
+  G_fwd:  dx  → [L1] → [L2] → mid_fwd     (keep as-is)
+  G_bwd:  ct_dy → [L4ᵀ] → [L3ᵀ] → mid_bwd  (transpose L3, L4)
 ```
 
-This is a graph transformation (transpose only part of the chain). Evaluation remains always forward. The optimal split point can be determined automatically based on op costs and graph structure.
+Combine via outer product (scalar chain) or einsum (tensor chain):
+
+```
+Scalar:   J = mid_bwd ⊗ mid_fwd                          (broadcast + multiply)
+Tensor:   J = dot_general(mid_bwd, mid_fwd, contract=k)  (contraction over mid dim)
+```
+
+Optimal split point can be determined automatically based on op costs.
 
 ### Runtime checkpoint optimization
 
@@ -460,76 +522,30 @@ trait OpInfo {
 }
 ```
 
-The graph scheduler uses **runtime information** (actual tensor sizes, available memory) to decide which intermediate values to keep vs. recompute. This replaces static `CheckpointStrategy` hints with graph-level optimization:
+The graph scheduler uses **runtime information** to decide which intermediate
+values to keep vs. recompute. Graph-level optimization, not per-op decisions.
 
-- Given a memory budget → minimize total computation
-- Given a time budget → minimize peak memory
-- Automatic, based on the full graph structure — not per-op decisions
+### CSE via merge
 
-### Unified CSE across all levels
-
-Since primal, tangent, cotangent, and higher-order nodes share a single graph, CSE operates across all levels. A value like `exp(x)` is guaranteed to appear once regardless of how many derivative levels reference it.
-
-### Compilation separation
-
-Graph construction and transformation happen once. The compiled SSA IR can be:
-- Evaluated repeatedly with different inputs (CPU)
-- Lowered to StableHLO for GPU/TPU compilation
-- Serialized and cached
+Since graphs are merged by content-addressable ID, a value like `exp(x)` is
+guaranteed to appear once in the merged graph regardless of how many
+independent graphs reference it.
 
 ### Compile-once-eval-many: Laplacian example
 
-Computing the Laplacian Tr(H) = Σᵢ ∂²f/∂xᵢ² showcases the graph-based
-design's compile-once-eval-many advantage.
-
-**Key insight**: `differentiate` twice with the same tangent direction v gives
-vᵀHv directly. No `transpose`, no dot product.
+Tr(H) = Σᵢ ∂²f/∂xᵢ². Key insight: `differentiate` twice with the same
+tangent direction v gives vᵀHv directly. No `transpose`, no dot product.
 
 ```
 t_y = differentiate(y, wrt=x, tangent=v)     // ∇f · v
 vHv = differentiate(t_y, wrt=x, tangent=v)   // vᵀHv
 ```
 
-This works because:
-
-```
-1st: Σᵢ (∂f/∂xᵢ) vᵢ = ∇f · v
-2nd: Σⱼ ∂(∇f · v)/∂xⱼ · vⱼ = Σᵢⱼ Hᵢⱼ vᵢ vⱼ = vᵀHv
-```
-
-**Stochastic Laplacian (Hutchinson)**: compile the FoF graph once, eval with
-random Rademacher vectors. E[vᵀHv] = Tr(H).
-
-```rust
-let v = graph.input();
-let t_y = graph.differentiate(&[y], &[(x, v)])[0];
-let vhv = graph.differentiate(&[t_y], &[(x, v)])[0];
-
-let prog = graph.compile(&[vhv], &[x, v]);  // compile once
-
-for _ in 0..k {                               // eval k times (k << n)
-    estimates.push(prog.eval(&[x_val, random_rademacher(n)]));
-}
-let laplacian = estimates.mean();
-```
-
-**Exact Laplacian**: same compiled program, eval with basis vectors eᵢ.
-
-```rust
-let laplacian: f64 = (0..n)
-    .map(|i| prog.eval(&[x_val, basis_vector(i, n)]))
-    .sum();
-```
-
-Graph transformation: 2 (`differentiate` × 2). Compile: 1. Eval: n (exact) or
-k << n (stochastic). With tape AD, the graph would be rebuilt each time.
-
-| Method | Transformations | Compile | Eval | Total cost |
-|--------|----------------|---------|------|------------|
-| Naive (n × differentiate²) | 2n | n | n | O(n) all heavy |
+| Method | Transform | Compile | Eval | Total |
+|--------|-----------|---------|------|-------|
 | FoF + compile once (exact) | 2 | 1 | n | O(n) eval only |
 | FoF + Hutchinson (stochastic) | 2 | 1 | k | O(k), k << n |
-| Forward Laplacian (future) | 1 (special) | 1 | 1 | **O(1)** |
+| Forward Laplacian (future) | 1 | 1 | 1 | **O(1)** |
 
 Forward Laplacian propagates (value, tangent, Laplacian) simultaneously:
 
@@ -538,8 +554,7 @@ u = a * b:   Lap(u) = a·Lap(b) + 2·da·db + b·Lap(a)
 u = exp(a):  Lap(u) = exp(a)·(Lap(a) + da²)
 ```
 
-One forward pass gives the exact Laplacian. Implementable as a specialized
-graph transformation that emits the propagation rules as IR nodes.
+Implementable as a specialized graph transformation.
 
 ---
 
@@ -547,11 +562,10 @@ graph transformation that emits the propagation rules as IR nodes.
 
 ### A. Custom rules for user-defined functions
 
-Users can extend the primitive set by adding variants to their `PrimitiveOp`
-enum. This is analogous to Julia's `ChainRulesCore.frule` / `rrule`.
+Users extend the primitive set by adding variants to their `PrimitiveOp` enum
+(analogous to Julia's `ChainRulesCore.frule` / `rrule`).
 
-To avoid exposing low-level graph internals (`ValId`, `Graph`) in user code,
-provide a `Traced` wrapper with operator overloading:
+To avoid exposing low-level graph internals, provide a `Traced` wrapper:
 
 ```rust
 // User writes normal math — Traced records ops into the graph
@@ -564,7 +578,6 @@ fn linearize_dyson(
 ```
 
 ```rust
-// Traced is a thin wrapper around ValId with operator overloading
 struct Traced<'g, Op: PrimitiveOp> {
     ctx: &'g GraphContext<Op>,
     val_id: ValId,              // hidden from user
@@ -574,38 +587,22 @@ impl Mul for Traced<'_, Op> { ... }  // calls ctx.add_op(Mul, ...)
 impl Add for Traced<'_, Op> { ... }  // calls ctx.add_op(Add, ...)
 ```
 
-No `ValId` leaks into user code. Comparable to Julia's ChainRules experience.
-
 ### B. Wrapper structs and pytree-style AD
 
-When AD targets are wrapped in domain structs (e.g., `GreenFunction` containing
-a `Tensor<f64>` plus metadata), the wrapper declares which fields are
-differentiable ("leaves") via a `Differentiable` trait:
+Domain structs wrapping tensors declare differentiable fields via a trait:
 
 ```rust
 #[derive(Differentiable)]
 struct GreenFunction {
     #[leaf]
-    data: Tensor<f64>,      // AD target
+    data: Tensor<f64>,      // AD target (Operand)
     mesh: ImagTimeMesh,     // metadata, not differentiated
     beta: f64,              // parameter, not differentiated
 }
 ```
 
-The graph operates on leaves (`Tensor<f64>`). Pack/unpack is automatic:
-
-```rust
-trait Differentiable {
-    type Leaves;
-    fn to_leaves(&self) -> Self::Leaves;
-    fn from_leaves(leaves: Self::Leaves, template: &Self) -> Self;
-}
-```
-
-Custom linearize rules are written at the leaf level using `Traced` values.
-Metadata is preserved through `from_leaves(result, template)`.
-
-This is analogous to JAX's pytree + `Functors.jl`'s `@functor`.
+The graph operates on leaves (`Tensor<f64>` = Operand). Pack/unpack is
+automatic via `to_leaves` / `from_leaves`.
 
 ---
 
@@ -615,27 +612,27 @@ This is analogous to JAX's pytree + `Functors.jl`'s `@functor`.
 
 - `Graph<ScalarOp>` with `Operand = f64`
 - Primitives: `Mul`, `Add`, `Scale`, `Exp`, `Dup`, `Neg`
-- `differentiate`, `transpose`, `compile`, `eval`
+- `differentiate`, `transpose`, `merge`, `compile`, `eval`
 - Tests: forward, backward, FoF, FoR, RoF, RoR for `exp(a*x)`
-- Lives in tidu2 on `feat/v2` branch
 
 ### Phase 2: Tensor primitives
 
 - `TensorOp` enum with Tier 1 (Semiring Core) + Tier 2 (Standard)
-- `Operand = Tensor<f64>` and `DynTensor`
+- `Operand = Tensor<f64>` and `DynTensor` implementing StableHLO-aligned ops
 - Linearize rules for all primitives
-- Integration with existing tenferro-rs tensor infrastructure
+- Batched JVP via placeholder + broadcasting
 
 ### Phase 3: Backend compilation
 
-- StableHLO lowering of `CompiledProgram<TensorOp>`
+- StableHLO lowering of `CompiledProgram<TensorOp>` (trivial: 1:1 op mapping)
 - IREE/XLA integration for GPU/TPU execution
 - Custom algebra backend for Tier 1 programs
 
 ### Phase 4: Optimization
 
-- Graph scheduler for checkpoint optimization
+- Graph scheduler for checkpoint optimization (runtime cost/memory info)
 - Cross-country mode (automatic forward/backward split)
+- Forward Laplacian
 - Operator fusion in compiled IR
 
 ---
