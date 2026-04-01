@@ -197,36 +197,70 @@ computation is fully compilable even though the primal is a custom_call.
 
 ## IV. Backend Dispatch
 
-### Architecture
+### Architecture: two-level compilation
+
+All algebras first compile to **TenferroIR** (Semiring Core + JAX Prims).
+This is the common intermediate representation. Further lowering depends
+on the algebra.
 
 ```
-CompiledProgram<Op>
+Graph → differentiate / transpose → merge → compile
     │
-    ├── check: all ops in Tier 1?
-    │     yes → SemiringBackend<Alg>
-    │             ├── Standard → DefaultBackend (BLAS)
-    │             └── Tropical → DefaultBackend (CPU) or CUDA kernels (GPU)
+    ▼
+TenferroIR  (= CompiledProgram<TenferroOp>)
+    │         Semiring Core (Tier 1) + JAX Prims (Tier 2)
+    │         common to ALL algebras
     │
-    └── no (has Tier 2 ops)
-          └── StandardBackend
-                ├── Phase 1: DefaultBackend (CPU, eager per-op)
-                └── Phase 2: StableHLO → IREE (compiled, fused)
+    ├── Standard algebra (uses Tier 1 + Tier 2):
+    │     → lower to StableHLO (Tier 2 ops map 1:1)
+    │     ├── faer/LAPACK backend (default, lightweight, no XLA dep)
+    │     │     interprets StableHLO, dispatches op-by-op to BLAS
+    │     │     no fusion, but cached. fast path addable later.
+    │     └── XLA backend (optional, ~200MB, GPU support)
+    │           JIT compiles StableHLO → LLVM/PTX, fusion, optimization
+    │
+    └── Custom algebra — Tropical, p-adic, etc. (Tier 1 only):
+          → Custom backend (implements Semiring Core ops only)
+          ├── CPU: custom kernels
+          └── GPU: hand-optimized CUDA kernels
 ```
+
+**Custom algebra programs may only use Tier 1 (Semiring Core) ops.**
+Using Tier 2 ops (Exp, SVD, etc.) with a custom algebra is a compile-time
+error — these ops have no meaning outside Standard algebra.
 
 ### Type erasure boundary
 
 | Layer | Scalar type T | Algebra Alg |
 |-------|--------------|-------------|
 | Graph + AD (tidu2) | generic (via `Operand`) | generic (via `PrimitiveOp`) |
-| DefaultBackend | generic (preserved) | generic (preserved) |
-| IREE Backend | erased to DType enum | Standard only |
+| TenferroIR | generic (preserved) | generic (preserved) |
+| Custom backend | generic (preserved) | custom (preserved) |
+| StableHLO + faer/XLA | erased to DType enum | Standard only |
 
-Type erasure happens **only at the IREE boundary**. Everything above is
-fully generic.
+Type erasure happens **only at the StableHLO boundary**.
 
-### DefaultBackend (Phase 1)
+### faer/LAPACK backend (default for Standard CPU)
 
-Executes `CompiledProgram` instruction-by-instruction:
+Interprets StableHLO IR instruction-by-instruction, dispatching each op
+to the corresponding faer/BLAS/LAPACK routine. No XLA dependency.
+
+```
+StableHLO instruction    →   faer/BLAS dispatch
+  stablehlo.add          →   elementwise add
+  stablehlo.dot_general   →   faer::mat_mul / dgemm
+  stablehlo.custom_call("gesvd") → LAPACK dgesvd
+  ...
+```
+
+No fusion, no JIT. Op-by-op execution. Sufficient for most CPU workloads.
+If performance is insufficient for specific patterns, **fast paths** can
+be added that bypass StableHLO for hot operations (e.g., direct BLAS call
+for fused matmul chains).
+
+### Custom backend (Tropical / custom algebra)
+
+Executes TenferroIR (Tier 1 ops only) directly:
 
 ```rust
 fn eval<Op: PrimitiveOp>(prog: &CompiledProgram<Op>, inputs: &[Op::Operand]) -> Vec<Op::Operand> {
@@ -246,8 +280,6 @@ fn eval<Op: PrimitiveOp>(prog: &CompiledProgram<Op>, inputs: &[Op::Operand]) -> 
     prog.output_slots.iter().map(|&i| slots[i].take().unwrap()).collect()
 }
 ```
-
-No optimization, no fusion. Correct and simple.
 
 ---
 
