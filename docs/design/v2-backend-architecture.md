@@ -268,6 +268,32 @@ If performance is insufficient for specific patterns, **fast paths** can
 be added that bypass StableHLO for hot operations (e.g., direct BLAS call
 for fused matmul chains).
 
+### Memory layout: TenferroIR knows nothing about strides
+
+TenferroIR is purely logical — it describes WHAT to compute, not HOW
+memory is laid out. Operations like `Transpose`, `Slice`, `BroadcastInDim`
+are logical transformations, not memory operations.
+
+**`MakeContiguous` does not exist in TenferroIR or StableHLO.** Memory
+layout is a backend concern:
+
+```
+TenferroIR:   Transpose(A)     ← logical operation
+                  │
+       ┌─────────┴─────────┐
+       ▼                    ▼
+  StableHLO             faer backend
+  all contiguous        stride-based (lazy)
+  XLA optimizes:        faer optimizes:
+   - layout assignment   - strides for transpose (zero-copy)
+   - transpose folding   - contiguous only when needed
+     into dot/conv         (internal, not in IR)
+   - copy removal
+```
+
+Each backend independently optimizes memory layout. The user and TenferroIR
+see only logical operations. This is a clean separation of concerns.
+
 ### Custom backend (Tropical / custom algebra)
 
 Executes TenferroIR (Tier 1 ops only) directly:
