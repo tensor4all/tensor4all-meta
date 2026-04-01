@@ -12,11 +12,18 @@
 **All computation — primal and derivatives — flows through the same pipeline:**
 
 ```
-Graph (primal, and/or AD-transformed)
-  → compile → TenferroIR (flat SSA, common to all algebras)
-      │
-      ├── Standard → StableHLO → faer/LAPACK (default) or XLA (optional)
-      └── Custom   → Custom backend (Semiring Core only)
+Graph (primal and/or AD-transformed)
+  │
+  │ compile
+  ▼
+TenferroIR (flat SSA, common to all algebras)
+  │
+  ├─ Standard ──→ StableHLO ──→ faer/LAPACK (default)
+  │                         └──→ XLA         (optional, GPU)
+  │
+  └─ Custom ────→ Custom backend (Semiring Core only)
+                   ├── CPU: custom kernels
+                   └── GPU: optimized CUDA kernels
 ```
 
 AD is a graph transformation (differentiate, transpose), not a separate
