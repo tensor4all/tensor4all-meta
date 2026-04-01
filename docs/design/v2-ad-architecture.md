@@ -339,17 +339,29 @@ v8 = Scale(v3, v7)
 v9 = Scale(v1, v8)   = ct_x
 ```
 
-**Step 5 — compile → TenferroIR → backend → eval:**
+**Step 5 — compile → CompiledProgram → eval:**
 
 ```rust
-let tenferro_ir = merged.compile(&[v3, v9], &[v0, v1, v7]);
-// Standard algebra: TenferroIR → StableHLO → faer/LAPACK (or XLA)
-let [y, ct_x] = backend.eval(&tenferro_ir, &[x_val, a_val, 1.0]);
+// Graph construction + AD transforms (expensive, do once)
+let prog = merged.compile(&[v3, v9], &[v0, v1, v7]);
+
+// Eval (cheap, do many times with different inputs)
+let [y, ct_x] = prog.eval(&[2.0, 3.0, 1.0]);
+let [y2, ct_x2] = prog.eval(&[4.0, 3.0, 1.0]);
 ```
 
-Primal (`v3`) and gradient (`v9`) are compiled into a single TenferroIR
-program. The backend executes both in one pass. `v3 = exp(a*x)` computed
-once, shared by primal output and backward.
+**Caching**: graph construction, differentiation, merge, and compile are
+all expensive. tidu2 does not cache — it returns `CompiledProgram<Op>`
+and the caller is responsible for retaining and reusing it. This is
+analogous to JAX's `jit`: trace once, execute many times.
+
+```
+Expensive (once):  build → differentiate → merge → compile → CompiledProgram
+Cheap (many times): CompiledProgram.eval(inputs)
+```
+
+Primal (`v3`) and gradient (`v9`) are compiled into a single program.
+`v3 = exp(a*x)` computed once, shared by primal output and backward.
 All higher-order methods (FoF, FoR, RoF, RoR) give `d²f/dx² = a² exp(ax)` ✓
 
 ---

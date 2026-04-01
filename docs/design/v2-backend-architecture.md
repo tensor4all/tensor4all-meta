@@ -397,15 +397,32 @@ vs libtorch's ~2GB).
 | CUDA kernels | precompiled, bundled | JIT at runtime |
 | CUDA libraries | partially bundled | `dlopen` from system |
 
-### JIT cache
+### Two-level caching
 
-```rust
-// Cache key: (program hash, input shapes, dtypes)
-let compiled = xla_cache.get_or_compile(prog, input_shapes);
-compiled.execute(input_buffers);
+Graph construction and AD transforms are expensive. Caching happens at
+two levels, both outside tidu2:
+
+```
+Level 1 — CompiledProgram (user / tenferro2 responsibility):
+  Expensive:  Graph → differentiate → merge → compile → CompiledProgram
+  Cheap:      retain CompiledProgram, call eval() many times
+  tidu2 does NOT cache. Caller retains the CompiledProgram.
+
+Level 2 — XLA executable (tenferro2-xla-backend):
+  Expensive:  CompiledProgram → StableHLO → XLA compile → executable
+  Cheap:      cache executable, call execute() many times
+  Cache key:  (program hash, input shapes, dtypes)
 ```
 
-Same program with same input shapes → cached compiled executable.
+```rust
+// Level 1: user retains CompiledProgram
+let prog = graph.compile(...);   // expensive, do once
+prog.eval(&[2.0, 3.0]);         // cheap, do many times
+
+// Level 2: XLA backend caches compiled executable
+let xla_exec = xla_cache.get_or_compile(&prog, input_shapes);
+xla_exec.execute(input_buffers); // cheap
+```
 
 ### Future: IREE migration
 
