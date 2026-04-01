@@ -456,6 +456,87 @@ Graph construction and transformation happen once. The compiled SSA IR can be:
 
 ---
 
+## Appendix: Design Notes
+
+### A. `differentiate` is the only derivative operation
+
+`transpose` is not a derivative — it is an evaluation strategy. All derivative
+information comes from `differentiate` alone:
+
+| Goal | Transformations |
+|------|----------------|
+| JVP (df/dx · t_x) | `differentiate` |
+| VJP (gradient) | `differentiate` → `transpose` |
+| n-th derivative | `differentiate` × n |
+| n-th derivative as gradient | `differentiate` × n → `transpose` |
+
+`transpose` is always at the end, as an optional step to choose backward
+evaluation. The mathematical content is entirely in `differentiate`.
+
+### B. Custom rules for user-defined functions
+
+Users can extend the primitive set by adding variants to their `PrimitiveOp`
+enum. This is analogous to Julia's `ChainRulesCore.frule` / `rrule`.
+
+To avoid exposing low-level graph internals (`ValId`, `Graph`) in user code,
+provide a `Traced` wrapper with operator overloading:
+
+```rust
+// User writes normal math — Traced records ops into the graph
+fn linearize_dyson(
+    g0: Traced, sigma: Traced,       // primal values
+    t_g0: Traced, t_sigma: Traced,   // tangent values
+) -> Traced {
+    g0.exp() * t_g0 + sigma * t_sigma
+}
+```
+
+```rust
+// Traced is a thin wrapper around ValId with operator overloading
+struct Traced<'g, Op: PrimitiveOp> {
+    ctx: &'g GraphContext<Op>,
+    val_id: ValId,              // hidden from user
+}
+
+impl Mul for Traced<'_, Op> { ... }  // calls ctx.add_op(Mul, ...)
+impl Add for Traced<'_, Op> { ... }  // calls ctx.add_op(Add, ...)
+```
+
+No `ValId` leaks into user code. Comparable to Julia's ChainRules experience.
+
+### C. Wrapper structs and pytree-style AD
+
+When AD targets are wrapped in domain structs (e.g., `GreenFunction` containing
+a `Tensor<f64>` plus metadata), the wrapper declares which fields are
+differentiable ("leaves") via a `Differentiable` trait:
+
+```rust
+#[derive(Differentiable)]
+struct GreenFunction {
+    #[leaf]
+    data: Tensor<f64>,      // AD target
+    mesh: ImagTimeMesh,     // metadata, not differentiated
+    beta: f64,              // parameter, not differentiated
+}
+```
+
+The graph operates on leaves (`Tensor<f64>`). Pack/unpack is automatic:
+
+```rust
+trait Differentiable {
+    type Leaves;
+    fn to_leaves(&self) -> Self::Leaves;
+    fn from_leaves(leaves: Self::Leaves, template: &Self) -> Self;
+}
+```
+
+Custom linearize rules are written at the leaf level using `Traced` values.
+Metadata is preserved through `from_leaves(result, template)`.
+
+This is analogous to JAX's pytree + `Functors.jl`'s `@functor`.
+
+---
+
 ## VIII. Roadmap
 
 ### Phase 1: Scalar graph AD
