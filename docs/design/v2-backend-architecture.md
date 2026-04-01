@@ -9,20 +9,21 @@
 
 ## I. Overview
 
-The AD engine (tidu2) produces `CompiledProgram<Op>` — a flat SSA IR of
-primitive operations. This document describes how that IR is executed.
+**All computation — primal and derivatives — flows through the same pipeline:**
 
 ```
-CompiledProgram<Op>
-    │
-    ├── Tier 1 only (Semiring Core)
-    │     ├── Standard: DefaultBackend (CPU, BLAS)
-    │     └── Tropical: DefaultBackend (CPU) or CUDA kernels (GPU, optimized)
-    │
-    └── Tier 1 + Tier 2 (Standard)
-          ├── Phase 1: DefaultBackend (CPU, BLAS + LAPACK)
-          └── Phase 2: StableHLO → IREE (CPU/GPU/TPU)
+Graph (primal, and/or AD-transformed)
+  → compile → TenferroIR (flat SSA, common to all algebras)
+      │
+      ├── Standard → StableHLO → faer/LAPACK (default) or XLA (optional)
+      └── Custom   → Custom backend (Semiring Core only)
 ```
+
+AD is a graph transformation (differentiate, transpose), not a separate
+execution mode. A primal-only computation follows the same path — just
+without graph transformations. Even eager execution (`apply_op`-equivalent)
+is internally a single-node graph compiled and evaluated through this
+pipeline.
 
 ### Current GPU backend status
 
@@ -291,9 +292,9 @@ Both XLA and IREE accept StableHLO as input. We use **XLA first** (mature,
 prebuilt binaries available) and migrate to **IREE later** (future runtime).
 
 ```
-CompiledProgram → StableHLO → XLA (Phase 3) → IREE (Phase 4+)
-                               ↑                ↑
-                               available now     future replacement
+TenferroIR → StableHLO → XLA (Phase 3) → IREE (Phase 4+)
+                           ↑                ↑
+                           available now     future replacement
 ```
 
 StableHLO is the stable interface. Backend swap is transparent.
