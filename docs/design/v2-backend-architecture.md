@@ -251,50 +251,91 @@ No optimization, no fusion. Correct and simple.
 
 ---
 
-## V. IREE Integration
+## V. GPU Backend: XLA first, IREE later
 
-### Why IREE, not XLA directly
+### Strategy: XLA → IREE migration
 
-- IREE is officially replacing XLA's runtime (OpenXLA project)
-- CMake build (lighter than Bazel)
-- C API for Rust FFI
-- Targets: CPU (LLVM), GPU (Vulkan/CUDA/ROCm), Apple Silicon (Metal)
-- Same StableHLO input — XLA optimizations flow into IREE
-
-### Compilation path
+Both XLA and IREE accept StableHLO as input. We use **XLA first** (mature,
+prebuilt binaries available) and migrate to **IREE later** (future runtime).
 
 ```
-CompiledProgram
-  → StableHLO IR (MLIR textual or bytecode)
-  → IREE compiler:
-      StableHLO → linalg dialect → vector dialect → LLVM IR / SPIR-V
-                   ↑ tiling         ↑ vectorization    ↑ codegen
-                   fusion here      SIMD here           target-specific
-  → IREE runtime: execute compiled module
+CompiledProgram → StableHLO → XLA (Phase 3) → IREE (Phase 4+)
+                               ↑                ↑
+                               available now     future replacement
 ```
+
+StableHLO is the stable interface. Backend swap is transparent.
+
+### Phase 3: XLA via xla-rs
+
+**Prebuilt binaries**: `elixir-nx/xla` distributes precompiled XLA shared
+libraries (~200MB) for all major platforms:
+
+| Binary | Target |
+|--------|--------|
+| `xla_extension-*-x86_64-linux-gnu-cpu.tar.gz` | Linux x86_64 CPU |
+| `xla_extension-*-aarch64-darwin-cpu.tar.gz` | macOS Apple Silicon |
+| `xla_extension-*-x86_64-linux-gnu-cuda12.tar.gz` | Linux CUDA 12 |
+| `xla_extension-*-x86_64-linux-gnu-cuda13.tar.gz` | Linux CUDA 13 |
+
+**Rust bindings**: `xla` crate (xla-rs, by Laurent Mazare / Hugging Face)
+wraps XLA's PjRt C API. Uses elixir-nx/xla binaries directly.
+
+```rust
+use xla::{PjRtClient, XlaBuilder};
+
+let client = PjRtClient::gpu()?;       // or ::cpu()
+let builder = XlaBuilder::new("my_program");
+// ... build HLO from CompiledProgram ...
+let executable = client.compile(&computation)?;
+let result = executable.execute::<xla::Literal>(&[input_buffers])?;
+```
+
+### XLA's JIT compilation design
+
+XLA does NOT bundle precompiled CUDA kernels. It **JIT-compiles at runtime**:
+
+```
+HLO → LLVM IR → PTX → cubin (at runtime)
+```
+
+CUDA libraries (`libcudart`, `libcublas`, `libcudnn`) are loaded via `dlopen`
+from the user's system installation. This keeps the XLA binary compact (~200MB
+vs libtorch's ~2GB).
+
+| | libtorch CUDA | XLA CUDA |
+|---|---|---|
+| Size | ~2GB | ~200MB |
+| CUDA kernels | precompiled, bundled | JIT at runtime |
+| CUDA libraries | partially bundled | `dlopen` from system |
 
 ### JIT cache
 
 ```rust
 // Cache key: (program hash, input shapes, dtypes)
-let compiled = iree_cache.get_or_compile(prog, input_shapes);
+let compiled = xla_cache.get_or_compile(prog, input_shapes);
 compiled.execute(input_buffers);
 ```
 
-Same program with same input shapes → cached compiled module.
-Different shapes → recompile (like JAX's tracing).
+Same program with same input shapes → cached compiled executable.
+
+### Future: IREE migration
+
+IREE is officially replacing XLA's runtime (OpenXLA project). When mature:
+- Same StableHLO input — no change to our lowering code
+- Additional targets: Vulkan, Metal (Apple Silicon native)
+- CMake build (lighter than XLA's Bazel)
+- C API for Rust FFI
+- Compilation path: StableHLO → linalg → vector → LLVM IR / SPIR-V
 
 ### Memory space compatibility
 
-| tenferro device | IREE HAL | Apple Silicon |
-|----------------|----------|---------------|
+| tenferro device | XLA / IREE | Apple Silicon |
+|----------------|------------|---------------|
 | MainMemory | HOST_LOCAL | MTLBuffer shared |
 | PinnedMemory | HOST_LOCAL \| DEVICE_VISIBLE | (same) |
 | GpuMemory | DEVICE_LOCAL | MTLBuffer shared |
 | ManagedMemory | DEVICE_LOCAL \| HOST_VISIBLE | (hw managed) |
-
-Zero-copy possible when tenferro buffer and IREE buffer share the
-same device memory.
 
 ---
 
@@ -359,18 +400,19 @@ Type erasure at the user API level. Internally dispatches to typed tensors.
 - DefaultBackend for all new ops (CPU)
 - **Milestone**: full AD for linalg works (JVP + auto-transpose VJP)
 
-### Phase 3: StableHLO + IREE
+### Phase 3: XLA backend
 
 - `tenferro2-stablehlo`: primitive → StableHLO 1:1 lowering
-- `tenferro2-iree-backend`: IREE compiler + runtime via C API
-- JIT cache (program hash + shapes → compiled module)
-- **Milestone**: Standard GPU execution via IREE, replacing deprecated CUDA kernels
+- `tenferro2-xla-backend`: XLA via xla-rs + elixir-nx/xla prebuilt binaries
+- JIT cache (program hash + shapes → compiled executable)
+- **Milestone**: Standard GPU execution via XLA, replacing deprecated CUDA kernels
 
-### Phase 4: Optimization
+### Phase 4: Optimization + IREE
 
-- Operator fusion in StableHLO (IREE handles this)
-- Memory optimization (IREE tiling + buffer reuse)
-- Tropical GPU: retain hand-optimized CUDA kernels (not via IREE)
+- Operator fusion (XLA compiler handles this)
+- Memory optimization
+- IREE migration: swap XLA backend for IREE (same StableHLO input)
+- Tropical GPU: retain hand-optimized CUDA kernels (not via XLA/IREE)
 
 ---
 
