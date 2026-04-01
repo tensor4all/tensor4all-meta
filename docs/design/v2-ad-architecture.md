@@ -10,10 +10,25 @@
 
 Build a differentiable programming stack in Rust where:
 
-- **Differentiation is a graph transformation**, not a runtime operation
-- **Arbitrary-order AD** (FoF, FoR, RoF, RoR, ...) comes from repeating the same transformation
-- **Forward and backward propagation are unified** — both are graph transformations on the same DAG, evaluated in the same direction
-- The same graph can be **compiled to CPU execution or lowered to StableHLO** for GPU/TPU
+- **`differentiate` is the only derivative operation.** It is a graph-to-graph
+  transformation that adds tangent nodes by linearizing each Op. Applying it
+  n times gives the n-th derivative. All derivative information comes from
+  this single operation.
+- **`transpose` is not differentiation — it is an evaluation strategy.** It
+  rewrites a linear map to flow in the reverse direction (JVP → VJP). It is
+  always optional, always at the end, and does not add derivative information.
+- **Forward and backward are unified.** Both are graph transformations on the
+  same DAG. Evaluation is always upstream to downstream. No special backward
+  evaluation mode.
+- The same graph can be **compiled to CPU execution or lowered to StableHLO**
+  for GPU/TPU.
+
+| Goal | Transformations |
+|------|----------------|
+| JVP (1st derivative, forward) | `differentiate` |
+| VJP (1st derivative, backward) | `differentiate` → `transpose` |
+| n-th derivative | `differentiate` × n |
+| n-th derivative as gradient | `differentiate` × n → `transpose` |
 
 Three crates, strictly layered:
 
@@ -127,17 +142,25 @@ Mul(a, ·) ↔ Mul(a, ·)  (self-adjoint)
 
 With a sufficiently rich primitive set, all transposes are expressible as IR ops. No special backward evaluation mode needed.
 
-### Composing transformations for higher-order AD
+### Higher-order AD = repeat `differentiate`
 
-| Method | Transformations |
-|--------|----------------|
-| JVP (df/dx) | differentiate |
-| VJP (gradient) | differentiate → transpose |
-| FoF (d²f/dx²) | differentiate → differentiate |
-| FoR (d²f/dx²) | differentiate → transpose → differentiate |
-| RoR (d²f/dx²) | differentiate → transpose → differentiate → transpose |
+n-th derivative = apply `differentiate` n times. `transpose` is optional (evaluation choice).
 
-All produce the same result. Apply repeatedly for n-th order.
+```
+1st derivative:   differentiate
+2nd derivative:   differentiate → differentiate
+3rd derivative:   differentiate → differentiate → differentiate
+```
+
+To evaluate any of these as a gradient (backward), append `transpose`:
+
+```
+gradient:              differentiate → transpose
+Hessian-vector product: differentiate → differentiate → transpose
+```
+
+FoR, RoR etc. are just different orderings of `differentiate` and `transpose`.
+The derivative content is identical — only the evaluation direction differs.
 
 ### Zero propagation
 
@@ -458,22 +481,7 @@ Graph construction and transformation happen once. The compiled SSA IR can be:
 
 ## Appendix: Design Notes
 
-### A. `differentiate` is the only derivative operation
-
-`transpose` is not a derivative — it is an evaluation strategy. All derivative
-information comes from `differentiate` alone:
-
-| Goal | Transformations |
-|------|----------------|
-| JVP (df/dx · t_x) | `differentiate` |
-| VJP (gradient) | `differentiate` → `transpose` |
-| n-th derivative | `differentiate` × n |
-| n-th derivative as gradient | `differentiate` × n → `transpose` |
-
-`transpose` is always at the end, as an optional step to choose backward
-evaluation. The mathematical content is entirely in `differentiate`.
-
-### B. Custom rules for user-defined functions
+### A. Custom rules for user-defined functions
 
 Users can extend the primitive set by adding variants to their `PrimitiveOp`
 enum. This is analogous to Julia's `ChainRulesCore.frule` / `rrule`.
@@ -504,7 +512,7 @@ impl Add for Traced<'_, Op> { ... }  // calls ctx.add_op(Add, ...)
 
 No `ValId` leaks into user code. Comparable to Julia's ChainRules experience.
 
-### C. Wrapper structs and pytree-style AD
+### B. Wrapper structs and pytree-style AD
 
 When AD targets are wrapped in domain structs (e.g., `GreenFunction` containing
 a `Tensor<f64>` plus metadata), the wrapper declares which fields are
