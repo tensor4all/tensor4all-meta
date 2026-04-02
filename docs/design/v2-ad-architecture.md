@@ -379,7 +379,7 @@ v8 = Mul(v3, v7)  mask=[fixed, active]
 v9 = Mul(v1, v8)  mask=[fixed, active]   = ct_x
 ```
 
-**Step 5 — compile → CompiledProgram → eval:**
+**Step 6 — compile → CompiledProgram → eval:**
 
 ```rust
 // Graph construction + AD transforms (expensive, do once)
@@ -403,6 +403,143 @@ Cheap (many times): CompiledProgram.eval(inputs)
 Primal (`v3`) and gradient (`v9`) are compiled into a single program.
 `v3 = exp(a*x)` computed once, shared by primal output and backward.
 All higher-order methods (FoF, FoR, RoF, RoR) give `d²f/dx² = a² exp(ax)` ✓
+
+### Vector example 1: elementwise `y = exp(a * x)` with `x, a ∈ R^2`
+
+This is the same logic as the scalar example, but with explicit tensor
+shapes. `Mul` and `Exp` are elementwise, so every intermediate stays shape
+`[2]`.
+
+**Step 1 — Build primal graph G_primal:**
+
+```
+u0 = Input(x:[2])
+u1 = Input(a:[2])
+u2 = Mul(u0, u1)    // [2], elementwise a*x
+u3 = Exp(u2)        // [2], y = exp(a*x)
+```
+
+**Step 2 — differentiate(G_primal) → G_linear (new graph fragment):**
+
+Differentiate with respect to `x`, with tangent input `u4 = t_x:[2]`.
+
+```
+u4 = Input(t_x:[2])
+u5 = Mul(u1, u4)  mask=[fixed, active]   // [2], a * t_x
+u6 = Mul(u3, u5)  mask=[fixed, active]   // [2], exp(a*x) * (a * t_x)
+```
+
+**Step 3 — merge(G_primal, G_linear) → resolve external refs:**
+
+```
+u0 = Input(x:[2])
+u1 = Input(a:[2])
+u2 = Mul(u0, u1)
+u3 = Exp(u2)
+u4 = Input(t_x:[2])
+u5 = Mul(u1, u4)  mask=[fixed, active]
+u6 = Mul(u3, u5)  mask=[fixed, active]
+```
+
+**Step 4 — transpose(linear part of merged graph) → G_transposed:**
+
+The tangent output `u6:[2]` becomes the cotangent input `u7 = ct_y:[2]`.
+
+```
+u7 = Input(ct_y:[2])
+u8 = Mul(u3, u7)  mask=[fixed, active]   // [2], reverse of u6
+u9 = Mul(u1, u8)  mask=[fixed, active]   // [2], reverse of u5
+                                            = ct_x:[2]
+```
+
+**Step 5 — resulting formulas:**
+
+For `x = [x0, x1]`, `a = [a0, a1]`, `t_x = [dx0, dx1]`,
+`ct_y = [ct_y0, ct_y1]`:
+
+```
+y    = [exp(a0*x0), exp(a1*x1)]
+dy   = [exp(a0*x0) * a0 * dx0,
+        exp(a1*x1) * a1 * dx1]
+ct_x = [a0 * exp(a0*x0) * ct_y0,
+        a1 * exp(a1*x1) * ct_y1]
+```
+
+This stays purely elementwise. Numerically, the JVP matches finite
+differences and the transpose satisfies `<ct_y, dy> = <ct_x, t_x>`.
+
+### Vector example 2: reduction `y = Sum(exp(a * x))` with `x, a ∈ R^2`
+
+This adds a reduction, so the primal output is scalar (`[]`) while the
+internal activations remain vectors (`[2]`).
+
+**Step 1 — Build primal graph G_primal:**
+
+```
+r0 = Input(x:[2])
+r1 = Input(a:[2])
+r2 = Mul(r0, r1)    // [2], elementwise a*x
+r3 = Exp(r2)        // [2], exp(a*x)
+r4 = Sum(r3)        // [], y = exp(a0*x0) + exp(a1*x1)
+```
+
+**Step 2 — differentiate(G_primal) → G_linear (new graph fragment):**
+
+Differentiate with respect to `x`, with tangent input `r5 = t_x:[2]`.
+
+```
+r5 = Input(t_x:[2])
+r6 = Mul(r1, r5)  mask=[fixed, active]   // [2], a * t_x
+r7 = Mul(r3, r6)  mask=[fixed, active]   // [2], exp(a*x) * (a * t_x)
+r8 = Sum(r7)                             // [], dy
+```
+
+**Step 3 — merge(G_primal, G_linear) → resolve external refs:**
+
+```
+r0 = Input(x:[2])
+r1 = Input(a:[2])
+r2 = Mul(r0, r1)
+r3 = Exp(r2)
+r4 = Sum(r3)
+r5 = Input(t_x:[2])
+r6 = Mul(r1, r5)  mask=[fixed, active]
+r7 = Mul(r3, r6)  mask=[fixed, active]
+r8 = Sum(r7)
+```
+
+**Step 4 — transpose(linear part of merged graph) → G_transposed:**
+
+The transpose of `Sum : [2] → []` is `BroadcastInDim : [] → [2]`. So the
+scalar cotangent is first broadcast back to the unreduced shape, then the
+two `Mul` nodes are reversed as before.
+
+```
+r9  = Input(ct_y:[])
+r10 = BroadcastInDim(r9, shape=[2], dims=[])   // [2], reverse of r8 = Sum(r7)
+r11 = Mul(r3, r10)  mask=[fixed, active]       // [2], reverse of r7
+r12 = Mul(r1, r11)  mask=[fixed, active]       // [2], reverse of r6
+                                                  = ct_x:[2]
+```
+
+**Step 5 — resulting formulas:**
+
+For `x = [x0, x1]`, `a = [a0, a1]`, `t_x = [dx0, dx1]`, scalar cotangent
+seed `ct_y`:
+
+```
+y    = exp(a0*x0) + exp(a1*x1)
+dy   = exp(a0*x0) * a0 * dx0 + exp(a1*x1) * a1 * dx1
+ct_x = [a0 * exp(a0*x0) * ct_y,
+        a1 * exp(a1*x1) * ct_y]
+```
+
+This is the smallest vector example that makes the reduction transpose
+explicit. Numerically, the JVP matches finite differences and the transpose
+satisfies `ct_y * dy = <ct_x, t_x>`.
+
+A reproducible numeric checker for these two vector examples is in
+`docs/design/v2_vector_ad_examples_check.py`.
 
 ---
 
