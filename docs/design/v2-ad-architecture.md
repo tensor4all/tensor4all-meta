@@ -194,6 +194,15 @@ Conj(val)               — complex conjugate
 `Scale` (not generic `Mul`) makes the role of each operand explicit.
 This is essential for transpose: the coefficient stays, the tangent flips.
 
+**Important**: at higher order, the coefficient of `Scale(coeff, tangent)`
+is NOT necessarily a "primal" value. It can be:
+- a primal value (1st order)
+- an earlier tangent value (2nd order FoF)
+- a cotangent-side residual (RoR)
+
+The correct interpretation: **in the current transform, `coeff` is the
+operand treated as fixed, `tangent` is the active linear variable.**
+
 #### Transpose rules
 
 **Real case:**
@@ -231,6 +240,25 @@ Transposed graph (reversed, new variable names):
 
 **Only tangent I/O flips. Coefficients (v1, v3) remain as external
 references to the primal graph.**
+
+#### Cotangent accumulation
+
+Local transpose rules alone are NOT sufficient. When multiple reverse
+contributions land on the **same tangent node**, they must be combined
+with `AddLin`. Example: `f(x) = x + x` produces `AddLin(dx, dx)` where
+both inputs are the same tangent. Transpose gives `Dup(ct_y)` → two
+cotangent contributions to `dx`, which must be accumulated.
+
+Algorithm:
+
+```
+transpose(linear_fragment):
+  1. seed cotangent on linear outputs
+  2. traverse linear ops in reverse topological order
+  3. emit reverse contributions by local transpose rule
+  4. bucket contributions by original tangent-node identity
+  5. combine each bucket with AddLin
+```
 
 `differentiate` is identical for real and complex — no conjugation.
 `transpose` is the only operation that differs for complex: it wraps
@@ -734,7 +762,42 @@ automatic via `to_leaves` / `from_leaves`.
 
 ---
 
-## VIII. Roadmap
+## VIII. Golden Tests
+
+Minimal set of tests that validate the graph transform procedure.
+Derived from manual experiments (see `docs/design/ad-graph-experiments.md`).
+
+| # | Function | What it checks |
+|---|----------|---------------|
+| 1 | `x + x` | transpose accumulation (same tangent node) |
+| 2 | `x * y` | binary linearization, distinct reverse sinks |
+| 3 | `c * z` (complex) | `Conj` placement only in transpose |
+| 4 | `x²` | duplication, CSE, all 4 second-order modes (FoF/FoR/RoF/RoR) |
+| 5 | `exp(a*x)` | chain rule, external refs, repeated merge, all 4 modes |
+| 6 | `x*y` mixed partial | order symmetry: d²f/dxdy = d²f/dydx |
+| 7 | `exp(a*x)` 3rd order | repeated higher-order closure |
+
+Expected second-order results for `x²` (all seeds = 1):
+
+| Mode | Output |
+|------|--------|
+| FoF | 2 |
+| FoR | 2 |
+| RoF | 2 |
+| RoR | 2 |
+
+Expected second-order results for `exp(a*x)` (all seeds = 1):
+
+| Mode | Output |
+|------|--------|
+| FoF | a² exp(ax) |
+| FoR | a² exp(ax) |
+| RoF | a² exp(ax) |
+| RoR | a² exp(ax) |
+
+---
+
+## IX. Roadmap
 
 ### Phase 1: Scalar graph AD
 
