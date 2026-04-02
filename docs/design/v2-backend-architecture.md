@@ -18,8 +18,9 @@ Graph (primal and/or AD-transformed)
   ▼
 TenferroIR (flat SSA, common to all algebras)
   │
-  ├─ Standard ──→ StableHLO ──→ faer/LAPACK (default)
-  │                         └──→ XLA         (optional, GPU)
+  ├─ Standard ──→ StableHLO ──┬→ (1) faer/BLAS engine  (CPU, default)
+  │                            ├→ (2) Custom GPU engine (GPU, op-by-op, dynamic shapes)
+  │                            └→ (3) XLA              (GPU/TPU, JIT, static shapes)
   │
   └─ Custom ────→ Custom backend (Semiring Core only)
                    ├── CPU: custom kernels
@@ -32,18 +33,42 @@ without graph transformations. Even eager execution (`apply_op`-equivalent)
 is internally a single-node graph compiled and evaluated through this
 pipeline.
 
-### Backend matrix
+### Three Standard backends (all accept StableHLO)
+
+```
+TenferroIR → StableHLO
+                │
+                ├── (1) faer/BLAS engine (CPU, default)
+                ├── (2) Custom GPU engine (GPU, op-by-op)
+                └── (3) XLA (GPU/TPU, JIT compiled)
+```
+
+| | (1) faer/CPU | (2) Custom GPU | (3) XLA |
+|---|---|---|---|
+| Execution | op-by-op interpret | op-by-op interpret | JIT compile |
+| Dynamic shapes | ✅ | ✅ | ❌ recompile |
+| Kernel fusion | none | none | yes |
+| Tensor networks | ✅ | **✅ primary target** | △ padding needed |
+| Large static shapes | slower | fast | fastest |
+| Dependencies | faer (Rust) | CUDA kernels (Rust) | xla-rs (~200MB) |
+
+**(2) Custom GPU** is the key backend for tensor network computations where
+bond dimensions change dynamically. It interprets StableHLO op-by-op,
+dispatching to custom CUDA kernels (reused from tenferro-rs v1). No JIT
+compilation → no recompile on shape change. Individual ops (matmul, SVD)
+are large enough that fusion is not critical.
+
+**(3) XLA** is for workloads with stable shapes (ML training loops, fixed
+batch size) where kernel fusion provides significant speedup.
+
+### Custom algebra backend (separate, not StableHLO)
 
 | Algebra | CPU | GPU |
 |---------|-----|-----|
-| Standard | StableHLO → faer/LAPACK (default) | StableHLO → XLA (optional, Phase 3) |
 | Tropical | Custom backend → custom kernels | Custom backend → optimized CUDA kernels |
 
-Standard GPU: current unoptimized CUDA kernels are deprecated. GPU support
-returns via StableHLO → XLA in Phase 3.
-
-Tropical GPU: hand-optimized CUDA kernels are retained as-is. They bypass
-StableHLO (Tier 1 only, custom backend).
+Tropical and other custom algebras bypass StableHLO entirely. They use
+TenferroIR (Tier 1 only) dispatched directly to custom kernels.
 
 ---
 
@@ -505,19 +530,23 @@ Type erasure at the user API level. Internally dispatches to typed tensors.
 - DefaultBackend for all new ops (CPU)
 - **Milestone**: full AD for linalg works (JVP + auto-transpose VJP)
 
-### Phase 3: XLA backend
+### Phase 3: StableHLO backends
 
 - `tenferro2-stablehlo`: primitive → StableHLO 1:1 lowering
-- `tenferro2-xla-backend`: XLA via xla-rs + elixir-nx/xla prebuilt binaries
-- JIT cache (program hash + shapes → compiled executable)
-- **Milestone**: Standard GPU execution via XLA, replacing deprecated CUDA kernels
+- `tenferro2-stablehlo-cpu`: (1) faer/BLAS StableHLO interpreter (default CPU)
+- `tenferro2-stablehlo-gpu`: (2) Custom GPU StableHLO interpreter
+  - Reuse CUDA kernels from tenferro-rs v1
+  - Op-by-op execution, no fusion, dynamic shapes ✅
+  - **Milestone**: tensor network on GPU with dynamic bond dimensions
+- `tenferro2-xla-backend`: (3) XLA via xla-rs (optional, ~200MB)
+  - JIT compile, kernel fusion, static shapes
+  - **Milestone**: ML-style workloads on GPU with fusion
 
 ### Phase 4: Optimization + IREE
 
-- Operator fusion (XLA compiler handles this)
-- Memory optimization
-- IREE migration: swap XLA backend for IREE (same StableHLO input)
-- Tropical GPU: retain hand-optimized CUDA kernels (not via XLA/IREE)
+- Memory optimization in custom GPU engine
+- IREE as future alternative to XLA (same StableHLO input)
+- Tropical GPU: retain hand-optimized CUDA kernels (not via StableHLO)
 
 ---
 
