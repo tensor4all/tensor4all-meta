@@ -187,7 +187,33 @@ tenferro v1 has ~134 ops. v2 reorganizes into Tier 1 + Tier 2:
 
 ---
 
-## III. StableHLO Lowering
+## III. StableHLO Format and Tooling
+
+### Serialization format
+
+StableHLO uses **MLIR bytecode** as its portable format. 5-month forward/backward
+compatibility guarantee. Also available as MLIR textual assembly (`.mlir`).
+
+### Consuming StableHLO
+
+| Approach | Dependencies | Notes |
+|----------|-------------|-------|
+| Full MLIR + StableHLO C API | LLVM/MLIR + StableHLO libs | Official. Heavy build (~75k LOC C++) |
+| `melior` crate (Rust MLIR bindings) | LLVM/MLIR | Extend with StableHLO C API via FFI |
+| Text `.mlir` output → xla-rs | xla-rs only | Let XLA parse. Simplest for backend (3) |
+| Own Rust IR (no MLIR) | None | Map ~100 ops directly. Lightest. |
+
+**Our approach**: TenferroIR is our own Rust IR. For backends (1) and (2),
+we interpret TenferroIR directly — no MLIR needed. For backend (3) XLA,
+we emit `.mlir` text or use xla-rs builder API. Full MLIR dependency is
+avoided.
+
+StableHLO's reference interpreter (~8.7k LOC) is a useful reference for
+implementing our faer backend.
+
+---
+
+## IV. StableHLO Lowering
 
 ### Principle: 1:1 mapping
 
@@ -230,7 +256,7 @@ computation is fully compilable even though the primal is a custom_call.
 
 ---
 
-## IV. Backend Dispatch
+## V. Backend Dispatch
 
 ### Architecture: two-level compilation
 
@@ -339,6 +365,72 @@ see only logical operations. This is a clean separation of concerns.
 intermediates may be non-contiguous (e.g., faer may defer transpose via
 strides), but this is invisible to the caller.
 
+### Device management
+
+TenferroIR and CompiledProgram are **device-agnostic** — they contain no
+device or memory space information. Device placement is a runtime concern.
+
+**Phase 1: all inputs must be on the same device.**
+
+The backend asserts this at `eval` time (not compile time, since
+CompiledProgram has no device info):
+
+```rust
+fn eval(&self, prog: &CompiledProgram, inputs: &[Tensor]) -> Vec<Tensor> {
+    let device = inputs[0].device();
+    for input in inputs {
+        assert_eq!(input.device(), device, "all inputs must be on same device");
+    }
+    // execute all ops on `device`
+}
+```
+
+**Cross-device execution** requires splitting into multiple programs:
+
+```rust
+let result_gpu = gpu_backend.eval(&prog1, &[a_gpu, b_gpu]);
+let result_cpu = result_gpu.to_cpu();                          // explicit transfer
+let result2 = cpu_backend.eval(&prog2, &[result_cpu, c_cpu]);
+```
+
+**Phase 2 (future): Transfer op in TenferroIR.**
+
+TenferroIR may include `Transfer(tensor, target_device)` as a primitive op.
+When lowering to StableHLO, Transfer ops split the program into chunks:
+
+```
+TenferroIR:  [op0, op1, Transfer(GPU→CPU), op2, op3, Transfer(CPU→GPU), op4]
+
+StableHLO lowering:
+  chunk 1: [op0, op1]     → GPU backend
+  transfer: GPU → CPU
+  chunk 2: [op2, op3]     → CPU backend
+  transfer: CPU → GPU
+  chunk 3: [op4]          → GPU backend
+```
+
+Transfer is NOT a StableHLO op — it exists only in TenferroIR.
+tenferro2 handles the insertion (manual or automatic device placement)
+and the splitting during StableHLO lowering.
+
+tidu2 never knows about devices. It is purely symbolic.
+
+### Backends live inside tenferro2
+
+All backends use tenferro2's device management infrastructure (memory
+allocation, CPU↔GPU transfer, kernel dispatch). They cannot be
+separated into standalone crates without duplicating device management:
+
+```
+tenferro2/
+  ├── tensor/          Tensor<T>, device management, memory spaces
+  ├── prims/           PrimitiveOp implementations
+  ├── stablehlo/       TenferroIR → StableHLO lowering + chunk splitting
+  ├── backend_cpu/     (1) faer engine (uses tenferro Tensor directly)
+  ├── backend_gpu/     (2) Custom GPU engine (uses tenferro GpuTensor)
+  └── backend_xla/     (3) XLA engine (optional feature flag)
+```
+
 ### Custom backend (Tropical / custom algebra)
 
 Executes TenferroIR (Tier 1 ops only) directly:
@@ -364,7 +456,7 @@ fn eval<Op: PrimitiveOp>(prog: &CompiledProgram<Op>, inputs: &[Op::Operand]) -> 
 
 ---
 
-## V. GPU Backend: XLA first, IREE later
+## VI. GPU Backend: XLA first, IREE later
 
 ### Strategy: XLA → IREE migration
 
@@ -490,7 +582,7 @@ IREE is officially replacing XLA's runtime (OpenXLA project). When mature:
 
 ---
 
-## VI. Tensor Types and Operand
+## VII. Tensor Types and Operand
 
 ### Tensor<T> enum
 
@@ -533,7 +625,7 @@ Type erasure at the user API level. Internally dispatches to typed tensors.
 
 ---
 
-## VII. Roadmap
+## VIII. Roadmap
 
 ### Phase 1: Minimal vertical slice
 
