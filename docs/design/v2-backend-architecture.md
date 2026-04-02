@@ -449,6 +449,27 @@ let xla_exec = xla_cache.get_or_compile(&prog, input_shapes);
 xla_exec.execute(input_buffers); // cheap
 ```
 
+### XLA limitations
+
+XLA requires **fully static shapes** at compile time. Known issues:
+
+- **Recompilation on shape change**: every new shape combination triggers
+  a full re-trace + re-compile (seconds to minutes). Cache grows with the
+  number of distinct shapes.
+- **Dynamic shapes are experimental**: StableHLO supports bounded dynamic
+  dimensions (`tensor<? x f64>`), but XLA resolves them to static shapes
+  before compilation. Truly symbolic compilation (like PyTorch's SymPy
+  approach) is not planned for XLA.
+- **Tensor networks**: DMRG, TCI, adaptive rank methods change bond
+  dimensions at each iteration → recompilation per step → impractical.
+- **Workarounds** (all with tradeoffs):
+  - Padding to max size (wastes compute and memory)
+  - Shape bucketing (compile a few canonical shapes)
+  - Drop to eager mode (lose XLA optimization)
+
+This is why Custom GPU engine (2) exists: op-by-op execution with no
+compilation step handles dynamic shapes natively, at the cost of no fusion.
+
 ### Future: IREE migration
 
 IREE is officially replacing XLA's runtime (OpenXLA project). When mature:
