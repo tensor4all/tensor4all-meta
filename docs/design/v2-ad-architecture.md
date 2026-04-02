@@ -11,16 +11,18 @@
 Build a differentiable programming stack in Rust where:
 
 - **`differentiate` is the only derivative operation.** It takes a graph and
-  produces a NEW independent linear graph representing the JVP. Applying it
-  n times gives the n-th derivative. All derivative information comes from
-  this single operation.
-- **`transpose` is not differentiation — it is an evaluation strategy.** It
-  flips a linear graph to reverse the data flow direction (JVP → VJP). It is
-  always optional, always at the end, and does not add derivative information.
-- **Graphs are independent until merge.** `differentiate` and `transpose`
-  produce new graphs. Graphs reference values from other graphs by name
-  (content-addressable ID). Only at evaluation time are graphs **merged**,
-  unifying same-named nodes (automatic CSE).
+  produces a NEW linear graph fragment with external references to primal
+  values. Applying it n times (with `merge` in between) gives the n-th
+  derivative. All derivative information comes from this single operation.
+- **`transpose` is not differentiation — it is a graph transformation that
+  reverses tangent data flow** (JVP → VJP). It does not add derivative
+  information. It can be applied to all or part of a linear graph
+  (partial transpose enables cross-country evaluation).
+- **Graph fragments have external references.** `differentiate` and
+  `transpose` produce new graph fragments that reference primal values by
+  content-addressable ID. `merge` resolves these references and unifies
+  same-named nodes (automatic CSE). `merge` must precede the next
+  `differentiate` to enable higher-order tracing.
 - **Evaluation is always forward** (upstream to downstream), after merge.
 - The merged graph can be **compiled to CPU execution or lowered to StableHLO**
   for GPU/TPU.
@@ -125,34 +127,37 @@ not in the graph structure.
 `ValId` is determined by `(op_id, output_slot)`.
 
 Adding the same op with the same inputs returns the existing node.
-**This identity is used across graphs**: when two independent graphs contain
+**This identity is used across graph fragments**: when two fragments contain
 the same `(op_kind, input_val_ids...)`, `merge` unifies them into a single
-node. This is how CSE works across primal, tangent, and cotangent graphs.
+node. This is how CSE works across primal, tangent, and cotangent fragments.
 
-### Graphs are independent until merge
+### Graph fragments with external references
 
-Each graph is self-contained. `differentiate` and `transpose` produce NEW
-graphs that reference values from other graphs by content-addressable ID
-(dangling references). These references are resolved at `merge` time.
+`differentiate` and `transpose` produce NEW graph fragments that reference
+values from other fragments by content-addressable ID (external references).
+These references are resolved at `merge` time. A fragment is NOT
+self-contained — it depends on external values.
 
 ```
 G_primal:     v0=Input(x), v1=Input(a), v2=Mul(v0,v1), v3=Exp(v2)
-G_linear:     v4=Input(dx), v5=Mul(v1,v4), v6=Mul(v3,v5)
+G_linear:     v4=Input(dx), v5=Scale(v1,v4), v6=Scale(v3,v5)
                                      ^^          ^^
-                            references v1, v3 from G_primal (by name)
+                                  ^^           ^^
+                            external references to v1, v3 from G_primal
 
-merge(G_primal, G_linear) → unified graph with shared v1, v3
+merge(G_primal, G_linear) → unified graph, external refs resolved
 ```
 
 ---
 
 ## III. Differentiation
 
-### `differentiate`: graph → NEW linear graph
+### `differentiate`: graph → NEW linear graph fragment
 
-Takes a primal graph and produces a NEW independent graph representing the
-linearized computation (JVP). The new graph references primal values by
-content-addressable ID.
+Takes a (merged) graph and produces a NEW linear graph fragment representing
+the JVP. The fragment contains external references to primal values by
+content-addressable ID. These must be resolved via `merge` before the next
+`differentiate`.
 
 ```rust
 fn differentiate(
@@ -268,18 +273,32 @@ explicitly marks which operand is the coefficient (∂f/∂a, from primal)
 and which is the tangent (da, linear variable). This is required for
 `transpose` to know what to flip.
 
-### Higher-order AD = repeat `differentiate`
+### Higher-order AD = repeat `differentiate` with `merge`
 
-n-th derivative = apply `differentiate` n times to produce n independent
-linear graphs. `transpose` is optional (evaluation choice), applied to the
-final linear graph.
+n-th derivative = apply `differentiate` n times, with `merge` after each
+to resolve external references before the next can trace through primal
+dependencies. `transpose` is optional (evaluation choice).
 
 ```
-1st derivative:   differentiate(G_primal) → G_linear
-2nd derivative:   differentiate(G_linear) → G_linear2
-gradient:         transpose(G_linear) → G_transposed
-Hessian-gradient: differentiate(G_transposed) → G_linear2, then transpose
+1st derivative:
+  G_lin1 = differentiate(G_primal)
+  G1     = merge(G_primal, G_lin1)          ← resolve external refs
+
+2nd derivative:
+  G_lin2 = differentiate(G1, output=tangent_output, wrt=x)
+  G2     = merge(G1, G_lin2)                ← resolve again
+
+gradient:
+  G_trans = transpose(G_lin1)               ← flip tangent I/O
+  G_grad  = merge(G_primal, G_trans)
+
+Hessian-gradient:
+  G_lin_of_grad = differentiate(G_grad, output=ct_x, wrt=x)
+  G_hess = merge(G_grad, G_lin_of_grad)
 ```
+
+Without `merge` between differentiations, external references remain
+dangling and the second `differentiate` cannot trace through primal nodes.
 
 ### Concrete example: `f(x) = exp(a * x)`
 
@@ -327,16 +346,16 @@ v9 = Scale(v1, v8)       // reverse of v5: coeff=v1, tangent=v8
                           // v9 = ct_dx
 ```
 
-**Step 5 — merge(previous, G_transposed) → final graph:**
+**Step 5 — merge(G_merged, G_transposed) → final graph:**
 
 ```
 v0 = Input(x)
-v1 = Input(a)        ← shared
+v1 = Input(a)         ← shared across primal + transpose
 v2 = Mul(v0, v1)
-v3 = Exp(v2)          ← shared: computed once, used by v6, v8
+v3 = Exp(v2)          ← shared: computed once, used by v5, v6, v8
 v7 = Input(ct_y)
-v8 = Scale(v3, v7)
-v9 = Scale(v1, v8)   = ct_x
+v8 = Scale(v3, v7)    ← linear primitive (coeff=v3, tangent=ct_y)
+v9 = Scale(v1, v8)    = ct_x
 ```
 
 **Step 5 — compile → CompiledProgram → eval:**
@@ -387,7 +406,9 @@ trait Operand: Clone + Send + Sync + 'static {
 ```
 
 This 1:1 alignment means `CompiledProgram` can be lowered to StableHLO
-trivially — each instruction maps directly to a StableHLO op.
+straightforwardly for the core subset (elementwise, dot_general,
+reductions). Linalg ops use `custom_call`. Complex transcendentals
+and control flow require decomposition.
 
 Why these operations are needed:
 
@@ -543,7 +564,8 @@ producing a flat instruction sequence. Compile once, eval many times.
 | Tier 1 + 2 | StableHLO → IREE/XLA | Standard float/complex on GPU/TPU |
 
 tidu2 is backend-agnostic. It produces `CompiledProgram<Op>`. StableHLO
-lowering is trivial because Operand ops are 1:1 with StableHLO ops.
+lowering is conceptually straightforward for the core op subset
+(elementwise, dot_general, reductions map 1:1 to StableHLO).
 
 ---
 
@@ -730,7 +752,7 @@ automatic via `to_leaves` / `from_leaves`.
 
 ### Phase 3: Backend compilation
 
-- StableHLO lowering of `CompiledProgram<TensorOp>` (trivial: 1:1 op mapping)
+- StableHLO lowering of `CompiledProgram<TensorOp>` (1:1 for core ops)
 - IREE/XLA integration for GPU/TPU execution
 - Custom algebra backend for Tier 1 programs
 
