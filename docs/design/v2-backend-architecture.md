@@ -59,7 +59,7 @@ backends (tropical, p-adic, polynomial rings).
 | `Add` | 2 | `stablehlo.add` |
 | `Mul` | 2 | `stablehlo.multiply` |
 | `Neg` | 1 | `stablehlo.negate` |
-| `Scale(c)` | 1 | `stablehlo.multiply` (with broadcast constant) |
+| `Dup` | 1 (→ 2 outputs) | `stablehlo.broadcast_in_dim` (duplicate) |
 | `Conj` | 1 | `stablehlo.complex` (swap imag sign) |
 | `Einsum` / `DotGeneral` | 2 | `stablehlo.dot_general` |
 | `ReduceAdd` | 1 | `stablehlo.reduce` (sum) |

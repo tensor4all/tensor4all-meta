@@ -175,77 +175,75 @@ not depending on `wrt`.
 ### `transpose`: flip a linear graph
 
 Takes a linear graph and produces a NEW graph with **tangent I/O reversed**.
-Coefficients (primal values) stay the same; only the tangent data flow
-direction flips.
+Fixed operands stay the same; only the active (tangent) data flow direction
+flips.
 
-#### Linear primitives
+#### Active mask (no dedicated linear primitives)
 
-The linear graph produced by `differentiate` uses dedicated linear
-primitives that explicitly distinguish **coefficient** (fixed, from primal)
-from **tangent** (linear variable):
-
-```
-Scale(coeff, tangent)   — multiply tangent by coefficient
-AddLin(tangent_a, tangent_b)  — sum two tangent values
-Dup(tangent)            — duplicate tangent (1 → 2 outputs)
-Conj(val)               — complex conjugate
-```
-
-`Scale` (not generic `Mul`) makes the role of each operand explicit.
-This is essential for transpose: the coefficient stays, the tangent flips.
-
-**Important**: at higher order, the coefficient of `Scale(coeff, tangent)`
-is NOT necessarily a "primal" value. It can be:
-- a primal value (1st order)
-- an earlier tangent value (2nd order FoF)
-- a cotangent-side residual (RoR)
-
-The correct interpretation: **in the current transform, `coeff` is the
-operand treated as fixed, `tangent` is the active linear variable.**
-
-#### Transpose rules
-
-**Real case:**
+The linear graph uses **the same ops** as the primal graph (`Mul`, `Add`,
+`Exp`, etc.). Each node in the linear graph carries an **active mask** —
+a boolean per input indicating which operands are active (tangent) and
+which are fixed (coefficient):
 
 ```
-Scale(c, ·)   ↔  Scale(c, ·)      (self-adjoint)
-AddLin(·, ·)  ↔  Dup(·)           (sum ↔ broadcast)
-Dup(·)        ↔  AddLin(·, ·)     (broadcast ↔ sum)
+Mul(a, b) + mask=[fixed, active]   — b is the tangent variable
+Add(a, b) + mask=[active, active]  — both are tangent variables
+Exp(a)    + mask=[active]          — a is the tangent variable
 ```
 
-**Complex case** (Hermitian adjoint — conjugate the coefficient):
+No `Scale` or `AddLin` needed. The mask is determined during `differentiate`:
+`Some(tangent)` → active, `None` → fixed.
+
+At higher order, a "fixed" operand is NOT necessarily a primal value. It can
+be an earlier tangent or a cotangent-side residual. The mask is recomputed
+at each `differentiate` call. What matters: **in this transform, which
+operands are treated as fixed, and which are the active linear variables.**
+
+#### Transpose rules with mask
+
+Transpose reads the mask to know what to flip:
 
 ```
-Scale(c, ·)   ↔  Scale(Conj(c), ·)
-AddLin(·, ·)  ↔  Dup(·)
-Dup(·)        ↔  AddLin(·, ·)
+Op(a, b) mask=[fixed, active]:
+  real:    transpose → Op(a, ct)           (fixed operand stays)
+  complex: transpose → Op(Conj(a), ct)     (conjugate the fixed operand)
+
+Add(a, b) mask=[active, active]:
+  transpose → Dup(ct) → two outputs        (sum ↔ broadcast)
+
+Dup(a) (1 input → 2 outputs):
+  transpose → Add(ct_1, ct_2)              (broadcast ↔ sum)
 ```
+
+Only `Dup` and `Conj` are added to the primitive set. All other ops are
+reused from the primal set.
 
 #### Tangent I/O reversal
 
-Transpose swaps tangent inputs and outputs. Coefficients are unchanged.
+Transpose swaps active inputs and outputs. Fixed operands are unchanged.
 
 ```
-Forward linear graph:
-  v4 = Input(dx)               ← tangent INPUT
-  v5 = Scale(v1, v4)           ← v1 = a (coefficient, fixed)
-  v6 = Scale(v3, v5)           ← v3 = exp(a*x) (coefficient, fixed)
-                                  v6 = tangent OUTPUT
+Forward linear graph (from differentiate):
+  v4 = Input(dx)                           ← tangent INPUT
+  v5 = Mul(v1, v4)  mask=[fixed, active]   ← v1 = a (fixed)
+  v6 = Mul(v3, v5)  mask=[fixed, active]   ← v3 = exp(a*x) (fixed)
+                                              v6 = tangent OUTPUT
 
 Transposed graph (reversed, new variable names):
-  v7 = Input(ct_dy)            ← was OUTPUT, now INPUT
-  v8 = Scale(Conj(v3), v7)     ← reverse order, same coefficients
-  v9 = Scale(Conj(v1), v8)     ← was INPUT, now OUTPUT (= ct_dx)
+  v7 = Input(ct_dy)                        ← was OUTPUT, now INPUT
+  v8 = Mul(v3, v7)  mask=[fixed, active]   ← reverse order
+  v9 = Mul(v1, v8)  mask=[fixed, active]   ← was INPUT, now OUTPUT
+                                              (complex: Conj(v3), Conj(v1))
 ```
 
-**Only tangent I/O flips. Coefficients (v1, v3) remain as external
-references to the primal graph.**
+**Only tangent I/O flips. Fixed operands (v1, v3) remain as external
+references.**
 
 #### Cotangent accumulation
 
 Local transpose rules alone are NOT sufficient. When multiple reverse
 contributions land on the **same tangent node**, they must be combined
-with `AddLin`. Example: `f(x) = x + x` produces `AddLin(dx, dx)` where
+with `Add`. Example: `f(x) = x + x` produces `Add(dx, dx)` where
 both inputs are the same tangent. Transpose gives `Dup(ct_y)` → two
 cotangent contributions to `dx`, which must be accumulated.
 
@@ -255,18 +253,15 @@ Algorithm:
 transpose(linear_fragment):
   1. seed cotangent on linear outputs
   2. traverse linear ops in reverse topological order
-  3. emit reverse contributions by local transpose rule
+  3. read active mask; emit reverse contributions by local transpose rule
   4. bucket contributions by original tangent-node identity
-  5. combine each bucket with AddLin
+  5. combine each bucket with Add
 ```
 
 `differentiate` is identical for real and complex — no conjugation.
 `transpose` is the only operation that differs for complex: it wraps
-coefficients in `Conj`.
-
-The transposed graph references the same primal values as the original
-linear graph (with `Conj` wrappers for complex). With the linear primitive
-set (`Scale`, `AddLin`, `Dup`, `Conj`), all transposes are expressible.
+fixed operands in `Conj`. Only `Dup` and `Conj` are needed as additional
+primitives.
 
 ### `merge`: unify graphs before evaluation
 
@@ -287,19 +282,18 @@ merge(G_primal, G_transposed):
 ### Linearization of binary ops
 
 Most ops have at most 2 inputs. For `y = f(a, b)`, the linearization is
-`dy = ∂f/∂a · da + ∂f/∂b · db`, expressed using linear primitives:
+`dy = ∂f/∂a · da + ∂f/∂b · db`, using the same ops with active masks:
 
-| da | db | dy (using Scale + AddLin) |
-|----|----|----|
-| 0 | 0 | 0 (skip) |
-| da | 0 | `Scale(∂f/∂a, da)` |
-| 0 | db | `Scale(∂f/∂b, db)` |
-| da | db | `AddLin(Scale(∂f/∂a, da), Scale(∂f/∂b, db))` |
+| da | db | linearized node | mask |
+|----|----|----|---|
+| 0 | 0 | skip (zero propagation) | — |
+| da | 0 | `Mul(∂f/∂a, da)` | `[fixed, active]` |
+| 0 | db | `Mul(∂f/∂b, db)` | `[fixed, active]` |
+| da | db | `Add(Mul(∂f/∂a, da), Mul(∂f/∂b, db))` | Add: `[active, active]` |
 
-Zero propagation (case 1) avoids creating unnecessary nodes. `Scale`
-explicitly marks which operand is the coefficient (∂f/∂a, from primal)
-and which is the tangent (da, linear variable). This is required for
-`transpose` to know what to flip.
+The active mask is metadata on each linear graph node, determined by
+which tangent inputs are non-zero. `transpose` reads the mask to know
+which operands to flip and which to keep fixed.
 
 ### Higher-order AD = repeat `differentiate` with `merge`
 
@@ -341,12 +335,12 @@ v3 = Exp(v2)         // y = exp(a*x)
 
 **Step 2 — differentiate(G_primal) → G_linear (new graph fragment):**
 
-Uses `Scale(coeff, tangent)` to distinguish coefficient from tangent:
+Same ops as primal, with active masks:
 
 ```
 v4 = Input(t_x)
-v5 = Scale(v1, v4)       // a * t_x         (v1 = a, external ref)
-v6 = Scale(v3, v5)       // exp(a*x) * a*t_x (v3 = exp(a*x), external ref)
+v5 = Mul(v1, v4)  mask=[fixed, active]   // a * t_x   (v1 = a, external ref)
+v6 = Mul(v3, v5)  mask=[fixed, active]   // exp(a*x) * a*t_x  (v3, external ref)
 ```
 
 **Step 3 — merge(G_primal, G_linear) → resolve external refs:**
@@ -359,19 +353,18 @@ v1 = Input(a)
 v2 = Mul(v0, v1)
 v3 = Exp(v2)          ← v5, v6 can now trace through v3 to x
 v4 = Input(t_x)
-v5 = Scale(v1, v4)
-v6 = Scale(v3, v5)
+v5 = Mul(v1, v4)  mask=[fixed, active]
+v6 = Mul(v3, v5)  mask=[fixed, active]
 ```
 
 **Step 4 — transpose(linear part of merged graph) → G_transposed:**
 
-Tangent I/O flips. Coefficients stay. Reverse order.
+Tangent I/O flips. Fixed operands stay. Reverse order.
 
 ```
 v7 = Input(ct_y)
-v8 = Scale(v3, v7)       // reverse of v6: coeff=v3, tangent=ct_y
-v9 = Scale(v1, v8)       // reverse of v5: coeff=v1, tangent=v8
-                          // v9 = ct_dx
+v8 = Mul(v3, v7)  mask=[fixed, active]   // reverse of v6
+v9 = Mul(v1, v8)  mask=[fixed, active]   // reverse of v5, v9 = ct_dx
 ```
 
 **Step 5 — merge(G_merged, G_transposed) → final graph:**
@@ -382,8 +375,8 @@ v1 = Input(a)         ← shared across primal + transpose
 v2 = Mul(v0, v1)
 v3 = Exp(v2)          ← shared: computed once, used by v5, v6, v8
 v7 = Input(ct_y)
-v8 = Scale(v3, v7)    ← linear primitive (coeff=v3, tangent=ct_y)
-v9 = Scale(v1, v8)    = ct_x
+v8 = Mul(v3, v7)  mask=[fixed, active]
+v9 = Mul(v1, v8)  mask=[fixed, active]   = ct_x
 ```
 
 **Step 5 — compile → CompiledProgram → eval:**
@@ -500,17 +493,20 @@ Linearize rules are standalone functions; the trait impl is a `match` dispatch.
 ### Design principle
 
 A primitive's `linearize` must be **linear in the tangent inputs**. It may:
-- Reference primal output vals as coefficients (e.g., `Exp` references `exp(x)`)
-- Emit other primitives (e.g., `Exp` emits `Mul`)
+- Reference primal output vals as fixed operands (e.g., `Exp` references `exp(x)`)
+- Emit the same primal ops with active masks (e.g., `Exp` emits `Mul` with mask)
 - NOT apply nonlinear ops to tangent inputs
+
+Nodes emitted by `linearize` carry an **active mask** indicating which
+inputs are tangent (active) and which are fixed. `transpose` reads this mask.
 
 ### Two tiers (defined in tenferro2)
 
 **Tier 1 — Semiring Core**: sufficient for einsum-based computation. Compatible
 with custom algebraic backends (tropical, p-adic, polynomial rings, etc.).
 
-- Elementwise: `Add`, `Mul`, `Scale`, `Neg`, `Conj`
-- Tensor: `Einsum`, `Transpose`, `Reshape`, `BroadcastInDim`, `Dup`
+- Elementwise: `Add`, `Mul`, `Neg`, `Conj`, `Dup`
+- Tensor: `Einsum`, `Transpose`, `Reshape`, `BroadcastInDim`
 - Reduction: `Sum`, `Prod`
 
 **Tier 2 — Standard = Core + JAX prims**: full JAX-compatible set.
