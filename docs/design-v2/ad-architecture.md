@@ -720,7 +720,10 @@ trait and never references specific primitives. `eval`, `n_inputs`,
 `n_outputs`, and `type Operand` belong to `GraphOp` (defined in computegraph).
 
 ```rust
-pub trait PrimitiveOp: GraphOp {
+pub trait PrimitiveOp: GraphOp
+where
+    Self::InputKey: ADKey,
+{
     fn linearize(
         &self,
         builder: &mut FragmentBuilder<Self>,

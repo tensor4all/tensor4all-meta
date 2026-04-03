@@ -89,7 +89,7 @@ use. `tidu-rs` uses this trait to generate tangent input keys during
 ```rust
 pub type DiffPassId = u64;
 
-pub trait ADKey: Clone + Hash + Eq + Send + Sync + 'static {
+pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
     /// Create a tangent input key derived from this key.
     /// `pass` is a unique identifier for the `differentiate` call.
     fn tangent_of(&self, pass: DiffPassId) -> Self;

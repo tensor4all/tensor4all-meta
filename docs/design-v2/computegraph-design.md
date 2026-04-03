@@ -58,10 +58,10 @@ reason about tensor structure without depending on concrete primitive types.
 primitives.
 
 ```rust
-trait GraphOp: Clone + Hash + Eq + Send + Sync + 'static {
+trait GraphOp: Clone + Debug + Hash + Eq + Send + Sync + 'static {
     type Operand: Operand;
     type Context;
-    type InputKey: Clone + Hash + Eq + Send + Sync + 'static;
+    type InputKey: Clone + Debug + Hash + Eq + Send + Sync + 'static;
 
     fn n_inputs(&self) -> usize;
     fn n_outputs(&self) -> usize;
