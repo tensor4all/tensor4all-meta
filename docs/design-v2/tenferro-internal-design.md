@@ -282,58 +282,146 @@ eval`.
 
 ## VIII. Backend Architecture
 
+### Design principle: Backend trait separate from GraphOp::eval
+
+`GraphOp::eval` is a built-in reference implementation (CPU, single-threaded).
+It is useful for testing and simple execution, but it is **not** the primary
+execution path for production backends.
+
+`CompiledProgram<Op>` is pure data — an instruction sequence with slot
+assignments. Any backend can interpret it independently of `GraphOp::eval`,
+using its own tensor type and execution strategy.
+
+### Backend trait
+
+```rust
+trait Backend<Op> {
+    type Tensor;
+
+    fn eval_program(
+        &mut self,
+        prog: &CompiledProgram<Op>,
+        inputs: &[Self::Tensor],
+    ) -> Vec<Self::Tensor>;
+}
+```
+
+`Backend::Tensor` is intentionally decoupled from `GraphOp::Operand`. A GPU
+backend can use `GpuTensor<T>` even though `GraphOp::Operand = T` (a CPU
+type). The backend is responsible for mapping each `Op` to its own kernels.
+
 ### Standard algebra backends
 
 ```text
 CompiledProgram<StdTensorOp>
     |
-    |── CPU (default): GraphOp::eval with CpuContext (faer/BLAS)
-    |
-    |── XLA (optional): StableHLO lowering → XLA JIT compile → execute
-    |                    (bypasses GraphOp::eval)
-    |
-    └── Custom GPU: StableHLO lowering → op-by-op CUDA dispatch
-                    (bypasses GraphOp::eval)
+    ├── CpuBackend         Tensor = DynTensor       faer/BLAS
+    ├── XlaBackend         Tensor = XlaBuffer        StableHLO → JIT
+    └── CustomGpuBackend   Tensor = GpuDynTensor     StableHLO → CUDA dispatch
 ```
 
-The CPU backend uses `GraphOp::eval` directly. XLA and GPU backends lower
-`CompiledProgram<StdTensorOp>` to StableHLO first, then use their own
-execution paths. `GraphOp::Context = CpuContext` is the default; StableHLO
-backends have their own execution pipeline.
+```rust
+struct CpuBackend { ctx: CpuContext }
+impl Backend<StdTensorOp> for CpuBackend {
+    type Tensor = DynTensor;
+    fn eval_program(&mut self, prog, inputs) {
+        // Iterate instructions, dispatch to faer/BLAS
+    }
+}
+
+struct XlaBackend { client: XlaClient }
+impl Backend<StdTensorOp> for XlaBackend {
+    type Tensor = XlaBuffer;
+    fn eval_program(&mut self, prog, inputs) {
+        // Lower prog to StableHLO → XLA compile → execute
+    }
+}
+```
 
 ### Custom algebra backends
 
+Users define their own backends for custom algebras by implementing
+`Backend<SemiringOp<T>>`:
+
 ```text
-CompiledProgram<SemiringOp<T>>
+CompiledProgram<SemiringOp<TropicalTensor>>
     |
-    |── CPU: GraphOp::eval with SemiringContext<T>
-    |        (delegates to T: Operand methods)
-    |
-    └── GPU: custom kernel dispatch (e.g., v1 CUDA kernels for Tropical)
+    ├── CpuBackend                   Tensor = TropicalTensor
+    ├── TropicalGpuBackend           Tensor = GpuTropicalTensor
+    └── (user-defined backends...)   Tensor = ...
 ```
 
-Custom algebras do not go through StableHLO. The CPU backend evaluates
-`CompiledProgram` instruction-by-instruction using `GraphOp::eval`, which
-delegates to `Operand` trait methods.
+```rust
+// Generic CPU backend — works for any Operand type
+struct CpuSemiringBackend;
+impl<T: Operand> Backend<SemiringOp<T>> for CpuSemiringBackend {
+    type Tensor = T;
+    fn eval_program(&mut self, prog, inputs) {
+        // Iterate instructions, delegate to T::add, T::dot_general, ...
+        // (equivalent to GraphOp::eval, but through Backend trait)
+    }
+}
+
+// User-defined GPU backend for Tropical
+struct TropicalGpuBackend { cuda_ctx: CudaContext }
+impl Backend<SemiringOp<TropicalTensor>> for TropicalGpuBackend {
+    type Tensor = GpuTropicalTensor;
+    fn eval_program(&mut self, prog, inputs) {
+        for inst in &prog.instructions {
+            match &inst.op.kind {
+                SemiringOpKind::DotGeneral(cfg) => self.cuda_gemm(cfg, ...),
+                SemiringOpKind::Add => self.cuda_add(...),
+                SemiringOpKind::ReduceSum { axes } => self.cuda_reduce(axes, ...),
+                SemiringOpKind::Mul => self.cuda_mul(...),
+                SemiringOpKind::Transpose { .. } => ...,
+                SemiringOpKind::Reshape { .. } => ...,
+                SemiringOpKind::BroadcastInDim { .. } => ...,
+            }
+        }
+    }
+}
+```
+
+### GraphOp::eval vs Backend trait
+
+| | `GraphOp::eval` | `Backend<Op>` |
+|---|---|---|
+| Defined in | computegraph-rs | tenferro-rs |
+| Tensor type | fixed (`Op::Operand`) | per-backend (`Backend::Tensor`) |
+| Multiple backends | no (one `Context`) | yes |
+| Purpose | reference impl, tests | production execution |
+| Custom algebra GPU | not possible | user-defined |
+
+`GraphOp::eval` remains useful for:
+- computegraph-rs unit tests (no backend dependency)
+- Quick prototyping and debugging
+- Default CPU fallback
+
+`Backend<Op>` is the primary execution path for production use.
 
 ### Backend dispatch in Engine
 
 ```rust
-struct Engine {
-    backend: BackendKind,
+struct Engine<B: Backend<StdTensorOp>> {
+    backend: B,
     compile_cache: CompileCache,
     einsum_cache: EinsumCache,
 }
-
-enum BackendKind {
-    Cpu(CpuContext),
-    Xla(XlaContext),
-    // Custom algebra uses SemiringContext<T> separately
-}
 ```
 
-For `StdTensorOp`, the `Engine` manages backend selection. For
-`SemiringOp<T>`, the user provides a `SemiringContext<T>` directly.
+For custom algebras, users construct their own evaluation pipeline:
+
+```rust
+let path = optimize_contraction_path(&subscripts, &shapes);
+let fragment = build_einsum_fragment::<TropicalOp>(&mut builder, &path, &inputs);
+let view = resolve(vec![fragment]);
+let graph = materialize_merge(&view, &outputs);
+let prog = compile(&graph);
+
+// Choose backend
+let mut backend = TropicalGpuBackend::new(cuda_ctx);
+let result = backend.eval_program(&prog, &input_tensors);
+```
 
 ---
 
@@ -379,12 +467,24 @@ without `TracedTensor`.
 
 | Goal | What to implement |
 |---|---|
-| New scalar algebra for einsum | `impl Operand for MyTensor` |
-| Custom GPU backend for custom algebra | Custom `SemiringContext<T>` |
+| New scalar algebra for einsum (CPU) | `impl Operand for MyTensor` |
+| Custom GPU backend for custom algebra | `impl Backend<SemiringOp<MyTensor>> for MyGpuBackend` |
+| Custom CPU backend with optimized kernels | `impl Backend<SemiringOp<MyTensor>> for MyOptCpuBackend` |
 | AD for custom algebra | Define own Op enum, impl `PrimitiveOp` (advanced) |
 
-The minimal extension path: implement `Operand`, use `SemiringOp<MyTensor>`,
-and einsum + compile + eval work immediately.
+The minimal extension path (CPU only):
+
+1. `impl Operand for MyTensor` — define semiring operations
+2. Use `SemiringOp<MyTensor>` as the Op type
+3. Use `CpuSemiringBackend` — einsum + compile + eval work immediately
+
+Adding a GPU backend:
+
+1. Define `GpuMyTensor` — GPU-resident tensor type
+2. `impl Backend<SemiringOp<MyTensor>> for MyGpuBackend` — map each
+   `SemiringOpKind` to GPU kernels
+3. Use the same `CompiledProgram<SemiringOp<MyTensor>>` — graph construction
+   and compilation are backend-agnostic
 
 ---
 
