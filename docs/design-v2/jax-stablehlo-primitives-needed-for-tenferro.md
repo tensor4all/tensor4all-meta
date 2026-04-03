@@ -54,7 +54,86 @@ The most relevant source files were:
 
 ---
 
-## III. Current tenferro-rs Inventory
+## III. Phase-1 JAX Primitive List To Implement
+
+This is the current recommended **first-wave primitive list** if the goal is:
+
+- keep tenferro close enough to JAX that `jax.linearize` can be ported with
+  minimal semantic drift
+- support `einsum`, `lu`, `solve`, `qr`, and `svd`
+
+### Primitive layer to expose in tenferro
+
+These are the JAX-like primitive IDs that should exist at tenferro's
+primitive layer.
+
+AD helpers:
+
+- `add_jaxvals_p` / `add_any`
+- `zeros_like_p`
+- `stop_gradient_p`
+
+Tensor primitives:
+
+- arithmetic:
+  `add_p`, `sub_p`, `mul_p`, `div_p`, `neg_p`
+- complex/real helpers:
+  `conj_p`, `real_p`
+- contraction/reduction/shape:
+  `dot_general_p`, `reduce_p`, `broadcast_in_dim_p`, `reshape_p`,
+  `transpose_p`, `squeeze_p`, `pad_p`
+- predicate/select/index helpers:
+  `select_n_p`, `eq_p`, `iota_p`, `sort_p`, `convert_element_type_p`
+
+Structured linalg primitives:
+
+- `lu_p`
+- `triangular_solve_p`
+- `qr_p`
+- `svd_p`
+
+Control-flow / implicit-diff primitive:
+
+- `linear_solve_p` (`custom_linear_solve`)
+
+Important consequence:
+
+- `einsum` stays a composite over tensor primitives
+- `solve` stays a composite over `linear_solve_p`, `lu_p`,
+  `triangular_solve_p`, and tensor primitives
+
+### Infrastructure that must exist around those primitives
+
+These are not primitives, but JAX `linearize` expects this surrounding
+machinery:
+
+- `primitive_jvps`
+- `primitive_transposes`
+- partial-evaluation support for zero tangents / known primals
+
+### Helper kernels that may exist below the primitive layer
+
+These are useful lowering helpers, but they do **not** need to be part of the
+first public tenferro primitive catalog:
+
+- `geqrf_p`
+- `geqp3_p`
+- `householder_product_p`
+- `lu_pivots_to_permutation_p`
+
+### Optional only if tenferro wants pure JAX fallback algorithms
+
+These are not required in the first wave if `lu_p`, `qr_p`, and `svd_p` lower
+directly to backend kernels / custom calls:
+
+- `argmax_p`
+- `gather_p`
+- `scatter_p`
+- `while_p`
+
+---
+
+## IV. Current tenferro-rs Inventory
 
 ### Tensor/view layer
 
@@ -136,7 +215,7 @@ to express that coverage.
 
 ---
 
-## IV. JAX Primitives Needed To Port `linearize`
+## V. JAX Primitives Needed To Port `linearize`
 
 ### Common AD substrate
 
@@ -318,7 +397,7 @@ As with LU and QR, the important design signal is:
 
 ---
 
-## V. StableHLO Ops Needed Below That Layer
+## VI. StableHLO Ops Needed Below That Layer
 
 The StableHLO working set splits into two groups:
 
@@ -439,7 +518,7 @@ So for tenferro the StableHLO implication is:
 
 ---
 
-## VI. Immediate Gap Summary
+## VII. Immediate Gap Summary
 
 ### Already present in current tenferro
 
