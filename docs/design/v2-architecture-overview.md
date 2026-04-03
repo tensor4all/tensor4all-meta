@@ -42,6 +42,8 @@ primitives except tenferro-rs.
 | chainrules-rs | [`v2-chainrules-design.md`](v2-chainrules-design.md) | PrimitiveOp trait (linearize + transpose_rule), closure contract |
 | tidu-rs | [`v2-tidu-design.md`](v2-tidu-design.md) | differentiate, transpose, LinearFragment, pipelines (JVP/VJP/HVP/higher-order) |
 | tenferro-rs | [`v2-backend-architecture.md`](v2-backend-architecture.md) | StableHLO lowering, CPU/GPU backends |
+| tenferro-rs | [`v2-tensor-design.md`](v2-tensor-design.md) | Tensor type, dense-only principle, einsum hyper edges |
+| tenferro-rs | [`v2-tensor-api-pseudocode.md`](v2-tensor-api-pseudocode.md) | TracedTensor API, lazy evaluation, AD examples |
 
 ---
 
@@ -50,7 +52,7 @@ primitives except tenferro-rs.
 | Document | Contents |
 |----------|----------|
 | [`v2-ad-architecture.md`](v2-ad-architecture.md) | Detailed AD theory, examples (scalar + vector), golden tests |
-| [`v2-transpose-rules.md`](v2-transpose-rules.md) | Per-primitive transpose rule table |
+| [`v2-tier1-transpose-rules.md`](v2-tier1-transpose-rules.md) | Per-primitive transpose rule table |
 | [`v2-backend-architecture.md`](v2-backend-architecture.md) | Backend-specific details |
 
 ---
@@ -62,6 +64,12 @@ primitives except tenferro-rs.
 The graph engine knows nothing about differentiation. It is equally usable for
 multi-tensor einsum (graph of binary contractions) or any DAG-structured
 computation.
+
+**Note on `Operand`:** While `Operand` is defined in computegraph-rs, its
+methods are tensor-oriented (`dot_general`, `reshape`, `broadcast_in_dim`,
+etc.). This is a deliberate design choice -- computegraph-rs is a **tensor
+computation graph engine**, not a fully generic DAG engine. The abstraction
+boundary is AD-agnostic, not tensor-agnostic.
 
 ### tidu-rs is primitive-agnostic
 

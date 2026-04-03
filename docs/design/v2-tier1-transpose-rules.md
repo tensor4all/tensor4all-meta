@@ -1,4 +1,4 @@
-# v2 Tier 1 Transpose Rules
+# v2 Transpose Rules for tenferro Primitives
 
 **Date:** 2026-04-03
 **Status:** Draft
@@ -8,32 +8,17 @@
 
 ## I. Scope
 
-This document defines the detailed transpose rules for the **Tier 1** primitive
-set used by `tidu2::transpose`.
+This document defines the transpose rules that tenferro provides for its
+primitives via the `PrimitiveOp::transpose_rule` trait method.
 
-The intent is:
+tidu is fully generic: it calls `Op::transpose_rule()` on each node during
+reverse-mode AD. It does not hardcode knowledge of any specific primitive.
+The rules documented here are the **reference implementations** that tenferro
+supplies for its own primitive set.
 
-- `tidu2` directly knows how to transpose only a **closed Tier 1 set**
-- `tenferro2` may define richer primitives downstream
-- any downstream primitive that participates in reverse-mode AD must have a
-  `linearize` rule whose output uses only this transpose-closed Tier 1 set
-
-So the contract is:
-
-```text
-downstream primitive
-  -> linearize
-  -> Tier 1 linear fragment only
-  -> transpose in tidu2
-```
-
-This is the intended answer for primitives such as `SVD`, `Solve`, `QR`, and
-other Tier 2 or downstream-only ops:
-
-- they are defined downstream
-- their forward evaluation is downstream
-- their `linearize` rule is downstream
-- but after `linearize`, `tidu2::transpose` should only see Tier 1 primitives
+Higher-level primitives such as `SVD`, `Solve`, and `QR` also implement
+`PrimitiveOp::transpose_rule` (or rely on `linearize` to decompose into
+primitives whose transpose rules are already provided).
 
 ---
 
@@ -44,7 +29,7 @@ other Tier 2 or downstream-only ops:
 Only nodes that are linear in the active inputs may appear in a linear
 fragment.
 
-Tier 1 also assumes that broadcasting is explicit:
+These rules also assume that broadcasting is explicit:
 
 - `Add` and `Mul` do not hide shape expansion
 - shape expansion must appear as `BroadcastInDim`
@@ -107,6 +92,8 @@ This matters especially for `Mul` and `DotGeneral`.
 ## III. Rule Table
 
 ### Summary
+
+Each primitive below implements `PrimitiveOp::transpose_rule` in tenferro.
 
 | Primitive | Allowed linear form | Reverse rule |
 |-----------|---------------------|--------------|
@@ -332,7 +319,7 @@ That keeps the transpose rule simple and exact.
 
 ## VII. `DotGeneral`
 
-`DotGeneral` is the most structured Tier 1 rule.
+`DotGeneral` has the most structured transpose rule in this set.
 
 ### Forward form
 
@@ -463,42 +450,33 @@ machinery.
 
 ---
 
-## VIII. What `tidu2::transpose` Must Know
+## VIII. How tidu Uses These Rules
 
-`tidu2::transpose` must dispatch on:
+tidu is generic over the `Op` trait. During reverse-mode AD it calls
+`Op::transpose_rule()` on each node. It does not inspect primitive kind,
+dispatch on an enum, or hardcode any rule table.
 
-- primitive kind
-- arity
-- linear active mask
-- primitive metadata for structured ops such as `DotGeneral`,
-  `Transpose`, `Reshape`, `BroadcastInDim`, and `ReduceAdd`
+Each transpose rule implementation receives:
 
-That metadata is part of the primitive value itself, so `tidu2` does not need
-to know any downstream `SVD` or `Solve` details.
+- the active mask
+- the cotangent of the output
+- the primitive's own metadata (contraction dimensions, permutation, etc.)
 
-It only needs the Tier 1 rule table above.
+and returns the cotangent contributions for the active inputs.
+
+Because the rules are trait methods on the primitives themselves, tidu needs
+no knowledge of `DotGeneral`, `SVD`, or any other specific operation.
 
 ---
 
-## IX. Downstream Contract
+## IX. Contract for New Primitives
 
-Downstream primitive sets, including Tier 2 tensor ops, must satisfy:
+Any new primitive that participates in reverse-mode AD must implement
+`PrimitiveOp::transpose_rule`. Alternatively, it may implement `linearize`
+such that the resulting linear fragment consists entirely of primitives that
+already provide `transpose_rule`.
 
-```text
-primitive.eval           lives downstream
-primitive.linearize      lives downstream
-primitive.transpose      not required downstream
-```
+This is the design boundary between:
 
-provided that:
-
-```text
-primitive.linearize(...)
-```
-
-emits only a Tier 1 linear fragment whose transpose behavior is defined here.
-
-This is the intended design boundary between:
-
-- `tidu2`: graph transforms over a transpose-closed Tier 1 set
-- `tenferro2`: concrete tensor primitives and their linearization rules
+- `tidu`: generic graph transforms that call `Op::transpose_rule()`
+- `tenferro`: concrete tensor primitives and their rule implementations

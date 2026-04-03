@@ -242,8 +242,10 @@ let a = TracedTensor::from(Tensor::new(&tropical_a, &[3, 4]));
 let b = TracedTensor::from(Tensor::new(&tropical_b, &[4, 5]));
 let c = TracedTensor::from(Tensor::new(&tropical_c, &[5, 6]));
 
-// N-ary einsum works over tropical semiring
-let result = einsum_tropical(&[&a, &b, &c], "ij,jk,kl->il");
+// einsum works generically over different algebras (standard, tropical, etc.)
+// The algebra is determined by the tensor's algebra type parameter, not by
+// calling a separate function per algebra.
+let result = einsum(&[&a, &b, &c], "ij,jk,kl->il");
 let result_val: &Tensor = result.eval(&mut engine);
 
 // No AD available for tropical — grad() would return compile-time error

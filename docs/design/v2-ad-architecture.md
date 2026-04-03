@@ -34,8 +34,8 @@ resolve           create a logical DAG view over one or more fragments
 differentiate     resolved view -> new linear fragment (JVP)
 transpose         linear fragment -> new linear fragment (reverse linear flow)
 materialize_merge resolved view -> MaterializedGraph (flatten + CSE)
-compile           MaterializedGraph -> TenferroIR
-eval              TenferroIR + input values -> output values
+compile           MaterializedGraph -> CompiledProgram
+eval              CompiledProgram + input values -> output values
 ```
 
 The key pipeline distinction is:
@@ -205,7 +205,7 @@ struct OpNode<Op> {
     mode: OpMode,
 }
 
-struct Fragment<Op: PrimitiveOp> {
+struct Fragment<Op: GraphOp> {
     vals: Vec<ValNode<Op>>,
     ops: Vec<OpNode<Op>>,
     inputs: Vec<LocalValId>,
@@ -314,7 +314,7 @@ struct MaterializedGraph<Op> {
 Conceptually:
 
 ```rust
-fn resolve<Op>(roots: Vec<Arc<Fragment<Op>>>) -> ResolvedView<Op>;
+fn resolve<Op: GraphOp>(roots: Vec<Arc<Fragment<Op>>>) -> ResolvedView<Op>;
 ```
 
 `resolve` is cheap and logical. It prepares a traversal view over fragment
@@ -416,9 +416,9 @@ fn transpose<Op: PrimitiveOp>(
 It does not differentiate again. It reuses the same local linear rules with
 direction reversed.
 
-`tidu2::transpose` is generic. It traverses the linear fragment in reverse
+`tidu::transpose` is generic. It traverses the linear fragment in reverse
 topological order and, for each op node, calls `Op::transpose_rule` to obtain
-the local transposed contribution. `tidu2` does not know which primitives
+the local transposed contribution. `tidu` does not know which primitives
 exist; it only requires that every op in the linear fragment implements
 `PrimitiveOp::transpose_rule`.
 
@@ -431,7 +431,7 @@ contributions flow back to the same original tangent node, bucket by the
 `materialize_merge` is the physical graph-building step.
 
 ```rust
-fn materialize_merge<Op: PrimitiveOp>(
+fn materialize_merge<Op: GraphOp>(
     view: &ResolvedView<Op>,
     outputs: &[GlobalValKey<Op>],
 ) -> MaterializedGraph<Op>;
@@ -709,23 +709,18 @@ trait Operand: Clone + Send + Sync + 'static {
 `zero` is required for zero propagation (skipping inactive tangent flow).
 `one` is required for seeding reverse-mode AD (`ct_y = one`).
 
-This keeps the AD graph close to StableHLO-compatible tensor semantics.
+`Operand` is defined in computegraph, not AD-specific. This keeps the
+computation graph close to StableHLO-compatible tensor semantics.
 
 ### PrimitiveOp
 
-`PrimitiveOp` provides eval, linearization, and transpose rules. The rules emit
-fragments, not one global graph. `tidu2` is fully generic over this trait and
-never references specific primitives.
+`PrimitiveOp` extends `GraphOp` with linearization and transpose rules. The
+rules emit fragments, not one global graph. `tidu` is fully generic over this
+trait and never references specific primitives. `eval`, `n_inputs`,
+`n_outputs`, and `type Operand` belong to `GraphOp` (defined in computegraph).
 
 ```rust
-pub trait PrimitiveOp: Clone + Hash + Eq + Send + Sync + 'static {
-    type Operand: Operand;
-
-    fn n_inputs(&self) -> usize;
-    fn n_outputs(&self) -> usize;
-
-    fn eval(&self, inputs: &[&Self::Operand]) -> Vec<Self::Operand>;
-
+pub trait PrimitiveOp: GraphOp {
     fn linearize(
         &self,
         builder: &mut FragmentBuilder<Self>,
@@ -748,7 +743,7 @@ pub trait PrimitiveOp: Clone + Hash + Eq + Send + Sync + 'static {
 }
 ```
 
-`tidu2::differentiate` calls `linearize`; `tidu2::transpose` calls
+`tidu::differentiate` calls `linearize`; `tidu::transpose` calls
 `transpose_rule`. Both are graph-level transforms that traverse the fragment
 and delegate local rules to the trait methods.
 
@@ -770,16 +765,16 @@ is closed.
 
 ### Closure responsibility
 
-`tidu2` does not define or constrain the primitive set. It is fully generic
+`tidu` does not define or constrain the primitive set. It is fully generic
 over `Op: PrimitiveOp`. The only rule is:
 
 > `linearize` and `transpose_rule` must emit only ops that themselves
 > implement `PrimitiveOp`.
 
-This ensures that `tidu2` can apply `differentiate` and `transpose` to any
+This ensures that `tidu` can apply `differentiate` and `transpose` to any
 fragment without knowledge of the specific primitives involved. The concrete
 primitive set and its closure guarantees are entirely the downstream
-implementor's responsibility (e.g. tenferro2).
+implementor's responsibility (e.g. tenferro).
 
 There is no dedicated `Scale` primitive in this design.
 

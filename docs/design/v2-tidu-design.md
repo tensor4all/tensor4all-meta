@@ -23,19 +23,19 @@ that are fully generic over `Op: PrimitiveOp`. It owns no graph infrastructure
 Consumes a resolved view and returns a new linear fragment (JVP).
 
 ```rust
-use computegraph::{ResolvedView, GlobalValKey, InputKey, LocalValId, Fragment};
+use computegraph::{ResolvedView, GlobalValKey, LocalValId, Fragment};
 use chainrules::PrimitiveOp;
 
 struct LinearFragment<Op> {
     fragment: Fragment<Op>,
-    tangent_inputs: Vec<(InputKey, LocalValId)>,
+    tangent_inputs: Vec<(Op::InputKey, LocalValId)>,
     tangent_outputs: Vec<Option<LocalValId>>,
 }
 
 fn differentiate<Op: PrimitiveOp>(
     view: &ResolvedView<Op>,
     outputs: &[GlobalValKey<Op>],
-    wrt: &[InputKey],
+    wrt: &[Op::InputKey],
 ) -> LinearFragment<Op>;
 ```
 

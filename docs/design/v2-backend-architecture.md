@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-02
 **Status:** Draft
-**Repos:** tenferro-rs, tidu-rs
+**Repos:** tenferro-rs
 **Related:** `v2-ad-architecture.md`
 
 ---
@@ -16,7 +16,7 @@ MaterializedGraph (after resolve + materialize_merge)
   │
   │ compile
   ▼
-TenferroIR (flat SSA, common to all algebras)
+CompiledProgram (flat SSA, common to all algebras)
   │
   ├─ Standard ──→ StableHLO ──┬→ (1) faer/BLAS engine  (CPU, default)
   │                            ├→ (2) Custom GPU engine (GPU, op-by-op, dynamic shapes)
@@ -37,11 +37,11 @@ materialized graph compiled and evaluated through this pipeline.
 ### Three Standard backends (all accept StableHLO)
 
 ```
-TenferroIR → StableHLO
-                │
-                ├── (1) faer/BLAS engine (CPU, default)
-                ├── (2) Custom GPU engine (GPU, op-by-op)
-                └── (3) XLA (GPU/TPU, JIT compiled)
+CompiledProgram → StableHLO
+                      │
+                      ├── (1) faer/BLAS engine (CPU, default)
+                      ├── (2) Custom GPU engine (GPU, op-by-op)
+                      └── (3) XLA (GPU/TPU, JIT compiled)
 ```
 
 | | (1) faer/CPU | (2) Custom GPU | (3) XLA |
@@ -69,7 +69,7 @@ batch size) where kernel fusion provides significant speedup.
 | Tropical | Custom backend → custom kernels | Custom backend → optimized CUDA kernels |
 
 Tropical and other custom algebras bypass StableHLO entirely. They use
-TenferroIR (Tier 1 only) dispatched directly to custom kernels.
+CompiledProgram (Tier 1 only) dispatched directly to custom kernels.
 
 ---
 
@@ -204,8 +204,8 @@ compatibility guarantee. Also available as MLIR textual assembly (`.mlir`).
 | Text `.mlir` output → xla-rs | xla-rs only | Let XLA parse. Simplest for backend (3) |
 | Own Rust IR (no MLIR) | None | Map ~100 ops directly. Lightest. |
 
-**Our approach**: TenferroIR is our own Rust IR. For backends (1) and (2),
-we interpret TenferroIR directly — no MLIR needed. For backend (3) XLA,
+**Our approach**: CompiledProgram is our own Rust IR. For backends (1) and (2),
+we interpret CompiledProgram directly — no MLIR needed. For backend (3) XLA,
 we emit `.mlir` text or use xla-rs builder API. Full MLIR dependency is
 avoided.
 
@@ -261,7 +261,7 @@ computation is fully compilable even though the primal is a custom_call.
 
 ### Architecture: two-level compilation
 
-All algebras first compile to **TenferroIR** (Semiring Core + JAX Prims).
+All algebras first compile to a **CompiledProgram** (Semiring Core + JAX Prims).
 This is the common intermediate representation. Further lowering depends
 on the algebra.
 
@@ -269,7 +269,7 @@ on the algebra.
 Graph → differentiate / transpose → merge → compile
     │
     ▼
-TenferroIR  (= CompiledProgram<TenferroOp>)
+CompiledProgram<Op>
     │         Semiring Core (Tier 1) + JAX Prims (Tier 2)
     │         common to ALL algebras
     │
@@ -295,8 +295,8 @@ error — these ops have no meaning outside Standard algebra.
 
 | Layer | Scalar type T | Algebra Alg |
 |-------|--------------|-------------|
-| Graph + AD (tidu2) | generic (via `Operand`) | generic (via `PrimitiveOp`) |
-| TenferroIR | generic (preserved) | generic (preserved) |
+| Graph + AD (tidu) | generic (via `Operand`) | generic (via `PrimitiveOp`) |
+| CompiledProgram | generic (preserved) | generic (preserved) |
 | Custom backend | generic (preserved) | custom (preserved) |
 | StableHLO + faer/XLA | erased to DType enum | Standard only |
 
@@ -334,19 +334,19 @@ If performance is insufficient for specific patterns, **fast paths** can
 be added that bypass StableHLO for hot operations (e.g., direct BLAS call
 for fused matmul chains).
 
-### Memory layout: TenferroIR knows nothing about strides
+### Memory layout: CompiledProgram knows nothing about strides
 
-TenferroIR is purely logical — it describes WHAT to compute, not HOW
+CompiledProgram is purely logical — it describes WHAT to compute, not HOW
 memory is laid out. Operations like `Transpose`, `Slice`, `BroadcastInDim`
 are logical transformations, not memory operations.
 
-`MakeContiguous` MAY exist in TenferroIR as an optional hint, but is
+`MakeContiguous` MAY exist in CompiledProgram as an optional hint, but is
 **ignored on the Standard (StableHLO) path** — both faer and XLA backends
 treat all tensors as contiguous. It is only meaningful on the **Custom
 backend path** (e.g., Tropical) where strides are used internally:
 
 ```
-TenferroIR:   Transpose(A)     ← logical operation
+CompiledProgram:   Transpose(A)     ← logical operation
                   │
        ┌─────────┴─────────┐
        ▼                    ▼
@@ -359,7 +359,7 @@ TenferroIR:   Transpose(A)     ← logical operation
    - copy removal
 ```
 
-Each backend independently optimizes memory layout. The user and TenferroIR
+Each backend independently optimizes memory layout. The user and CompiledProgram
 see only logical operations. This is a clean separation of concerns.
 
 **Contract**: the final output of any backend is always contiguous. Internal
@@ -368,7 +368,7 @@ strides), but this is invisible to the caller.
 
 ### Device management
 
-TenferroIR and CompiledProgram are **device-agnostic** — they contain no
+CompiledProgram is **device-agnostic** — it contains no
 device or memory space information. Device placement is a runtime concern.
 
 **Phase 1: all inputs must be on the same device.**
@@ -394,13 +394,13 @@ let result_cpu = result_gpu.to_cpu();                          // explicit trans
 let result2 = cpu_backend.eval(&prog2, &[result_cpu, c_cpu]);
 ```
 
-**Phase 2 (future): Transfer op in TenferroIR.**
+**Phase 2 (future): Transfer op in CompiledProgram.**
 
-TenferroIR may include `Transfer(tensor, target_device)` as a primitive op.
+CompiledProgram may include `Transfer(tensor, target_device)` as a primitive op.
 When lowering to StableHLO, Transfer ops split the program into chunks:
 
 ```
-TenferroIR:  [op0, op1, Transfer(GPU→CPU), op2, op3, Transfer(CPU→GPU), op4]
+CompiledProgram:  [op0, op1, Transfer(GPU→CPU), op2, op3, Transfer(CPU→GPU), op4]
 
 StableHLO lowering:
   chunk 1: [op0, op1]     → GPU backend
@@ -410,23 +410,23 @@ StableHLO lowering:
   chunk 3: [op4]          → GPU backend
 ```
 
-Transfer is NOT a StableHLO op — it exists only in TenferroIR.
-tenferro2 handles the insertion (manual or automatic device placement)
+Transfer is NOT a StableHLO op — it exists only in CompiledProgram.
+tenferro handles the insertion (manual or automatic device placement)
 and the splitting during StableHLO lowering.
 
-tidu2 never knows about devices. It is purely symbolic.
+tidu never knows about devices. It is purely symbolic.
 
-### Backends live inside tenferro2
+### Backends live inside tenferro
 
-All backends use tenferro2's device management infrastructure (memory
+All backends use tenferro's device management infrastructure (memory
 allocation, CPU↔GPU transfer, kernel dispatch). They cannot be
 separated into standalone crates without duplicating device management:
 
 ```
-tenferro2/
-  ├── tensor/          Tensor<T>, device management, memory spaces
+tenferro/
+  ├── tensor/          Tensor, device management, memory spaces
   ├── prims/           PrimitiveOp implementations
-  ├── stablehlo/       TenferroIR → StableHLO lowering + chunk splitting
+  ├── stablehlo/       CompiledProgram → StableHLO lowering + chunk splitting
   ├── backend_cpu/     (1) faer engine (uses tenferro Tensor directly)
   ├── backend_gpu/     (2) Custom GPU engine (uses tenferro GpuTensor)
   └── backend_xla/     (3) XLA engine (optional feature flag)
@@ -434,7 +434,7 @@ tenferro2/
 
 ### Custom backend (Tropical / custom algebra)
 
-Executes TenferroIR (Tier 1 ops only) directly:
+Executes CompiledProgram (Tier 1 ops only) directly:
 
 ```rust
 fn eval<Op: PrimitiveOp>(prog: &CompiledProgram<Op>, inputs: &[Op::Operand]) -> Vec<Op::Operand> {
@@ -465,7 +465,7 @@ Both XLA and IREE accept StableHLO as input. We use **XLA first** (mature,
 prebuilt binaries available) and migrate to **IREE later** (future runtime).
 
 ```
-TenferroIR → StableHLO → XLA (Phase 3) → IREE (Phase 4+)
+CompiledProgram → StableHLO → XLA (Phase 3) → IREE (Phase 4+)
                            ↑                ↑
                            available now     future replacement
 ```
@@ -518,15 +518,15 @@ vs libtorch's ~2GB).
 ### Two-level caching
 
 Graph construction and AD transforms are expensive. Caching happens at
-two levels, both outside tidu2:
+two levels, both outside tidu:
 
 ```
-Level 1 — CompiledProgram (user / tenferro2 responsibility):
+Level 1 — CompiledProgram (user / tenferro responsibility):
   Expensive:  Graph → differentiate → merge → compile → CompiledProgram
   Cheap:      retain CompiledProgram, call eval() many times
-  tidu2 does NOT cache. Caller retains the CompiledProgram.
+  tidu does NOT cache. Caller retains the CompiledProgram.
 
-Level 2 — XLA executable (tenferro2-xla-backend):
+Level 2 — XLA executable (tenferro-xla-backend):
   Expensive:  CompiledProgram → StableHLO → XLA compile → executable
   Cheap:      cache executable, call execute() many times
   Cache key:  (program hash, input shapes, dtypes)
@@ -585,24 +585,44 @@ IREE is officially replacing XLA's runtime (OpenXLA project). When mature:
 
 ## VII. Tensor Types and Operand
 
-### Tensor<T> enum
+### Tensor (concrete data type)
+
+`Tensor` is a concrete data struct holding a buffer, shape, strides, and dtype.
+It is the runtime representation used by backends for actual computation.
 
 ```rust
-enum Tensor<T: Scalar> {
-    Eager(EagerTensor<T>),     // holds data, T preserved
-    Traced(TracedTensor),      // no data, T erased to DType
+struct Tensor {
+    buffer: Buffer,         // owned or shared data
+    shape: Vec<usize>,
+    strides: Vec<usize>,
+    dtype: DType,           // F32, F64, C32, C64
 }
 ```
 
-- `Eager`: immediate execution via DefaultBackend
-- `Traced`: records ops into a graph (used for JIT compilation path)
+### TracedTensor (graph-aware wrapper)
+
+`TracedTensor` is a separate struct that wraps graph node references for
+tracing. It records ops into a graph for deferred compilation (JIT path).
+It does not hold data — only shape and dtype metadata plus a graph node ID.
+
+```rust
+struct TracedTensor {
+    node_id: NodeId,        // reference into the trace graph
+    shape: Vec<usize>,
+    dtype: DType,
+}
+```
+
+- `Tensor`: immediate execution via DefaultBackend (eager mode)
+- `TracedTensor`: records ops into a graph (used for JIT compilation path)
 
 ### Operand implementation
 
-`Tensor<T>` implements the `Operand` trait with StableHLO-aligned ops:
+Both `Tensor` and `TracedTensor` implement the `Operand` trait with
+StableHLO-aligned ops:
 
 ```rust
-impl<T: Scalar> Operand for Tensor<T> {
+impl Operand for Tensor {
     fn reshape(&self, shape: &[usize]) -> Self { ... }
     fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self { ... }
     fn add(&self, other: &Self) -> Self { ... }
@@ -610,19 +630,6 @@ impl<T: Scalar> Operand for Tensor<T> {
     fn dot_general(&self, other: &Self, config: &DotConfig) -> Self { ... }
 }
 ```
-
-### DynTensor (scalar type erased)
-
-```rust
-enum DynTensor {
-    F32(Tensor<f32>),
-    F64(Tensor<f64>),
-    C32(Tensor<Complex<f32>>),
-    C64(Tensor<Complex<f64>>),
-}
-```
-
-Type erasure at the user API level. Internally dispatches to typed tensors.
 
 ---
 
@@ -646,13 +653,13 @@ Type erasure at the user API level. Internally dispatches to typed tensors.
 
 ### Phase 3: StableHLO backends
 
-- `tenferro2-stablehlo`: primitive → StableHLO 1:1 lowering
-- `tenferro2-stablehlo-cpu`: (1) faer/BLAS StableHLO interpreter (default CPU)
-- `tenferro2-stablehlo-gpu`: (2) Custom GPU StableHLO interpreter
+- `tenferro-stablehlo`: primitive → StableHLO 1:1 lowering
+- `tenferro-stablehlo-cpu`: (1) faer/BLAS StableHLO interpreter (default CPU)
+- `tenferro-stablehlo-gpu`: (2) Custom GPU StableHLO interpreter
   - Reuse CUDA kernels from tenferro-rs v1
   - Op-by-op execution, no fusion, dynamic shapes ✅
   - **Milestone**: tensor network on GPU with dynamic bond dimensions
-- `tenferro2-xla-backend`: (3) XLA via xla-rs (optional, ~200MB)
+- `tenferro-xla-backend`: (3) XLA via xla-rs (optional, ~200MB)
   - JIT compile, kernel fusion, static shapes
   - **Milestone**: ML-style workloads on GPU with fusion
 

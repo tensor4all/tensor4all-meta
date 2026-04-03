@@ -45,6 +45,12 @@ trait Operand: Clone + Send + Sync + 'static {
 `zero` is required for sparse propagation. `one` is required for seeding
 (e.g. reverse-mode AD seeds `ct_y = one`).
 
+**Note:** `Operand` contains tensor-specific methods (`dot_general`, `reshape`,
+`broadcast_in_dim`, etc.). This is intentional -- computegraph-rs is designed as
+a **tensor computation graph engine**, not a fully generic DAG engine. The
+tensor-oriented interface ensures that graph transforms (e.g. AD in tidu-rs) can
+reason about tensor structure without depending on concrete primitive types.
+
 ### GraphOp
 
 `GraphOp` is the operation node trait. It defines evaluation and arity.
