@@ -9,20 +9,25 @@
 ## Design Decisions
 
 - All operations are **lazy** (deferred). No eager mode.
-- `TracedTensor` is the user-facing type that holds shape/dtype, graph info,
-  and optionally data. All operations return `TracedTensor`.
+- `TracedTensor` is the user-facing type for **standard algebra**. It holds
+  shape/dtype, graph info, and optionally data. All lazy operations return
+  `TracedTensor`.
 - `Tensor` is the concrete data type (shape + buffer). Users see it at
-  input/output boundaries.
+  input/output boundaries only.
+- `einsum` is a free function that takes `TracedTensor` inputs and returns
+  `TracedTensor`. There is no eager `einsum` on `Tensor` — users wrap
+  concrete data with `TracedTensor::from` first.
 - `eval()` triggers `materialize_merge -> compile (cached) -> execute`,
   filling in the data.
-- `Engine` holds execution context + compilation cache + extension caches.
-  `Engine` is a **tenferro-rs concept** that wraps `computegraph-rs`'s
-  compilation cache with backend-specific execution context (CPU/GPU) and
-  extension caches (e.g., `EinsumCache` for contraction path optimization).
+- `Engine` holds backend + compilation cache + einsum cache. It is generic
+  over `Backend<StdTensorOp>` (e.g., `FaerBackend`, `XlaBackend`).
 - `eval_all` is the primary evaluation API. It resolves all output fragments
   together into one `MaterializedGraph`, so shared intermediate nodes (e.g.,
   primal values needed by both forward output and gradient) are computed once.
   Single-output `eval` is a convenience wrapper around `eval_all`.
+- **Custom algebras** (Tropical, etc.) do not use `TracedTensor` or `einsum`.
+  They work with `Fragment<SemiringOp<T>>` and the computegraph-rs API
+  directly. See "Custom Algebra" section below.
 
 ---
 
@@ -38,10 +43,11 @@ struct Tensor {
 }
 
 // Graph-aware wrapper — tracks computation for AD and compilation
+// Standard algebra only (StdTensorOp)
 struct TracedTensor {
     shape: Vec<usize>,
     dtype: DType,
-    fragment: Arc<Fragment<TensorOp>>,
+    fragment: Arc<Fragment<StdTensorOp>>,
     val: LocalValId,
     data: Option<Tensor>,  // Some for inputs / eval'd results, None for deferred
 }
@@ -85,11 +91,11 @@ let y = x.exp();
 ## Engine Setup
 
 ```rust
-// Create engine with CPU backend
-let mut engine = Engine::new(CpuContext::new());
+// Create engine with faer CPU backend (default)
+let mut engine = Engine::new(FaerBackend::new());
 
-// Or with GPU
-let mut engine = Engine::new(CudaContext::new(device_id));
+// Or with XLA GPU backend
+let mut engine = Engine::new(XlaBackend::gpu(device_id));
 ```
 
 ---
@@ -261,29 +267,53 @@ let w3 = TracedTensor::from(Tensor::new(&w_raw3, &[100, 100]));
 let _ = my_model(&mut engine, &x3, &w3).eval(&mut engine);  // may recompile
 ```
 
-Cache key is graph structure (`GlobalValKey`) only. Shape-dependent ops
-(e.g. `Reshape(target)`) encode shape in the op itself, so different shapes
-produce different `GlobalValKey`s automatically.
+Cache key is based on **normalized graph topology** (op types, connectivity,
+modes), not on concrete `InputKey` values. This ensures that repeated
+`differentiate` calls with different `DiffPassId`s produce cache hits when the
+graph structure is the same. Shape-dependent ops (e.g. `Reshape(target)`)
+encode shape in the op itself, so different shapes produce different topology
+automatically.
 
 ---
 
-## Tropical Algebra (No AD)
+## Custom Algebra (Tropical, etc.) — No TracedTensor
+
+Custom algebras do not use `TracedTensor` or the `einsum` free function.
+They work directly with the computegraph-rs Fragment API and
+`SemiringOp<T>`:
 
 ```rust
-let engine = Engine::new(CpuContext::new());
+use computegraph::{FragmentBuilder, compile, materialize_merge, resolve};
+use tenferro_ops::{SemiringOp, SemiringOps, build_einsum_fragment};
+use tenferro_einsum::optimize_contraction_path;
 
-let a = TracedTensor::from(Tensor::new(&tropical_a, &[3, 4]));
-let b = TracedTensor::from(Tensor::new(&tropical_b, &[4, 5]));
-let c = TracedTensor::from(Tensor::new(&tropical_c, &[5, 6]));
+// User-defined tensor type with Operand impl
+type TropicalOp = SemiringOp<TropicalTensor>;
 
-// einsum works generically over different algebras (standard, tropical, etc.)
-// The algebra is determined by the tensor's algebra type parameter, not by
-// calling a separate function per algebra.
-let result = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il");
-let result_val: &Tensor = result.eval(&mut engine);
+// 1. Optimize contraction path (algebra-agnostic)
+let subscripts = Subscripts::parse("ij,jk,kl->il");
+let shapes = [&[3, 4][..], &[4, 5], &[5, 6]];
+let path = optimize_contraction_path(&subscripts, &shapes);
 
-// No AD available for tropical — grad() would return compile-time error
-// or runtime error depending on design choice
+// 2. Build Fragment (generic over SemiringOps)
+let mut builder = FragmentBuilder::<TropicalOp>::new();
+let a = builder.add_input("a".into());
+let b = builder.add_input("b".into());
+let c = builder.add_input("c".into());
+let result = build_einsum_fragment(&mut builder, &path, &[a, b, c]);
+builder.set_outputs(vec![result]);
+let fragment = Arc::new(builder.build());
+
+// 3. Compile
+let view = resolve(vec![fragment]);
+let graph = materialize_merge(&view, &outputs);
+let prog = compile(&graph);
+
+// 4. Execute with chosen backend
+let mut backend = CpuSemiringBackend;
+let results = backend.eval_program(&prog, &[tropical_a, tropical_b, tropical_c]);
+
+// No AD available — SemiringOp<T> does not implement PrimitiveOp
 ```
 
 ---
@@ -296,8 +326,8 @@ let a = TracedTensor::from(Tensor::new(&a_raw, &[4, 3]));
 // SVD is a primitive with linearize + transpose_rule
 let (u, s, vt) = svd(&a);
 
-// Use SVD result in further computation
-let truncated = einsum(&mut engine, &[&u, &diag(&s), &vt], "ij,j,jk->ik");
+// Use SVD result in further computation (hyper-edge einsum, no scatter needed)
+let truncated = einsum(&mut engine, &[&u, &s, &vt], "ij,j,jk->ik");
 let loss = truncated.sum();
 
 // AD through SVD
@@ -310,15 +340,21 @@ let results = engine.eval_all(&mut [&mut loss, &mut grad_a]);
 ## Summary of Types
 
 ```text
-Tensor         Concrete data (shape + buffer + strides + dtype)
-               The natural "tensor" — what you think of as a tensor
+Tensor           Concrete data (shape + buffer + strides + dtype)
+                 The natural "tensor" — what you think of as a tensor
 
-TracedTensor   Graph-aware wrapper (shape + dtype + graph info + Option<Tensor>)
-               All lazy operations return this
-               eval() fills in data and returns &Tensor
+TracedTensor     Graph-aware wrapper for standard algebra
+                 (shape + dtype + Fragment<StdTensorOp> + Option<Tensor>)
+                 All lazy operations return this
+                 eval() fills in data and returns &Tensor
 
-Engine         Execution context + compilation cache + extension caches
-               Long-lived, reused across all operations
+Engine<B>        Backend + compilation cache + einsum cache
+                 Generic over B: Backend<StdTensorOp>
+                 Long-lived, reused across all operations
+
+einsum()         Free function: TracedTensor inputs → TracedTensor output
+                 Builds Fragment via contraction path optimization
+                 No eager einsum on Tensor — use TracedTensor::from first
 ```
 
 ---
