@@ -11,15 +11,28 @@
 
 `Tensor` is a dense multi-dimensional array. It carries no structural metadata
 (diagonal, symmetric, block-diagonal, sparse, etc.), but it may reside on CPU
-or GPU.
+or GPU. Runtime placement is described by `Placement`.
 
 ```rust
+struct Placement {
+    memory_kind: MemoryKind,
+    resident_device: Option<ComputeDevice>,
+}
+
+enum MemoryKind {
+    Device,
+    PinnedHost,
+    UnpinnedHost,
+    Other(String),
+}
+
 // Typed tensor (internal)
 struct TensorData<T: Scalar> {
     buffer: Buffer<T>,
     shape: Vec<usize>,
     strides: Vec<isize>,
-    device: Device,
+    placement: Placement,
+    preferred_compute_device: Option<ComputeDevice>,
 }
 
 // Type-erased tensor (user-facing)
@@ -33,8 +46,8 @@ enum Tensor {
 
 ```rust
 enum Buffer<T> {
-    Cpu(Vec<T>),
-    Gpu(GpuBufferHandle<T>),
+    Host(HostBuffer<T>),
+    Backend(BufferHandle<T>),
 }
 ```
 
@@ -42,9 +55,10 @@ enum Buffer<T> {
 and AD (see `tensor-api-pseudocode.md`).
 
 `Tensor` is the standard-algebra runtime value shared across CPU and GPU
-backends. Methods such as `device()`, `to_cpu()`, and `to_gpu(...)` are part of
-the tensor boundary; backend-specific handles remain internal implementation
-details.
+backends. Methods such as `placement()`, `resident_device()`, `to_cpu()`, and
+`to_gpu_on(...)` are part of the tensor boundary; backend-specific handles
+remain internal implementation details. Compute preference stays separate via
+`preferred_compute_device()`.
 
 **Why dense only**: structural variants (diagonal, band, triangular, ...)
 cause combinatorial explosion in op implementations. Every op must handle

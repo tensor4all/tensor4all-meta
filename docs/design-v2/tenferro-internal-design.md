@@ -727,7 +727,10 @@ still serve as identity elements for the semiring.
 
 ### tenferro-device
 
-Unchanged from v1. Device enum, memory spaces, error types.
+Defines the v2 placement vocabulary and shared runtime errors. `Placement`
+contains `memory_kind` plus `resident_device`, while `ComputeDevice` remains a
+separate notion for execution. Public memory kinds follow JAX/XLA-style names:
+`Device`, `PinnedHost`, `UnpinnedHost`, and `Other(String)`.
 
 ### tenferro-algebra
 

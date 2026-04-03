@@ -12,7 +12,7 @@
 - `TracedTensor` is the user-facing type for **standard algebra**. It holds
   shape/dtype, graph info, and optionally data. All lazy operations return
   `TracedTensor`.
-- `Tensor` is the concrete dense runtime value (shape + buffer + device).
+- `Tensor` is the concrete dense runtime value (shape + buffer + placement).
   It may live on CPU or GPU. Users see it at input/output boundaries only.
 - `einsum` is a free function that takes `TracedTensor` inputs and returns
   `TracedTensor`. There is no eager `einsum` on `Tensor` — users wrap
@@ -34,12 +34,25 @@
 ## Type Definitions
 
 ```rust
+struct Placement {
+    memory_kind: MemoryKind,
+    resident_device: Option<ComputeDevice>,
+}
+
+enum MemoryKind {
+    Device,
+    PinnedHost,
+    UnpinnedHost,
+    Other(String),
+}
+
 // Typed tensor (internal)
 struct TensorData<T: Scalar> {
     buffer: Buffer<T>,
     shape: Vec<usize>,
     strides: Vec<isize>,
-    device: Device,
+    placement: Placement,
+    preferred_compute_device: Option<ComputeDevice>,
 }
 
 // Type-erased tensor (user-facing)
@@ -69,8 +82,8 @@ struct TracedTensor {
 
 ```rust
 enum Buffer<T> {
-    Cpu(Vec<T>),
-    Gpu(GpuBufferHandle<T>),
+    Host(HostBuffer<T>),
+    Backend(BufferHandle<T>),
 }
 ```
 
@@ -78,9 +91,14 @@ Host access is explicit:
 
 ```rust
 impl Tensor {
-    fn device(&self) -> Device;
+    fn placement(&self) -> Placement;
+    fn memory_kind(&self) -> MemoryKind;
+    fn resident_device(&self) -> Option<ComputeDevice>;
+    fn preferred_compute_device(&self) -> Option<ComputeDevice>;
+    fn to_placement(&self, target: Placement) -> Tensor;
     fn to_cpu(&self) -> Tensor;
-    fn to_gpu(&self, device: Device) -> Tensor;
+    fn to_gpu_on(&self, device_id: usize) -> Tensor;
+    fn to_pinned_host(&self) -> Tensor;
 }
 ```
 

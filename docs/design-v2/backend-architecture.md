@@ -388,26 +388,42 @@ Each backend independently optimizes memory layout. The user and CompiledProgram
 see only logical operations. This is a clean separation of concerns.
 
 **Contract**: the final output of any standard backend is always a dense
-`Tensor` on some device. Internal intermediates may use backend-specific layout
-or non-contiguous views, but this is invisible to the caller.
+`Tensor` with some runtime `Placement`. Internal intermediates may use
+backend-specific layout or non-contiguous views, but this is invisible to the
+caller.
 
 ### Device management
 
-CompiledProgram is **device-agnostic** — it contains no device or memory space
-information. Device placement is a runtime concern carried by `Tensor`.
+CompiledProgram is **placement-agnostic** — it contains no `Placement`
+information. Runtime placement is carried by `Tensor`.
 
-**Phase 1: all inputs must be on the same device.**
+```rust
+struct Placement {
+    memory_kind: MemoryKind,
+    resident_device: Option<ComputeDevice>,
+}
+```
+
+`resident_device` tells us which device owns or primarily addresses the memory.
+`preferred_compute_device` is still a separate runtime execution hint on
+`Tensor`.
+
+**Phase 1: all inputs must share a resident device domain.**
 
 The backend asserts this at `eval` time (not compile time, since
-CompiledProgram has no device info):
+CompiledProgram has no placement info):
 
 ```rust
 fn eval(&self, prog: &CompiledProgram, inputs: &[Tensor]) -> Vec<Tensor> {
-    let device = inputs[0].device();
+    let resident = inputs[0].resident_device();
     for input in inputs {
-        assert_eq!(input.device(), device, "all inputs must be on same device");
+        assert_eq!(
+            input.resident_device(),
+            resident,
+            "all inputs must share the same resident device"
+        );
     }
-    // execute all ops on `device`
+    // backend may normalize memory kinds internally if needed
 }
 ```
 
@@ -415,41 +431,43 @@ fn eval(&self, prog: &CompiledProgram, inputs: &[Tensor]) -> Vec<Tensor> {
 
 ```rust
 let result_gpu = gpu_backend.eval(&prog1, &[a_gpu, b_gpu]);
-let result_cpu = result_gpu.to_cpu();                          // explicit transfer
+let result_cpu = result_gpu.to_cpu();                          // explicit transfer to UnpinnedHost
 let result2 = cpu_backend.eval(&prog2, &[result_cpu, c_cpu]);
 ```
 
 **Phase 2 (future): Transfer op in CompiledProgram.**
 
-CompiledProgram may include `Transfer(tensor, target_device)` as a primitive op.
-When lowering to StableHLO, Transfer ops split the program into chunks:
+CompiledProgram may include `Transfer(tensor, target_placement)` as a primitive
+op. When lowering to StableHLO, Transfer ops split the program into chunks:
 
 ```
-CompiledProgram:  [op0, op1, Transfer(GPU→CPU), op2, op3, Transfer(CPU→GPU), op4]
+CompiledProgram:
+  [op0, op1, Transfer(Device@cuda:0 → UnpinnedHost), op2, op3,
+   Transfer(UnpinnedHost → Device@cuda:0), op4]
 
 StableHLO lowering:
   chunk 1: [op0, op1]     → GPU backend
-  transfer: GPU → CPU
+  transfer: Device@cuda:0 → UnpinnedHost
   chunk 2: [op2, op3]     → CPU backend
-  transfer: CPU → GPU
+  transfer: UnpinnedHost → Device@cuda:0
   chunk 3: [op4]          → GPU backend
 ```
 
 Transfer is NOT a StableHLO op — it exists only in CompiledProgram.
-tenferro handles the insertion (manual or automatic device placement)
+tenferro handles the insertion (manual or automatic placement planning)
 and the splitting during StableHLO lowering.
 
-tidu never knows about devices. It is purely symbolic.
+tidu never knows about placement. It is purely symbolic.
 
 ### Backends live inside tenferro
 
-All backends use tenferro's device management infrastructure (memory
-allocation, CPU↔GPU transfer, kernel dispatch). They cannot be
-separated into standalone crates without duplicating device management:
+All backends use tenferro's placement and transfer infrastructure
+(allocation, placement-aware transfer, kernel dispatch). They cannot be
+separated into standalone crates without duplicating that runtime layer:
 
 ```
 tenferro/
-  ├── tensor/          Tensor, device management, memory spaces
+  ├── tensor/          Tensor, placement model, transfer helpers
   ├── prims/           PrimitiveOp implementations
   ├── stablehlo/       CompiledProgram → StableHLO lowering + chunk splitting
   ├── backend_cpu/     (1) faer engine (uses tenferro Tensor directly)
@@ -597,14 +615,17 @@ IREE is officially replacing XLA's runtime (OpenXLA project). When mature:
 - C API for Rust FFI
 - Compilation path: StableHLO → linalg → vector → LLVM IR / SPIR-V
 
-### Memory space compatibility
+### Memory kind compatibility
 
-| tenferro device | XLA / IREE | Apple Silicon |
-|----------------|------------|---------------|
-| MainMemory | HOST_LOCAL | MTLBuffer shared |
-| PinnedMemory | HOST_LOCAL \| DEVICE_VISIBLE | (same) |
-| GpuMemory | DEVICE_LOCAL | MTLBuffer shared |
-| ManagedMemory | DEVICE_LOCAL \| HOST_VISIBLE | (hw managed) |
+`resident_device` is tracked separately from `memory_kind`. The table below
+describes only the canonical public memory kind names.
+
+| Canonical tenferro memory kind | JAX / XLA / IREE realization | Apple Silicon notes |
+|-------------------------------|------------------------------|---------------------|
+| `UnpinnedHost` | `unpinned_host` or backend default host memory | `MTLBuffer` shared / host-visible allocation |
+| `PinnedHost` | `pinned_host` | driver-pinned host allocation |
+| `Device` | `device` | device-local or unified GPU allocation depending on backend |
+| `Other("managed")` | backend-specific managed/unified memory kind | hardware-managed unified-memory realization |
 
 ---
 
@@ -616,16 +637,29 @@ IREE is officially replacing XLA's runtime (OpenXLA project). When mature:
 over `TensorData<T>` for each supported scalar type.
 
 ```rust
+struct Placement {
+    memory_kind: MemoryKind,
+    resident_device: Option<ComputeDevice>,
+}
+
+enum MemoryKind {
+    Device,
+    PinnedHost,
+    UnpinnedHost,
+    Other(String),
+}
+
 struct TensorData<T: Scalar> {
     buffer: Buffer<T>,
     shape: Vec<usize>,
     strides: Vec<isize>,
-    device: Device,
+    placement: Placement,
+    preferred_compute_device: Option<ComputeDevice>,
 }
 
 enum Buffer<T> {
-    Cpu(Vec<T>),
-    Gpu(GpuBufferHandle<T>),
+    Host(HostBuffer<T>),
+    Backend(BufferHandle<T>),
 }
 
 enum Tensor {
