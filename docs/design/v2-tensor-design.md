@@ -1,27 +1,31 @@
 # v2 Tensor Design: Structure and Einsum
 
-**Date:** 2026-04-03
+**Date:** 2026-04-03 (rewritten)
 **Status:** Draft
-**Related:** `v2-ad-architecture.md`, `v2-backend-architecture.md`
+**Parent:** `v2-architecture-overview.md`
+**Related:** `v2-tensor-api-pseudocode.md`, `v2-ad-architecture.md`
 
 ---
 
-## I. Principle: tenferro2::Tensor is always dense
+## I. Principle: tenferro::Tensor is always dense
 
-`tenferro2::Tensor` is a plain multi-dimensional array. It carries no
+`Tensor` is a plain multi-dimensional array. It carries no
 structural metadata (diagonal, symmetric, block-diagonal, sparse, etc.).
 
 ```rust
-// tenferro2::Tensor — always dense
 struct Tensor {
-    inner: DynTensor,        // dense data buffer
-    device: Device,
-    memory_space: MemorySpace,
+    buffer: DataBuffer,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    dtype: DType,
 }
 ```
 
-**Why**: structural variants (diagonal, band, triangular, ...) cause
-combinatorial explosion in op implementations. Every op must handle
+`TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
+and AD (see `v2-tensor-api-pseudocode.md`).
+
+**Why dense only**: structural variants (diagonal, band, triangular, ...)
+cause combinatorial explosion in op implementations. Every op must handle
 `Dense × Dense`, `Diagonal × Dense`, `Dense × Diagonal`, `Diagonal × Diagonal`,
 etc. Adding a new structure type requires touching every op.
 
@@ -33,7 +37,7 @@ lowered to StableHLO without conversion.
 ## II. Structural information lives in tensor4all-rs
 
 Higher-level structure (diagonal matrices, block-diagonal, etc.) is
-managed in **tensor4all-rs**, one layer above tenferro2. This matches
+managed in **tensor4all-rs**, one layer above tenferro. This matches
 the previous tensor4all-rs codebase.
 
 ```
@@ -42,12 +46,13 @@ tensor4all-rs (structure-aware layer)
   ├── BlockDiagonal { blocks: Vec<Tensor> }  // block structure
   ├── ... (other structured types)
   │
-  └── uses tenferro2::einsum with hyper edges to avoid scatter/gather
+  └── uses tenferro einsum with hyper edges to avoid scatter/gather
 
-tenferro2 (dense layer)
+tenferro (dense layer)
   ├── Tensor — always dense
+  ├── TracedTensor — graph-aware wrapper
   ├── einsum — hyper edge support
-  └── backends — faer / Custom GPU / XLA
+  └── backends — faer / Custom GPU / StableHLO
 ```
 
 ---
@@ -70,7 +75,7 @@ Naive (scatter needed):
 ### Hyper edge solution
 
 A **hyper edge** is an index that appears in 3+ tensors simultaneously.
-tenferro2's einsum supports this natively:
+tenferro's einsum supports this natively:
 
 ```
 einsum("ik,k,kj->ij", U, sigma, Vt)
@@ -82,9 +87,7 @@ einsum("ik,k,kj->ij", U, sigma, Vt)
 → no scatter/gather needed
 ```
 
-### tenferro2 einsum capabilities (from tenferro-rs v1)
-
-Already supported:
+### Einsum capabilities
 
 ```rust
 // Diagonal embedding: vector → diagonal matrix
@@ -123,30 +126,25 @@ chooses the contraction order. No intermediate diagonal matrices needed.
 
 ---
 
-## IV. StableHLO lowering of einsum
+## IV. Einsum decomposition for compilation
 
-StableHLO's `dot_general` only supports **2-input** contractions.
-Hyper edges (3+ inputs) must be decomposed into pairwise steps:
+N-ary einsum and hyper edges are decomposed into binary contractions
+using `PrimitiveOp`s (DotGeneral, Reshape, Transpose, etc.) in a
+computegraph Fragment:
 
 ```
 einsum("ik,k,kj->ij", U, sigma, Vt)
 
-tenferro2 decomposes into:
-  step 1: einsum("ik,k->ik", U, sigma)      → temp  (element-wise scaling)
-  step 2: einsum("ik,kj->ij", temp, Vt)     → A     (matmul)
-
-StableHLO:
-  %temp = stablehlo.mul(%U_broadcasted, %sigma_broadcasted)   // or dot_general
-  %A    = stablehlo.dot_general(%temp, %Vt, ...)
+Decomposed into Fragment:
+  step 1: Mul(U_broadcasted, sigma_broadcasted)   → temp  (element-wise scaling)
+  step 2: DotGeneral(temp, Vt, ...)               → A     (matmul)
 ```
 
-**tenferro2's einsum optimizer decides the pairwise decomposition order.**
-The hyper edge structure is preserved in TenferroIR; only the StableHLO
-lowering decomposes into pairwise ops.
+The contraction path optimizer decides the pairwise decomposition order.
+This optimization result is cached in `Engine`'s `EinsumCache`.
 
-For the faer backend: pairwise decomposition is also used (BLAS dgemm
-is 2-input), but the optimizer can choose a different order tuned for
-CPU cache performance.
+For StableHLO lowering: the Fragment's binary ops map directly to
+`stablehlo.dot_general`, `stablehlo.multiply`, etc.
 
 ---
 
@@ -157,18 +155,17 @@ CPU cache performance.
 ```rust
 // tensor4all-rs
 struct DiagonalTensor {
-    diag: tenferro2::Tensor,   // 1D dense vector [N]
+    diag: Tensor,   // 1D dense vector [N]
     // Logically represents an [N, N] diagonal matrix
 }
 
 impl DiagonalTensor {
-    fn to_dense(&self) -> tenferro2::Tensor {
+    fn to_dense(&self) -> Tensor {
         einsum("i->ii", &[&self.diag])
     }
 
-    fn matmul(&self, rhs: &tenferro2::Tensor) -> tenferro2::Tensor {
-        // Efficient: einsum("i,ij->ij", &[&self.diag, rhs])
-        // No scatter, no dense diagonal matrix
+    fn matmul(&self, rhs: &Tensor) -> Tensor {
+        // Efficient: no scatter, no dense diagonal matrix
         einsum("i,ij->ij", &[&self.diag, rhs])
     }
 }
@@ -178,39 +175,40 @@ impl DiagonalTensor {
 
 ```rust
 struct BlockDiagonal {
-    blocks: Vec<tenferro2::Tensor>,  // each block is dense
+    blocks: Vec<Tensor>,  // each block is dense
     // Logically represents a block-diagonal matrix
 }
 ```
 
 ### AD through structured types
 
-Differentiation operates at the tenferro2::Tensor level (dense).
+Differentiation operates at the `TracedTensor` level (dense).
 tensor4all-rs wraps and unwraps:
 
 ```
 Forward:
   DiagonalTensor.diag (1D Tensor)
+    → wrap as TracedTensor
     → einsum with hyper edge
-    → result (dense Tensor)
+    → result (TracedTensor)
 
 AD:
   differentiate/transpose operate on the dense einsum graph
   → no structural knowledge needed at the AD level
 ```
 
-The `Differentiable` / pytree trait (Appendix B of v2-ad-architecture.md)
-extracts the dense tensor leaves from structured types before entering
-the AD graph.
+tensor4all-rs extracts the dense Tensor leaves from structured types
+before entering the AD graph via TracedTensor.
 
 ---
 
 ## VI. Summary
 
-| Layer | Knows about structure? | Tensor type |
-|-------|----------------------|-------------|
-| tidu2 (AD engine) | No | generic `Operand` |
-| tenferro2 | No | `Tensor` (always dense) |
+| Layer | Knows about structure? | Types |
+|-------|----------------------|-------|
+| computegraph (graph engine) | No | generic `GraphOp` |
+| tidu (AD transforms) | No | generic `PrimitiveOp` |
+| tenferro | No | `Tensor` (dense), `TracedTensor` |
 | tensor4all-rs | **Yes** | `DiagonalTensor`, `BlockDiagonal`, etc. |
 
 | Operation | Without hyper edge | With hyper edge |
@@ -219,6 +217,6 @@ the AD graph.
 | diag(v) × A | scatter + matmul | einsum 2-input "i,ij->ij" |
 | Tr(A) | extract_diag + sum | einsum "ii->" |
 
-Structural types live in tensor4all-rs. tenferro2 provides dense
+Structural types live in tensor4all-rs. tenferro provides dense
 tensors + einsum with hyper edges. scatter/gather are available but
 rarely needed when einsum handles the structure.
