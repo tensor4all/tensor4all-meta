@@ -48,6 +48,7 @@ primitives except tenferro-rs.
 | tenferro-rs | [`tensor-design.md`](tensor-design.md) | Dense tensor principle, structural tensor information, einsum decomposition |
 | tenferro-rs | [`tensor-api-pseudocode.md`](tensor-api-pseudocode.md) | `TracedTensor` API, lazy evaluation, AD usage examples |
 | tenferro-rs | [`primitive-catalog.md`](primitive-catalog.md) | v2 core primitive vocabulary, backend-facing execution subsets, per-op definitions, canonical lowering |
+| tenferro-rs | [`tenferro-internal-design.md`](tenferro-internal-design.md) | Internal crate structure, `StdTensorOp` / `SemiringOp<T>` dual Op types, `SemiringOps` trait, einsum graph builder, backend dispatch, user extension points |
 ---
 
 ## Related Documents
