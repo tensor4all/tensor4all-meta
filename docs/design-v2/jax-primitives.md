@@ -10,21 +10,25 @@
 ## I. Purpose
 
 This document records the JAX primitives that are most relevant to tensor
-operations and AD design in v2.
+operations and AD design, and gives a short definition of what each primitive
+actually does.
 
 The source of truth here is the local checkout at:
 
 - `~/tensor4all/jax`
 
 This is intentionally **not** a catalog of every frontend helper in JAX.
-Instead, it is a catalog of the actual primitive layer that JAX uses beneath
-the public `jax.numpy` / `jax.lax` surface.
+It focuses on the primitive layer that sits below `jax.numpy` and `jax.lax`.
+
+Descriptions below are intentionally short. Exact abstract-eval rules,
+dimension-number attributes, and AD registrations should be checked in the
+source when needed.
 
 ---
 
 ## II. What Counts As A Primitive In JAX
 
-At the source level, the key markers are:
+At the source level, the main markers are:
 
 - `core.Primitive(...)`
 - `standard_primitive(...)`
@@ -38,7 +42,7 @@ And the AD-relevant registrations are attached separately via:
 - `ad.primitive_jvps[...] = ...`
 - `ad.primitive_transposes[...] = ...`
 
-So in JAX, a primitive is not just a name. It is a bundle of:
+So a JAX primitive is not just a name. It is a bundle of:
 
 - abstract evaluation / shape rules
 - batching rules
@@ -62,24 +66,18 @@ The main source files used for this note are:
 - `jax/_src/lax/control_flow/solves.py`
 - `jax/_src/lax/linalg.py`
 
-This note does **not** try to catalog hardware-specific auxiliary primitives in
-areas such as `pallas`, `cudnn`, or TPU/Mosaic lowering internals.
-
 ---
 
 ## IV. AD Helper Primitives
 
 From `jax/_src/ad_util.py`:
 
-- `add_any` (`add_jaxvals_p`)
-- `stop_gradient` (`stop_gradient_p`)
-- `zeros_like` (`zeros_like_p`)
-
-These are important because they show that JAX keeps some AD-facing helpers
-outside the tensor-kernel vocabulary itself.
-
-In other words, JAX does **not** force every AD concern to be expressed only in
-terms of pure tensor contraction / reshape primitives.
+- `add_any` (`add_jaxvals_p`): adds two tangent/cotangent values in AD space.
+  This is a generic accumulation helper, not a tensor kernel.
+- `stop_gradient` (`stop_gradient_p`): returns the input value unchanged but
+  blocks JVP / VJP propagation through it.
+- `zeros_like` (`zeros_like_p`): creates the zero tangent/cotangent
+  corresponding to an aval.
 
 ---
 
@@ -87,109 +85,119 @@ terms of pure tensor contraction / reshape primitives.
 
 ### Arithmetic and comparison
 
-- `neg_p`
-- `sign_p`
-- `abs_p`
-- `add_p`
-- `sub_p`
-- `mul_p`
-- `div_p`
-- `rem_p`
-- `max_p`
-- `min_p`
-- `clamp_p`
-- `eq_p`
-- `ne_p`
-- `ge_p`
-- `gt_p`
-- `le_p`
-- `lt_p`
-- `and_p`
-- `or_p`
-- `xor_p`
-- `not_p`
-- `shift_left_p`
-- `shift_right_arithmetic_p`
-- `shift_right_logical_p`
-- `population_count_p`
-- `clz_p`
+- `neg_p`: elementwise unary negation.
+- `sign_p`: elementwise sign extraction.
+- `abs_p`: elementwise absolute value / magnitude.
+- `add_p`: elementwise addition.
+- `sub_p`: elementwise subtraction.
+- `mul_p`: elementwise multiplication.
+- `div_p`: elementwise division.
+- `rem_p`: elementwise remainder / modulus.
+- `max_p`: elementwise maximum.
+- `min_p`: elementwise minimum.
+- `clamp_p`: elementwise clamp between lower and upper bounds.
+- `eq_p`: elementwise equality comparison.
+- `ne_p`: elementwise inequality comparison.
+- `ge_p`: elementwise greater-or-equal comparison.
+- `gt_p`: elementwise greater-than comparison.
+- `le_p`: elementwise less-or-equal comparison.
+- `lt_p`: elementwise less-than comparison.
+- `and_p`: elementwise logical / bitwise AND.
+- `or_p`: elementwise logical / bitwise OR.
+- `xor_p`: elementwise logical / bitwise XOR.
+- `not_p`: elementwise logical / bitwise NOT.
+- `shift_left_p`: elementwise bit shift to the left.
+- `shift_right_arithmetic_p`: elementwise sign-preserving right shift.
+- `shift_right_logical_p`: elementwise zero-filling right shift.
+- `population_count_p`: counts set bits in each integer element.
+- `clz_p`: counts leading zero bits in each integer element.
 
 ### Analytic and complex-valued math
 
-- `exp_p`
-- `exp2_p`
-- `log_p`
-- `expm1_p`
-- `log1p_p`
-- `tanh_p`
-- `logistic_p`
-- `sin_p`
-- `cos_p`
-- `tan_p`
-- `asin_p`
-- `acos_p`
-- `atan_p`
-- `atan2_p`
-- `sinh_p`
-- `cosh_p`
-- `asinh_p`
-- `acosh_p`
-- `atanh_p`
-- `sqrt_p`
-- `rsqrt_p`
-- `cbrt_p`
-- `square_p`
-- `pow_p`
-- `integer_pow_p`
-- `real_p`
-- `imag_p`
-- `complex_p`
-- `conj_p`
-- `is_finite_p`
+- `exp_p`: elementwise exponential.
+- `exp2_p`: elementwise base-2 exponential.
+- `log_p`: elementwise natural logarithm.
+- `expm1_p`: elementwise `exp(x) - 1`.
+- `log1p_p`: elementwise `log(1 + x)`.
+- `tanh_p`: elementwise hyperbolic tangent.
+- `logistic_p`: elementwise sigmoid / logistic function.
+- `sin_p`: elementwise sine.
+- `cos_p`: elementwise cosine.
+- `tan_p`: elementwise tangent.
+- `asin_p`: elementwise arcsine.
+- `acos_p`: elementwise arccosine.
+- `atan_p`: elementwise arctangent.
+- `atan2_p`: elementwise quadrant-aware arctangent of two inputs.
+- `sinh_p`: elementwise hyperbolic sine.
+- `cosh_p`: elementwise hyperbolic cosine.
+- `asinh_p`: elementwise inverse hyperbolic sine.
+- `acosh_p`: elementwise inverse hyperbolic cosine.
+- `atanh_p`: elementwise inverse hyperbolic tangent.
+- `sqrt_p`: elementwise square root.
+- `rsqrt_p`: elementwise reciprocal square root.
+- `cbrt_p`: elementwise cube root.
+- `square_p`: elementwise square.
+- `pow_p`: elementwise exponentiation with tensor exponent.
+- `integer_pow_p`: exponentiation by a fixed integer exponent.
+- `real_p`: extracts the real part of a complex tensor.
+- `imag_p`: extracts the imaginary part of a complex tensor.
+- `complex_p`: combines real and imaginary tensors into a complex tensor.
+- `conj_p`: elementwise complex conjugation.
+- `is_finite_p`: elementwise finiteness test.
 
 ### Tensor structure, contraction, and conversion
 
-- `dot_general_p`
-- `ragged_dot_general_p`
-- `broadcast_in_dim_p`
-- `reshape_p`
-- `transpose_p`
-- `rev_p`
-- `concatenate_p`
-- `pad_p`
-- `squeeze_p`
-- `tile_p`
-- `iota_p`
-- `select_n_p`
-- `convert_element_type_p`
-- `bitcast_convert_type_p`
-- `to_edtype_p`
-- `from_edtype_p`
+- `dot_general_p`: general tensor contraction with explicit batch and
+  contracting dimensions.
+- `ragged_dot_general_p`: ragged / grouped variant of generalized contraction.
+- `broadcast_in_dim_p`: explicit broadcast that maps input axes into chosen
+  output axes.
+- `reshape_p`: reshapes a tensor without changing element count.
+- `transpose_p`: permutes axes.
+- `rev_p`: reverses element order along selected axes.
+- `concatenate_p`: concatenates tensors along one axis.
+- `pad_p`: pads a tensor with a specified padding value and edge/interior
+  padding configuration.
+- `squeeze_p`: removes size-1 axes.
+- `tile_p`: repeats a tensor along one or more axes.
+- `iota_p`: creates an index ramp along a chosen axis.
+- `select_n_p`: N-way elementwise selection driven by a boolean or integer
+  selector.
+- `convert_element_type_p`: converts element dtype with value conversion.
+- `bitcast_convert_type_p`: reinterprets bits as another dtype without numeric
+  conversion.
+- `to_edtype_p`: converts a tensor into an extended-dtype representation.
+- `from_edtype_p`: converts an extended-dtype representation back to a regular
+  tensor dtype.
 
 ### Reductions and ordering
 
-- `reduce_p`
-- `reduce_sum_p`
-- `reduce_prod_p`
-- `reduce_max_p`
-- `reduce_min_p`
-- `reduce_or_p`
-- `reduce_and_p`
-- `reduce_xor_p`
-- `reduce_precision_p`
-- `sort_p`
-- `top_k_p`
+- `reduce_p`: generic reduction over one or more axes using a supplied reducer
+  computation.
+- `reduce_sum_p`: sum reduction over explicit axes.
+- `reduce_prod_p`: product reduction over explicit axes.
+- `reduce_max_p`: maximum reduction over explicit axes.
+- `reduce_min_p`: minimum reduction over explicit axes.
+- `reduce_or_p`: boolean / bitwise OR reduction.
+- `reduce_and_p`: boolean / bitwise AND reduction.
+- `reduce_xor_p`: boolean / bitwise XOR reduction.
+- `reduce_precision_p`: simulates reduced mantissa / exponent precision.
+- `sort_p`: sorts values, or tuples of values, along a chosen axis.
+- `top_k_p`: returns the top-`k` values and their indices.
 
 ### Miscellaneous tensor/runtime helpers in the same file
 
-- `composite_p`
-- `create_token_p`
-- `after_all_p`
-- `rng_uniform_p`
-- `rng_bit_generator_p`
-- `copy_p`
-- `tie_p`
-- `optimization_barrier_p`
+- `composite_p`: wraps a named composite operation that is defined via a higher
+  level decomposition.
+- `create_token_p`: creates an effect token.
+- `after_all_p`: joins multiple tokens to enforce effect ordering.
+- `rng_uniform_p`: generates random values from a uniform distribution.
+- `rng_bit_generator_p`: advances an RNG state and returns raw random bits.
+- `copy_p`: forces an explicit copy of a tensor value.
+- `tie_p`: ties values together to preserve a dependency in lowering /
+  scheduling.
+- `optimization_barrier_p`: prevents certain compiler optimizations across the
+  barrier.
 
 ---
 
@@ -197,31 +205,31 @@ terms of pure tensor contraction / reshape primitives.
 
 From `jax/_src/lax/slicing.py`:
 
-- `slice_p`
-- `dynamic_slice_p`
-- `dynamic_update_slice_p`
-- `gather_p`
-- `scatter_p`
-- `scatter_add_p`
-- `scatter_sub_p`
-- `scatter_mul_p`
-- `scatter_min_p`
-- `scatter_max_p`
+- `slice_p`: static slice with compile-time start / limit / stride.
+- `dynamic_slice_p`: slice with runtime start indices.
+- `dynamic_update_slice_p`: writes an update tensor into an operand at runtime
+  start indices.
+- `gather_p`: indexed read that gathers slices according to gather dimension
+  numbers.
+- `scatter_p`: indexed write/update according to scatter dimension numbers and
+  an update combiner.
+- `scatter_add_p`: indexed additive accumulation.
+- `scatter_sub_p`: indexed subtractive accumulation.
+- `scatter_mul_p`: indexed multiplicative accumulation.
+- `scatter_min_p`: indexed minimum accumulation.
+- `scatter_max_p`: indexed maximum accumulation.
 
 From `jax/_src/lax/windowed_reductions.py`:
 
-- `reduce_window_p`
-- `reduce_window_sum_p`
-- `reduce_window_max_p`
-- `reduce_window_min_p`
-- `select_and_scatter_p`
-- `select_and_scatter_add_p`
-- `select_and_gather_add_p`
-
-These matter because they show that JAX does not collapse everything into only
-`slice` / `gather` / `scatter` / generic `reduce`; it keeps some specialized
-window and AD-friendly primitives as first-class surface at the primitive
-layer.
+- `reduce_window_p`: generic sliding-window reduction.
+- `reduce_window_sum_p`: sliding-window sum.
+- `reduce_window_max_p`: sliding-window maximum.
+- `reduce_window_min_p`: sliding-window minimum.
+- `select_and_scatter_p`: windowed select followed by scatter of updates.
+- `select_and_scatter_add_p`: specialization of select-and-scatter with
+  additive accumulation.
+- `select_and_gather_add_p`: AD helper used by pooling-style transpose rules;
+  gathers selected window values and accumulates them additively.
 
 ---
 
@@ -231,23 +239,21 @@ From `jax/_src/lax/control_flow/conditionals.py`,
 `jax/_src/lax/control_flow/loops.py`, and
 `jax/_src/lax/control_flow/solves.py`:
 
-- `cond_p`
-- `scan_p`
-- `while_p`
-- `custom_linear_solve` (`linear_solve_p`)
-- `cumsum_p`
-- `cumlogsumexp_p`
-- `cumprod_p`
-- `cummax_p`
-- `cummin_p`
+- `cond_p`: branch between alternative jaxprs using a predicate or index.
+- `scan_p`: loop primitive with carried state and stacked outputs.
+- `while_p`: while-loop primitive with separate condition and body jaxprs.
+- `custom_linear_solve` (`linear_solve_p`): linear solve primitive with custom
+  forward and transpose semantics.
+- `cumsum_p`: cumulative sum along an axis.
+- `cumlogsumexp_p`: cumulative `logsumexp` along an axis.
+- `cumprod_p`: cumulative product along an axis.
+- `cummax_p`: cumulative maximum along an axis.
+- `cummin_p`: cumulative minimum along an axis.
 
-Also present as internal control-flow support:
+Also present as internal support:
 
-- `eval_jaxpr_p`
-- `platform_index_p`
-
-The important point for v2 is that JAX keeps control flow as dedicated
-primitives instead of forcing everything through a tensor-only core.
+- `eval_jaxpr_p`: executes an embedded jaxpr as a primitive call.
+- `platform_index_p`: exposes the current platform/device index to the jaxpr.
 
 ---
 
@@ -255,15 +261,12 @@ primitives instead of forcing everything through a tensor-only core.
 
 From `jax/_src/lax/convolution.py`:
 
-- `conv_general_dilated_p`
+- `conv_general_dilated_p`: general N-D convolution with explicit stride,
+  padding, dilation, feature-group, and dimension-number configuration.
 
 From `jax/_src/lax/fft.py`:
 
-- `fft_p`
-
-These are relevant because they show another JAX design choice: some structured
-ops remain explicit primitives rather than being lowered away into only
-`dot_general` plus reshapes.
+- `fft_p`: Fast Fourier Transform primitive with explicit FFT type and lengths.
 
 ---
 
@@ -271,83 +274,24 @@ ops remain explicit primitives rather than being lowered away into only
 
 From `jax/_src/lax/linalg.py`:
 
-- `cholesky_p`
-- `cholesky_update_p`
-- `eig_p`
-- `eigh_p`
-- `hessenberg_p`
-- `householder_product_p`
-- `ormqr_p`
-- `lu_p`
-- `lu_pivots_to_permutation_p`
-- `geqrf_p`
-- `geqp3_p`
-- `qr_p`
-- `schur_p`
-- `svd_p`
-- `symmetric_product_p`
-- `triangular_solve_p`
-- `tridiagonal_p`
-- `tridiagonal_solve_p`
-
-This is useful for v2 because it shows a clear split:
-
-- some tensor ops live in a relatively small contraction/shape core
-- structured matrix algorithms stay explicit and have their own AD rules
-
----
-
-## X. What JAX Suggests For v2
-
-### The JAX primitive layer is not identical to StableHLO
-
-Examples:
-
-- JAX uses `dot_general_p`, which is close to StableHLO
-- JAX uses `broadcast_in_dim_p`, `reshape_p`, and `transpose_p`, also close to
-  StableHLO
-- JAX uses `reduce_sum_p` as a named primitive, even though StableHLO also has
-  a more general `reduce`
-- JAX uses `select_n_p`, not just raw StableHLO-style `select`
-- JAX has AD helper primitives like `add_any`, `stop_gradient`, and
-  `zeros_like` which have no direct role as StableHLO tensor ops
-
-### The most v2-relevant JAX primitives are these
-
-If the goal is to study the JAX-style "core tensor vocabulary" that supports
-AD and tensor programming, the most relevant primitives are:
-
-- `add_p`
-- `mul_p`
-- `neg_p`
-- `dot_general_p`
-- `broadcast_in_dim_p`
-- `reshape_p`
-- `transpose_p`
-- `reduce_sum_p`
-- `select_n_p`
-- `convert_element_type_p`
-- `slice_p`
-- `dynamic_slice_p`
-- `gather_p`
-- `scatter_p`
-- `concatenate_p`
-- `pad_p`
-- `cond_p`
-- `scan_p`
-- `while_p`
-- `stop_gradient_p`
-
-That is a better starting point for v2 discussion than the entire JAX surface.
-
-### Design takeaway
-
-The JAX source suggests a useful separation:
-
-- a relatively small tensor/contraction/shape primitive layer
-- explicit control-flow primitives
-- explicit structured linalg primitives
-- a small set of AD helper primitives
-
-This is a strong argument against trying to force every concern into one flat
-"tensor primitive" list.
+- `cholesky_p`: Cholesky factorization of a Hermitian positive-definite matrix.
+- `cholesky_update_p`: rank-1 update / downdate of an existing Cholesky factor.
+- `eig_p`: general eigenvalue decomposition.
+- `eigh_p`: eigenvalue decomposition specialized for Hermitian / symmetric
+  matrices.
+- `hessenberg_p`: Hessenberg reduction of a square matrix.
+- `householder_product_p`: reconstructs an orthogonal / unitary product from
+  Householder reflectors.
+- `ormqr_p`: multiplies by the `Q` factor represented by Householder data.
+- `lu_p`: LU factorization with pivot information.
+- `lu_pivots_to_permutation_p`: converts LU pivot indices into an explicit
+  permutation.
+- `geqrf_p`: QR factorization in LAPACK-style reflector form.
+- `geqp3_p`: pivoted QR factorization.
+- `qr_p`: QR factorization returning explicit `Q` and `R`.
+- `schur_p`: Schur decomposition.
+- `svd_p`: singular value decomposition.
+- `symmetric_product_p`: symmetric/Hermitian matrix product helper.
+- `triangular_solve_p`: solve a linear system with a triangular matrix.
+- `tridiagonal_p`: decomposition / helper around tridiagonal structure.
+- `tridiagonal_solve_p`: solve a tridiagonal linear system.
