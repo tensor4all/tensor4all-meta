@@ -9,11 +9,69 @@
 ## Design Decisions
 
 - All operations are **lazy** (deferred). No eager mode.
-- `Tensor` is a single type (not an enum). Internally holds a graph node reference.
-- `eval()` triggers `materialize_merge -> compile (cached) -> execute`.
-- `Engine` holds execution context + compilation cache + extension caches.
-- `DynTensor` is the concrete data type. Users interact with it only at
+- `TracedTensor` is the user-facing type that holds shape/dtype, graph info,
+  and optionally data. All operations return `TracedTensor`.
+- `Tensor` is the concrete data type (shape + buffer). Users see it at
   input/output boundaries.
+- `eval()` triggers `materialize_merge -> compile (cached) -> execute`,
+  filling in the data.
+- `Engine` holds execution context + compilation cache + extension caches.
+
+---
+
+## Type Definitions
+
+```rust
+// Concrete data — the natural "tensor"
+struct Tensor {
+    buffer: DataBuffer,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    dtype: DType,
+}
+
+// Graph-aware wrapper — tracks computation for AD and compilation
+struct TracedTensor {
+    shape: Vec<usize>,
+    dtype: DType,
+    fragment: Arc<Fragment<TensorOp>>,
+    val: LocalValId,
+    data: Option<Tensor>,  // Some for inputs / eval'd results, None for deferred
+}
+```
+
+- `TracedTensor::from(Tensor)` creates a Fragment input node with `data = Some(...)`.
+- Operations (einsum, exp, ...) create new Fragments and return
+  `TracedTensor` with `data = None`.
+- `eval()` fills in `data` and returns `&Tensor`.
+
+### Graph origin
+
+Every graph starts from `TracedTensor::from`:
+
+```rust
+let x = TracedTensor::from(Tensor::new(&[1.0, 2.0], &[2]));
+
+// Internally:
+// fragment = Fragment { vals: [Input("x_0")], ops: [], ... }
+// val = 0
+// data = Some(Tensor([1.0, 2.0]))
+```
+
+Operations extend the graph:
+
+```rust
+let y = x.exp();
+
+// Internally:
+// fragment = Fragment {
+//     vals: [Derived { op=Exp, inputs=[Input("x_0")] }],
+//     ops: [Exp(External(Input("x_0")))],
+//     parents: [x.fragment],
+// }
+// val = 0
+// data = None  (not yet computed)
+```
 
 ---
 
@@ -32,20 +90,20 @@ let mut engine = Engine::new(CudaContext::new(device_id));
 ## Basic Operations
 
 ```rust
-// Input: DynTensor (concrete data) → Tensor (graph node)
-let x = Tensor::input("x", DynTensor::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]));
-let w = Tensor::input("w", DynTensor::from_data(&[5.0, 6.0, 7.0, 8.0], &[2, 2]));
+let x = TracedTensor::from(Tensor::new(&[1.0, 2.0, 3.0, 4.0], &[2, 2]));
+let w = TracedTensor::from(Tensor::new(&[5.0, 6.0, 7.0, 8.0], &[2, 2]));
 
 // All operations build graph, nothing is computed yet
-let y = einsum(&[&x, &w], "ij,jk->ik");
-let z = y.exp();
-let loss = z.sum();
+let y = einsum(&[&x, &w], "ij,jk->ik");   // data = None
+let z = y.exp();                            // data = None
+let loss = z.sum();                         // data = None
 
-// eval triggers compilation + execution, returns DynTensor
-let loss_val: DynTensor = loss.eval(&mut engine);
+// eval triggers compilation + execution
+let loss_val: &Tensor = loss.eval(&mut engine);
+// loss.data is now Some(...)
 
-// Multiple outputs in one eval
-let (z_val, loss_val): (DynTensor, DynTensor) = eval_all(&mut engine, &[&z, &loss]);
+// Already eval'd tensors return data immediately
+let loss_val2: &Tensor = loss.eval(&mut engine);  // no recomputation
 ```
 
 ---
@@ -53,16 +111,16 @@ let (z_val, loss_val): (DynTensor, DynTensor) = eval_all(&mut engine, &[&z, &los
 ## Einsum (N-ary)
 
 ```rust
-let a = Tensor::input("a", a_data);  // [2, 3]
-let b = Tensor::input("b", b_data);  // [3, 4]
-let c = Tensor::input("c", c_data);  // [4, 5]
+let a = TracedTensor::from(Tensor::new(&a_raw, &[2, 3]));
+let b = TracedTensor::from(Tensor::new(&b_raw, &[3, 4]));
+let c = TracedTensor::from(Tensor::new(&c_raw, &[4, 5]));
 
 // N-ary einsum: contraction path optimization happens inside
 let result = einsum(&[&a, &b, &c], "ij,jk,kl->il");
 
-let result_val: DynTensor = result.eval(&mut engine);
+let result_val: &Tensor = result.eval(&mut engine);
 // First call:  path optimization + Fragment build + compile + eval
-// Second call (same shapes): all caches hit → eval only
+// Second call (same graph structure): compile cache hit → eval only
 ```
 
 ---
@@ -70,8 +128,8 @@ let result_val: DynTensor = result.eval(&mut engine);
 ## Reverse-Mode AD (grad / VJP)
 
 ```rust
-let x = Tensor::input("x", x_data);  // [3]
-let a = Tensor::input("a", a_data);  // [3]
+let x = TracedTensor::from(Tensor::new(&x_raw, &[3]));
+let a = TracedTensor::from(Tensor::new(&a_raw, &[3]));
 
 // Forward computation (lazy)
 let ax = einsum(&[&a, &x], "i,i->");  // dot product
@@ -81,8 +139,8 @@ let y = ax.exp();                      // scalar output
 let grad_x = y.grad(&x);
 
 // eval
-let y_val: DynTensor = y.eval(&mut engine);
-let grad_val: DynTensor = grad_x.eval(&mut engine);
+let y_val: &Tensor = y.eval(&mut engine);
+let grad_val: &Tensor = grad_x.eval(&mut engine);
 // grad_val = a * exp(a . x)
 ```
 
@@ -91,16 +149,16 @@ let grad_val: DynTensor = grad_x.eval(&mut engine);
 ## Forward-Mode AD (JVP)
 
 ```rust
-let x = Tensor::input("x", x_data);
-let a = Tensor::input("a", a_data);
+let x = TracedTensor::from(Tensor::new(&x_raw, &[3]));
+let a = TracedTensor::from(Tensor::new(&a_raw, &[3]));
 
 let y = einsum(&[&a, &x], "i,i->").exp();
 
 // JVP with tangent vector
-let t_x = Tensor::input("t_x", tangent_data);
+let t_x = TracedTensor::from(Tensor::new(&tangent_raw, &[3]));
 let dy = y.jvp(&x, &t_x);  // differentiate only (no transpose)
 
-let dy_val: DynTensor = dy.eval(&mut engine);
+let dy_val: &Tensor = dy.eval(&mut engine);
 ```
 
 ---
@@ -108,17 +166,17 @@ let dy_val: DynTensor = dy.eval(&mut engine);
 ## Hessian-Vector Product (HVP)
 
 ```rust
-let x = Tensor::input("x", x_data);
-let a = Tensor::input("a", a_data);
+let x = TracedTensor::from(Tensor::new(&x_raw, &[3]));
+let a = TracedTensor::from(Tensor::new(&a_raw, &[3]));
 
 let y = einsum(&[&a, &x], "i,i->").exp();
 
 // Forward-over-reverse: jvp(grad(f))
-let grad_x = y.grad(&x);                 // differentiate + transpose
-let t_x = Tensor::input("t_x", tangent_data);
-let hvp = grad_x.jvp(&x, &t_x);         // differentiate again
+let grad_x = y.grad(&x);                                      // differentiate + transpose
+let t_x = TracedTensor::from(Tensor::new(&tangent_raw, &[3]));
+let hvp = grad_x.jvp(&x, &t_x);                              // differentiate again
 
-let hvp_val: DynTensor = hvp.eval(&mut engine);
+let hvp_val: &Tensor = hvp.eval(&mut engine);
 ```
 
 ---
@@ -126,24 +184,24 @@ let hvp_val: DynTensor = hvp.eval(&mut engine);
 ## Reusable Functions
 
 ```rust
-// Define model as a normal function over Tensor
-fn my_model(x: &Tensor, w: &Tensor) -> Tensor {
+// Define model as a normal function over TracedTensor
+fn my_model(x: &TracedTensor, w: &TracedTensor) -> TracedTensor {
     einsum(&[x, w], "ij,jk->ik").exp().sum()
 }
 
 // Evaluate
-let x = Tensor::input("x", x_data);
-let w = Tensor::input("w", w_data);
+let x = TracedTensor::from(Tensor::new(&x_raw, &[2, 2]));
+let w = TracedTensor::from(Tensor::new(&w_raw, &[2, 2]));
 let loss = my_model(&x, &w);
-let loss_val = loss.eval(&mut engine);
+let loss_val: &Tensor = loss.eval(&mut engine);
 
 // Differentiate the same function
 let grad_w = my_model(&x, &w).grad(&w);
-let grad_val = grad_w.eval(&mut engine);
+let grad_val: &Tensor = grad_w.eval(&mut engine);
 
 // Different data, same graph structure → cache hit
-let x2 = Tensor::input("x", x_data2);
-let w2 = Tensor::input("w", w_data2);
+let x2 = TracedTensor::from(Tensor::new(&x_raw2, &[2, 2]));
+let w2 = TracedTensor::from(Tensor::new(&w_raw2, &[2, 2]));
 let loss2_val = my_model(&x2, &w2).eval(&mut engine);  // cache hit
 ```
 
@@ -152,38 +210,41 @@ let loss2_val = my_model(&x2, &w2).eval(&mut engine);  // cache hit
 ## Compilation Cache Behavior
 
 ```rust
-let x = Tensor::input("x", x_data_2x2);
-let w = Tensor::input("w", w_data_2x2);
+let x = TracedTensor::from(Tensor::new(&x_raw, &[2, 2]));
+let w = TracedTensor::from(Tensor::new(&w_raw, &[2, 2]));
 let y = my_model(&x, &w);
 let _ = y.eval(&mut engine);  // compile + cache
 
 // Same graph structure, different data → cache hit
-let x2 = Tensor::input("x", x_data2_2x2);
-let w2 = Tensor::input("w", w_data2_2x2);
+let x2 = TracedTensor::from(Tensor::new(&x_raw2, &[2, 2]));
+let w2 = TracedTensor::from(Tensor::new(&w_raw2, &[2, 2]));
 let _ = my_model(&x2, &w2).eval(&mut engine);  // cache hit
 
 // Same subscripts but different shapes may produce different
 // contraction paths → different graph structure → recompile
-let x3 = Tensor::input("x", x_data_100x100);
-let w3 = Tensor::input("w", w_data_100x100);
+let x3 = TracedTensor::from(Tensor::new(&x_raw3, &[100, 100]));
+let w3 = TracedTensor::from(Tensor::new(&w_raw3, &[100, 100]));
 let _ = my_model(&x3, &w3).eval(&mut engine);  // may recompile
 ```
+
+Cache key is graph structure (`GlobalValKey`) only. Shape-dependent ops
+(e.g. `Reshape(target)`) encode shape in the op itself, so different shapes
+produce different `GlobalValKey`s automatically.
 
 ---
 
 ## Tropical Algebra (No AD)
 
 ```rust
-// Tropical semiring: same API, just different algebra
 let engine = Engine::new(CpuContext::new());
 
-let a = Tensor::input("a", tropical_data_a);
-let b = Tensor::input("b", tropical_data_b);
-let c = Tensor::input("c", tropical_data_c);
+let a = TracedTensor::from(Tensor::new(&tropical_a, &[3, 4]));
+let b = TracedTensor::from(Tensor::new(&tropical_b, &[4, 5]));
+let c = TracedTensor::from(Tensor::new(&tropical_c, &[5, 6]));
 
 // N-ary einsum works over tropical semiring
 let result = einsum_tropical(&[&a, &b, &c], "ij,jk,kl->il");
-let result_val = result.eval(&mut engine);
+let result_val: &Tensor = result.eval(&mut engine);
 
 // No AD available for tropical — grad() would return compile-time error
 // or runtime error depending on design choice
@@ -194,7 +255,7 @@ let result_val = result.eval(&mut engine);
 ## SVD with AD
 
 ```rust
-let a = Tensor::input("a", a_data);  // [m, n]
+let a = TracedTensor::from(Tensor::new(&a_raw, &[4, 3]));
 
 // SVD is a primitive with linearize + transpose_rule
 let (u, s, vt) = svd(&a);
@@ -205,7 +266,7 @@ let loss = truncated.sum();
 
 // AD through SVD
 let grad_a = loss.grad(&a);
-let grad_val = grad_a.eval(&mut engine);
+let grad_val: &Tensor = grad_a.eval(&mut engine);
 ```
 
 ---
@@ -213,10 +274,15 @@ let grad_val = grad_a.eval(&mut engine);
 ## Summary of Types
 
 ```text
-DynTensor   Concrete data (input/output boundary only)
-Tensor      Graph node reference (all operations return this)
-Engine      Execution context + compilation cache + extension caches
-Trace       (removed — Tensor::input replaces trace.input)
+Tensor         Concrete data (shape + buffer + strides + dtype)
+               The natural "tensor" — what you think of as a tensor
+
+TracedTensor   Graph-aware wrapper (shape + dtype + graph info + Option<Tensor>)
+               All lazy operations return this
+               eval() fills in data and returns &Tensor
+
+Engine         Execution context + compilation cache + extension caches
+               Long-lived, reused across all operations
 ```
 
 ---
@@ -224,21 +290,25 @@ Trace       (removed — Tensor::input replaces trace.input)
 ## Internal Flow
 
 ```text
-Tensor::input(name, DynTensor)
-    → creates Fragment input node, returns Tensor
+TracedTensor::from(Tensor::new(raw, shape))
+    → creates Fragment with input node
+    → TracedTensor { shape, fragment, val, data: Some(Tensor) }
 
 einsum(&[&a, &b], "ij,jk->ik")
     → path optimization (EinsumCache in Engine)
     → builds Fragment: Transpose → Reshape → DotGeneral → Reshape → Transpose
-    → returns Tensor
+    → TracedTensor { shape=[inferred], fragment, val, data: None }
 
 y.grad(&x)
     → differentiate(graph, wrt=x) → transpose(linear_fragment)
-    → returns Tensor (still lazy)
+    → TracedTensor { shape=x.shape, fragment, val, data: None }
 
 y.eval(&mut engine)
+    → if data is Some → return &Tensor immediately
     → resolve (gather reachable fragments)
     → materialize_merge (flatten + CSE)
     → engine.cache.get_or_compile (cache lookup or compile to SSA)
-    → compiled.eval(ctx, inputs) → DynTensor
+    → compiled.eval(ctx, inputs)
+    → fills y.data = Some(result)
+    → returns &Tensor
 ```

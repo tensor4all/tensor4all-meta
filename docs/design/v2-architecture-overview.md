@@ -100,29 +100,33 @@ trait GraphOp {
 This allows backends to inject execution state (CPU context, GPU context)
 without constraining the graph engine.
 
-### User-facing Tensor is an enum
+### All operations are lazy, two tensor types
 
-tenferro-rs exposes a single `Tensor` type that supports both eager and
-traced execution:
+tenferro-rs exposes two types:
 
 ```rust
-enum Tensor {
-    Eager(DynTensor),          // immediate data
-    Traced(TracedDynTensor),   // graph node reference
+// Concrete data — the natural "tensor"
+struct Tensor { buffer, shape, strides, dtype }
+
+// Graph-aware wrapper — tracks computation for AD and compilation
+struct TracedTensor {
+    shape: Vec<usize>,
+    dtype: DType,
+    fragment: Arc<Fragment<TensorOp>>,  // graph info (always present)
+    val: LocalValId,
+    data: Option<Tensor>,               // Some for inputs / eval'd results
 }
 ```
 
-- **Eager**: operations execute immediately. For debugging, tropical algebra,
-  or any case where AD/compilation is not needed.
-- **Traced**: operations build a computation graph. Required for AD and
-  compilation caching. `eval()` triggers compile + execute and returns
-  `DynTensor`.
+- `TracedTensor::from(Tensor)` creates a Fragment input node with `data = Some(...)`.
+- Operations (einsum, exp, ...) build graph, return `TracedTensor` with `data = None`.
+- `eval()` triggers compile (cached) + execute, fills in `data`, returns `&Tensor`.
+- Same function works for plain computation and AD — no mode switching.
 
-When eager and traced tensors are mixed in an operation, the eager side is
-consumed as a constant node in the graph (result is traced).
-
-`trace.input()` consumes a `DynTensor` (move semantics, no implicit copy).
+`TracedTensor::from()` consumes the `Tensor` (move semantics, no implicit copy).
 Clone explicitly if the original is still needed.
+
+See `v2-tensor-api-pseudocode.md` for full usage examples.
 
 ---
 
