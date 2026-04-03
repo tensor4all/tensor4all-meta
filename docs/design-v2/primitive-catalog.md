@@ -3,7 +3,7 @@
 **Date:** 2026-04-03
 **Status:** Draft
 **Parent:** `README.md`
-**Related:** `backend-architecture.md`, `tensor-design.md`
+**Related:** `backend-architecture.md`, `tensor-design.md`, `stablehlo-primitives.md`, `jax-primitives.md`
 
 ---
 
@@ -143,14 +143,20 @@ mathematical minimum needed to describe einsum semantics.
 
 ### Semiring fast-path extensions
 
+Restrict this subset to the fast paths that are already present in the current
+tenferro design:
+
+- `Contract`
+- `ElementwiseBinary { Add, Mul }`
+
 These ops are not required for correctness, but they can avoid lowering all the
 way to `BatchedGemm` + `ReduceAdd` in common cases.
 
 | Primitive | Role |
 |-----------|------|
 | `Contract` | direct binary einsum/contraction fast path |
-| `ElementwiseMul` | fast path for Hadamard-style products |
-| `ElementwiseAdd` | fast path for semiring accumulation / fused accumulation patterns |
+| `ElementwiseBinary { Mul }` | fast path for Hadamard-style products |
+| `ElementwiseBinary { Add }` | fast path for semiring accumulation / fused accumulation patterns |
 
 ---
 
@@ -221,6 +227,8 @@ semirings such as tropical algebra.
 
 This section should be kept as close as practical to the official StableHLO op
 set, so that tenferro's canonical graph primitives lower cleanly to StableHLO.
+See `stablehlo-primitives.md` for the StableHLO-facing reference and
+`jax-primitives.md` for the JAX-side reference point.
 
 ### Elementwise arithmetic, comparison, and selection
 
@@ -319,6 +327,8 @@ StableHLO-style name and semantics:
 The goal is not to copy StableHLO mechanically. The goal is to ensure that the
 `Standard arithmetic only` part of tenferro's graph vocabulary has an obvious,
 low-friction lowering path to StableHLO.
+
+See also `stablehlo-primitives.md` and `jax-primitives.md`.
 
 ---
 

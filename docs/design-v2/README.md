@@ -48,7 +48,6 @@ primitives except tenferro-rs.
 | tenferro-rs | [`tensor-design.md`](tensor-design.md) | Tensor type, dense-only principle, einsum hyper edges |
 | tenferro-rs | [`tensor-api-pseudocode.md`](tensor-api-pseudocode.md) | TracedTensor API, lazy evaluation, AD examples |
 | tenferro-rs | [`primitive-catalog.md`](primitive-catalog.md) | Source of truth for the v2 primitive inventory, per-op definitions, surface-to-primitive lowering |
-
 ---
 
 ## Related Documents
@@ -58,6 +57,8 @@ primitives except tenferro-rs.
 | [`ad-architecture.md`](ad-architecture.md) | Detailed AD theory, examples (scalar + vector), golden tests |
 | [`primitive-catalog.md`](primitive-catalog.md) | Concrete op list and definitions for readers new to the stack |
 | [`backend-architecture.md`](backend-architecture.md) | Backend-specific details |
+| [`stablehlo-primitives.md`](stablehlo-primitives.md) | Full StableHLO op inventory plus deprecated and legacy names to avoid building around |
+| [`jax-primitives.md`](jax-primitives.md) | JAX primitive inventory relevant to tensor ops, control flow, linalg, and AD |
 
 ---
 

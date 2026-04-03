@@ -3,7 +3,7 @@
 **Date:** 2026-04-02
 **Status:** Draft
 **Repos:** tenferro-rs
-**Related:** `ad-architecture.md`, `primitive-catalog.md`
+**Related:** `ad-architecture.md`, `primitive-catalog.md`, `stablehlo-primitives.md`, `jax-primitives.md`
 
 ---
 
@@ -85,6 +85,12 @@ For exact per-op definitions, shape contracts, and frontend aliases, see
 
 `primitive-catalog.md` is the source of truth for what tenferro v2 is expected
 to implement.
+
+For StableHLO-side naming and the full current StableHLO op inventory, see
+[`stablehlo-primitives.md`](stablehlo-primitives.md).
+
+For a reference point on how JAX organizes tensor, control-flow, linalg, and
+AD helper primitives, see [`jax-primitives.md`](jax-primitives.md).
 
 Important distinction:
 
