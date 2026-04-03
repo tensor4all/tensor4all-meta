@@ -24,7 +24,7 @@ readability, this document separates them explicitly:
 | Layer | Example | Meaning |
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
-| Graph primitive | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `TensorOp` nodes in a `Fragment` |
+| Graph primitive | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Fragment` |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, StableHLO op | how a primitive is executed |
 
 This document uses **two orthogonal classifications**:
@@ -162,7 +162,7 @@ way to `BatchedGemm` + `ReduceSum` in common cases.
 ## IV. Canonical Graph Primitive Vocabulary
 
 This section is about the graph-level vocabulary that `computegraph-rs`,
-`chainrules-rs`, `tidu-rs`, and tenferro's `TensorOp` layer talk about.
+`chainrules-rs`, `tidu-rs`, and tenferro's `StdTensorOp` layer talk about.
 
 ### AD-closed graph core
 

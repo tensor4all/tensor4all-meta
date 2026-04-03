@@ -29,7 +29,7 @@ tidu-rs            AD graph transforms
     ↓              (differentiate, transpose — generic over PrimitiveOp)
     ↓
 tenferro-rs        Concrete tensor primitives + backends
-                   (DynTensor, StableHLO lowering, CPU/GPU dispatch)
+                   (Tensor, StableHLO lowering, CPU/GPU dispatch)
 ```
 
 Each layer depends only on the layers above it. No layer references specific
@@ -140,16 +140,19 @@ without constraining the graph engine.
 tenferro-rs exposes two types:
 
 ```rust
-// Concrete data — the natural "tensor"
-struct Tensor { buffer, shape, strides, dtype }
+// Typed tensor (internal)
+struct TensorData<T: Scalar> { buffer: Vec<T>, shape, strides }
+
+// Type-erased tensor (user-facing)
+enum Tensor { F32(TensorData<f32>), F64(...), C32(...), C64(...) }
 
 // Graph-aware wrapper — tracks computation for AD and compilation
 struct TracedTensor {
     shape: Vec<usize>,
     dtype: DType,
-    fragment: Arc<Fragment<TensorOp>>,  // graph info (always present)
+    fragment: Arc<Fragment<StdTensorOp>>,  // graph info (always present)
     val: LocalValId,
-    data: Option<Tensor>,               // Some for inputs / eval'd results
+    data: Option<Tensor>,                  // Some for inputs / eval'd results
 }
 ```
 
@@ -245,8 +248,8 @@ Each step should be independently testable before proceeding to the next.
 
 ### Phase 2: Tensor primitives
 
-- `TensorOp` with full primitive set
-- `DynTensor` implementing `Operand`
+- `StdTensorOp` with full primitive set
+- `Tensor` (type-erased enum) implementing `Operand`
 - Vector and reduction transpose rules
 - Batched JVP via tensor-valued tangent inputs
 

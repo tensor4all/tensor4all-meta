@@ -29,13 +29,13 @@ are replaced by the graph + fragment model:
 |---|---|---|
 | `internal/ad-core` | deleted | Fragment replaces tape |
 | `internal/ad-ops` | → `tenferro-ops` PrimitiveOp impl | AD rules live on TensorOp |
-| `internal/ad-linalg` | → `tenferro-linalg` PrimitiveOp impl | Same |
+| `internal/ad-linalg` | → `tenferro-ops` PrimitiveOp impl | AD rules in ops/ad/linalg.rs |
 | `internal/ad-surface` | → tidu-rs `differentiate`/`transpose` | External crate |
 | `internal/frontend-core` | → `tenferro` TracedTensor | Lazy, not eager |
 | `internal/runtime` | → `tenferro` Engine | |
 | `tenferro-dynamic-compute` | deleted | Always graph |
 | `tenferro-tensor-compute` | → `tenferro-ops` | |
-| `tenferro-linalg-prims` | → `tenferro-linalg` | No need to separate |
+| `tenferro-linalg-prims` | → `tenferro-ops` | No need to separate |
 | `tenferro-capi` | deferred | Phase 4+ |
 | `extension/*` | deferred | |
 
@@ -48,10 +48,10 @@ are replaced by the graph + fragment model:
 | `tenferro-tensor` | `tenferro-tensor` | Simplified |
 | `tenferro-prims` | `tenferro-ops` | Rewritten: single TensorOp enum |
 | `tenferro-einsum` | `tenferro-einsum` | Rewritten: graph builder |
-| `tenferro-linalg` | `tenferro-linalg` | AD rules → PrimitiveOp impl |
+| `tenferro-linalg` | → `tenferro-ops` + `tenferro` | AD rules → tenferro-ops, LAPACK kernels → tenferro backend |
 | `tenferro` (facade) | `tenferro` | TracedTensor, Engine, backends |
 
-**29 crates → 7 crates** (plus 3 external: computegraph-rs, chainrules-rs,
+**29 crates → 6 crates** (plus 3 external: computegraph-rs, chainrules-rs,
 tidu-rs).
 
 ---
@@ -69,7 +69,6 @@ tenferro-ops ─────── computegraph-rs (GraphOp, Fragment)
     |                 chainrules-rs   (PrimitiveOp)
     |
     ├── tenferro-einsum (SemiringOps → Fragment construction)
-    ├── tenferro-linalg (linalg TensorOp + PrimitiveOp impls)
     |
 tenferro ──────────── tidu-rs (differentiate, transpose)
     (TracedTensor, Engine, backends)
@@ -81,7 +80,7 @@ tenferro ──────────── tidu-rs (differentiate, transpose)
 
 The fundamental design constraint is that `GraphOp::Operand` is an associated
 type, so a single Op type can only serve one `Operand` type. Since standard
-algebra (`DynTensor`) and custom algebras (`TropicalTensor`, etc.) have
+algebra (`Tensor`) and custom algebras (`TropicalTensor`, etc.) have
 different `Operand` types, tenferro provides two Op types:
 
 ### StdTensorOp — standard algebra, full vocabulary, AD-capable
@@ -109,12 +108,12 @@ enum StdTensorOp {
     ReduceMax { axes: Vec<usize> },
     ReduceMin { axes: Vec<usize> },
 
-    // Linalg (re-exported from tenferro-linalg)
+    // Linalg (AD rules in ops/ad/linalg.rs, execution via custom_call)
     Svd, Qr, Cholesky, Eigh, Solve,
 }
 
 impl GraphOp for StdTensorOp {
-    type Operand = DynTensor;       // f32, f64, Complex<f32>, Complex<f64>
+    type Operand = Tensor;       // f32, f64, Complex<f32>, Complex<f64>
     type Context = CpuContext;      // default backend (faer/BLAS)
     type InputKey = TensorInputKey;
     // ...
@@ -491,11 +490,11 @@ Why all through StableHLO:
 ```rust
 struct FaerBackend {
     ctx: CpuContext,
-    custom_calls: HashMap<String, Box<dyn CustomCallKernel<DynTensor>>>,
+    custom_calls: HashMap<String, Box<dyn CustomCallKernel<Tensor>>>,
 }
 
 impl Backend<StdTensorOp> for FaerBackend {
-    type Tensor = DynTensor;
+    type Tensor = Tensor;
     fn eval_program(&mut self, prog, inputs) {
         let hlo = lower_to_stablehlo(prog);
         for inst in &hlo.instructions {
@@ -737,8 +736,12 @@ constraints.
 
 ### tenferro-tensor
 
-Simplified from v1. `Tensor`, `DType`, `Buffer`. No AD-related code.
-`impl Operand for DynTensor`.
+Simplified from v1. No AD-related code.
+
+- `TensorData<T: Scalar>` — generic typed tensor (buffer, shape, strides)
+- `Tensor` — type-erased enum over `TensorData<f32/f64/c32/c64>`
+- `DType` — scalar type discriminator
+- `impl Operand for Tensor`
 
 ### tenferro-ops
 
@@ -764,17 +767,6 @@ Graph builder for N-ary einsum:
 - `build_einsum_fragment<Op: SemiringOps>` (algebra-agnostic)
 
 Depends on: computegraph-rs, tenferro-ops.
-
-### tenferro-linalg
-
-Linalg primitives as `StdTensorOp` variants:
-
-- SVD, QR, Cholesky, Eigh, Solve
-- `PrimitiveOp` implementations (linearize + transpose_rule)
-- Backend kernels (LAPACK, cuSOLVER)
-- `custom_call` lowering support
-
-Depends on: computegraph-rs, chainrules-rs, tenferro-ops, tenferro-tensor.
 
 ### tenferro
 
@@ -814,13 +806,13 @@ Depends on: all of the above + tidu-rs.
 
 - tenferro-ops: full StdTensorOp (DotGeneral, ReduceSum, BroadcastInDim, ...)
 - tenferro-ops: SemiringOp\<T\>, SemiringOps trait
-- tenferro-tensor: Tensor, DynTensor, impl Operand
+- tenferro-tensor: Tensor, DType, impl Operand
 - tenferro-einsum: contraction path + Fragment construction
 - Tests: vector AD examples, einsum correctness
 
 ### Phase 3: Linalg + backends
 
-- tenferro-linalg: SVD, QR, Cholesky with PrimitiveOp impls
+- tenferro-ops: SVD, QR, Cholesky PrimitiveOp impls (in ad/linalg.rs)
 - tenferro: StableHLO lowering, XLA backend
 - tenferro: CPU backend with faer/BLAS
 - Tests: linalg AD, StableHLO round-trip

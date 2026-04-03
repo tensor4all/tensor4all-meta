@@ -34,12 +34,19 @@
 ## Type Definitions
 
 ```rust
-// Concrete data — the natural "tensor"
-struct Tensor {
-    buffer: DataBuffer,
+// Typed tensor (internal)
+struct TensorData<T: Scalar> {
+    buffer: Vec<T>,
     shape: Vec<usize>,
     strides: Vec<isize>,
-    dtype: DType,
+}
+
+// Type-erased tensor (user-facing)
+enum Tensor {
+    F32(TensorData<f32>),
+    F64(TensorData<f64>),
+    C32(TensorData<Complex<f32>>),
+    C64(TensorData<Complex<f64>>),
 }
 
 // Graph-aware wrapper — tracks computation for AD and compilation

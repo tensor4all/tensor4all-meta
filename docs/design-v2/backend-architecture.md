@@ -77,7 +77,7 @@ tensor vocabulary, dispatched directly to custom kernels.
 
 ## II. Primitive Vocabulary
 
-This section summarizes the concrete `TensorOp` vocabulary that tenferro is
+This section summarizes the concrete `StdTensorOp` vocabulary that tenferro is
 expected to lower and execute.
 
 For exact per-op definitions, shape contracts, and frontend aliases, see
@@ -242,13 +242,13 @@ Each `Instruction<Op>` in `CompiledProgram` maps to exactly one StableHLO op.
 No multi-op lowering, no pattern matching. This keeps lowering trivial.
 
 ```rust
-fn lower_instruction(inst: &Instruction<TensorOp>) -> StableHloOp {
+fn lower_instruction(inst: &Instruction<StdTensorOp>) -> StableHloOp {
     match &inst.op {
-        TensorOp::Add => stablehlo::add(inst.inputs, inst.outputs),
-        TensorOp::Mul => stablehlo::multiply(inst.inputs, inst.outputs),
-        TensorOp::Exp => stablehlo::exponential(inst.inputs, inst.outputs),
-        TensorOp::DotGeneral(config) => stablehlo::dot_general(config, ...),
-        TensorOp::SVD => stablehlo::custom_call("lapack_gesvd", ...),
+        StdTensorOp::Add => stablehlo::add(inst.inputs, inst.outputs),
+        StdTensorOp::Mul => stablehlo::multiply(inst.inputs, inst.outputs),
+        StdTensorOp::Exp => stablehlo::exponential(inst.inputs, inst.outputs),
+        StdTensorOp::DotGeneral(config) => stablehlo::dot_general(config, ...),
+        StdTensorOp::SVD => stablehlo::custom_call("lapack_gesvd", ...),
         // ...
     }
 }
@@ -611,15 +611,21 @@ IREE is officially replacing XLA's runtime (OpenXLA project). When mature:
 
 ### Tensor (concrete data type)
 
-`Tensor` is a concrete data struct holding a buffer, shape, strides, and dtype.
-It is the runtime representation used by backends for actual computation.
+`Tensor` is the user-facing type-erased tensor. Internally it is an enum
+over `TensorData<T>` for each supported scalar type.
 
 ```rust
-struct Tensor {
-    buffer: Buffer,         // owned or shared data
+struct TensorData<T: Scalar> {
+    buffer: Vec<T>,
     shape: Vec<usize>,
-    strides: Vec<usize>,
-    dtype: DType,           // F32, F64, C32, C64
+    strides: Vec<isize>,
+}
+
+enum Tensor {
+    F32(TensorData<f32>),
+    F64(TensorData<f64>),
+    C32(TensorData<Complex<f32>>),
+    C64(TensorData<Complex<f64>>),
 }
 ```
 
@@ -632,7 +638,7 @@ All operations are lazy — there is no eager mode.
 struct TracedTensor {
     shape: Vec<usize>,
     dtype: DType,
-    fragment: Arc<Fragment<TensorOp>>,  // graph info (always present)
+    fragment: Arc<Fragment<StdTensorOp>>,  // graph info (always present)
     val: LocalValId,
     data: Option<Tensor>,               // Some for inputs / eval'd results
 }

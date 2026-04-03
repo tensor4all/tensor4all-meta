@@ -938,15 +938,15 @@ Expected second-order result for `exp(a*x)` with unit seeds:
 
 ### Phase 2: Tensor primitives
 
-- `TensorOp` with full primitive set
-- `DynTensor` implementing `Operand`
+- `StdTensorOp` with full primitive set
+- `Tensor` (type-erased enum) implementing `Operand`
 - vector and reduction transpose rules
 - batched JVP via tensor-valued tangent inputs
 
 ### Phase 3: Backend compilation
 
-- `MaterializedGraph -> TenferroIR`
-- StableHLO lowering of `CompiledProgram<TensorOp>`
+- `MaterializedGraph -> StableHloProgram`
+- StableHLO lowering of `CompiledProgram<StdTensorOp>`
 - CPU / GPU backends consume only compiled or lowered materialized programs
 
 ### Phase 4: Optimization
