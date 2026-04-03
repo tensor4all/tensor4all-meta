@@ -127,7 +127,7 @@ Current `tenferro-prims` is organized by backend execution families:
 
 - `TensorSemiringCore`
   - `BatchedGemm`
-  - `ReduceAdd`
+  - `ReduceSum`
   - `Trace`
   - `AntiTrace`
   - `AntiDiag`
@@ -204,7 +204,7 @@ This is the table that matters for implementation planning.
 | Current tenferro primitive | Recommended StableHLO target | Direct? | Note |
 |---|---|---:|---|
 | `TensorSemiringCore::BatchedGemm` | `dot_general` | yes | Main contraction target |
-| `TensorSemiringCore::ReduceAdd` | `reduce` with add combiner | yes | StableHLO has no dedicated `reduce_sum` op |
+| `TensorSemiringCore::ReduceSum` | `reduce` with add combiner | yes | StableHLO has no dedicated `reduce_sum` op |
 | `TensorSemiringCore::Trace` | `iota + compare + select + reduce` | no | No direct trace op |
 | `TensorSemiringCore::AntiTrace` | `scatter` + add-style combiner | no | AD helper lowering |
 | `TensorSemiringCore::AntiDiag` | `scatter` or masked `select` | no | AD helper lowering |
@@ -271,8 +271,10 @@ JAX for `linearize`-style formulas, but they should be read as a layer
 
 AD helpers:
 
-- `add_jaxvals_p` / `add_any`
-- `zeros_like_p`
+- ~~`add_jaxvals_p` / `add_any`~~ — not needed in v2; cotangent accumulation
+  uses the standard `Add` primitive
+- ~~`zeros_like_p`~~ — not needed in v2; zero propagation is handled via
+  `Option<LocalValId>` (None = zero tangent) at the graph level
 - `stop_gradient_p`
 
 Tensor primitives:

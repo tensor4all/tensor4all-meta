@@ -178,7 +178,7 @@ build → resolve → differentiate → transpose → resolve → materialize_me
 ### Semiring Core stays separate
 
 `TensorSemiringCore<Alg>` is an execution protocol for semiring-compatible
-tensor operations (BatchedGemm, ReduceAdd, etc.), parameterized by scalar
+tensor operations (BatchedGemm, ReduceSum, etc.), parameterized by scalar
 algebra. It serves einsum execution and supports exotic algebras (tropical).
 
 It is orthogonal to `PrimitiveOp` which operates at the tensor-op / AD level.

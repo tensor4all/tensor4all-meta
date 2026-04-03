@@ -24,7 +24,7 @@ readability, this document separates them explicitly:
 | Layer | Example | Meaning |
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
-| Graph primitive | `DotGeneral`, `ReduceAdd`, `BroadcastInDim` | what may appear as `TensorOp` nodes in a `Fragment` |
+| Graph primitive | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `TensorOp` nodes in a `Fragment` |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, StableHLO op | how a primitive is executed |
 
 This document uses **two orthogonal classifications**:
@@ -38,7 +38,7 @@ Important distinctions:
   primitives.
 - `einsum` is **surface syntax**, not a final persistent graph primitive. It is
   lowered into graph primitives such as `DotGeneral`, `Mul`, `Transpose`,
-  `BroadcastInDim`, and `ReduceAdd`.
+  `BroadcastInDim`, and `ReduceSum`.
 - High-level linalg ops such as `SVD` and `Solve` may remain explicit graph
   primitives because they are meaningful semantic units, even though their
   derivative rules emit lower-level primitives.
@@ -126,7 +126,7 @@ contraction planning and structural-view normalization.
 | Primitive | Why it is needed |
 |-----------|------------------|
 | `BatchedGemm` | binary contraction primitive for paired labels |
-| `ReduceAdd` | reduction of labels that survive planning but are not present in the final output |
+| `ReduceSum` | reduction of labels that survive planning but are not present in the final output |
 
 If v2 keeps `diagonal` as a tensor-layer view, `Trace` is **not** part of this
 strict minimum. If diagonal extraction/contraction is not available as a view,
@@ -150,7 +150,7 @@ tenferro design:
 - `ElementwiseBinary { Add, Mul }`
 
 These ops are not required for correctness, but they can avoid lowering all the
-way to `BatchedGemm` + `ReduceAdd` in common cases.
+way to `BatchedGemm` + `ReduceSum` in common cases.
 
 | Primitive | Role |
 |-----------|------|
@@ -182,12 +182,27 @@ Every op in this table is expected to implement `PrimitiveOp` directly.
 | `Mul` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] * x1[i]` | Elementwise multiply; same-shape contract |
 | `Neg` | `x: S -> y: S` | `y[i] = -x[i]` | Unary elementwise |
 | `Conj` | `x: S -> y: S` | `y[i] = conj(x[i])` | Identity on real dtypes, conjugation on complex dtypes |
-| `Dup` | `x: S -> (y0: S, y1: S)` | `y0 = x`, `y1 = x` | Internal linear primitive that makes fan-out explicit |
-| `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive; matrix multiply, batched matmul, and inner product are all special cases |
+| `Dup` | `x: S -> (y0: S, y1: S)` | `y0 = x`, `y1 = x` | Internal linear primitive that makes fan-out explicit. Appears only in linear/transpose fragments, not in primal graphs. |
+| `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive; matrix multiply, batched matmul, and inner product are all special cases. Config defined below. |
 | `Transpose(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Reorder axes according to `perm` | Pure axis permutation |
 | `Reshape(shape)` | `x: [d0, ..., dn-1] -> y: shape` | Reinterpret the same element sequence with a new shape | Total element count must stay unchanged |
 | `BroadcastInDim(shape, dims)` | `x: [a0, ..., ak-1] -> y: shape` | Place input axis `j` into output axis `dims[j]`, repeating along the others | Makes all broadcast semantics explicit |
-| `ReduceAdd(axes)` | `x: [d0, ..., dn-1] -> y` | `y` is formed by summing `x` over the listed axes | Rank drops unless a later op restores it |
+| `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | `y` is formed by summing `x` over the listed axes | Rank drops unless a later op restores it |
+
+### DotGeneral config
+
+```rust
+struct DotGeneralConfig {
+    lhs_contracting_dims: Vec<usize>,
+    rhs_contracting_dims: Vec<usize>,
+    lhs_batch_dims: Vec<usize>,
+    rhs_batch_dims: Vec<usize>,
+}
+```
+
+Contracting dims are summed over (inner product). Batch dims are preserved
+in the output. Remaining dims appear in the output in lhs-then-rhs order.
+This matches StableHLO's `dot_general` dimension numbers.
 
 ### Concrete examples
 
@@ -195,7 +210,7 @@ Every op in this table is expected to implement `PrimitiveOp` directly.
 |-----------|---------|
 | `DotGeneral` | `ij,jk->ik` (ordinary matrix multiply) |
 | `BroadcastInDim` | `[n] -> [b, n]` with `dims=[1]` |
-| `ReduceAdd` | `[b, m, n] -> [b, n]` with `axes=[1]` |
+| `ReduceSum` | `[b, m, n] -> [b, n]` with `axes=[1]` |
 | `Transpose` | `[b, m, n] -> [m, b, n]` with `perm=[1, 0, 2]` |
 
 ---
@@ -282,7 +297,7 @@ this document is updated.
 | `ReduceMax` | Max over the listed axes |
 | `ReduceMin` | Min over the listed axes |
 
-`ReduceAdd` stays in the AD-closed graph core because it is essential both for primal tensor code
+`ReduceSum` stays in the AD-closed graph core because it is essential both for primal tensor code
 and for transpose rules.
 
 ### Linalg primitives
@@ -322,7 +337,7 @@ StableHLO-style name and semantics:
 | `DotGeneral` | `einsum` or `dot` as a primitive |
 | `BroadcastInDim` | implicit broadcasting or generic `broadcast` primitive |
 | `Compare(dir)` + `Select` | surface names like `greater`, `greater_equal`, `where` |
-| `ReduceAdd` / `ReduceMax` / ... | opaque reduction primitives whose combiner is not explicit |
+| `ReduceSum` / `ReduceMax` / ... | opaque reduction primitives whose combiner is not explicit |
 
 The goal is not to copy StableHLO mechanically. The goal is to ensure that the
 `Standard arithmetic only` part of tenferro's graph vocabulary has an obvious,
@@ -339,9 +354,9 @@ than as distinct graph primitives.
 
 | Surface op | Canonical graph form |
 |------------|----------------------|
-| `einsum(...)` | contraction planning + `DotGeneral`/`Mul`/`Transpose`/`Reshape`/`BroadcastInDim`/`ReduceAdd` |
-| `sum(x, axes)` | `ReduceAdd(x, axes)` |
-| `mean(x, axes)` | `ReduceAdd(x, axes)` followed by scale by `1 / n` |
+| `einsum(...)` | contraction planning + `DotGeneral`/`Mul`/`Transpose`/`Reshape`/`BroadcastInDim`/`ReduceSum` |
+| `sum(x, axes)` | `ReduceSum(x, axes)` |
+| `mean(x, axes)` | `ReduceSum(x, axes)` followed by scale by `1 / n` |
 | `sub(x, y)` | `Add(x, Neg(y))` |
 | `square(x)` | `Mul(x, x)` |
 | `reciprocal(x)` | `Div(1, x)` |

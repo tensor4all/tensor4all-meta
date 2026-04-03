@@ -45,10 +45,15 @@ fn differentiate<Op: PrimitiveOp>(
 ) -> LinearFragment<Op>;
 ```
 
+Each call to `differentiate` receives a unique `DiffPassId` (monotonically
+increasing counter). Tangent input keys are generated via
+`wrt_key.tangent_of(pass_id)` (see `ADKey` trait in `chainrules-design.md`).
+
 Algorithm:
 
 1. Traverse the reachable logical DAG in topological order.
-2. Seed tangent inputs for the requested primal `InputKey`s.
+2. Seed tangent inputs for the requested primal `InputKey`s
+   (keys generated via `ADKey::tangent_of`).
 3. For each reachable primitive, call `Op::linearize`.
 4. Emit new local linear nodes into the new fragment.
 5. Reference primal values through `External(GlobalValKey)`.

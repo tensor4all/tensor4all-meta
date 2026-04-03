@@ -593,7 +593,7 @@ The vector examples remain mathematically identical to the earlier version.
 What changes is only the graph interpretation: fragments stay separate until
 `materialize_merge`.
 
-For readability, `Sum` below is shorthand for `ReduceAdd` over all axes.
+For readability, `Sum` below is shorthand for `ReduceSum` over all axes.
 
 ### Vector example 1: elementwise `y = exp(a * x)` with `x, a in R^2`
 
@@ -700,7 +700,7 @@ trait Operand: Clone + Send + Sync + 'static {
     fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;
     fn add(&self, other: &Self) -> Self;
     fn multiply(&self, other: &Self) -> Self;
-    fn reduce_add(&self, axes: &[usize]) -> Self;
+    fn reduce_sum(&self, axes: &[usize]) -> Self;
     fn dot_general(&self, other: &Self, ...) -> Self;
     fn conj(&self) -> Self;
 }

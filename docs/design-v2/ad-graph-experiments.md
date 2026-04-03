@@ -1,8 +1,18 @@
 # Graph Transform Experiments for `v2 AD Architecture`
 
+> **Note:** This document is an early experiment record. The `merge` operation
+> used here was later separated into `resolve` (logical view, cheap) and
+> `materialize_merge` (physical flattening, once before compile). Higher-order
+> AD requires only `resolve`, not physical merge. The `Scale(c, t)` and
+> `AddLin(u, v)` primitives correspond to `Mul(c, t) mode=Linear {
+> active_mask=[fixed, active] }` and `Add(u, v) mode=Linear {
+> active_mask=[active, active] }` in the final design. See
+> `ad-architecture.md` for the current design.
+
 ## Scope
 
-This document records manual graph-construction experiments for the current design:
+This document records manual graph-construction experiments for an earlier
+version of the design:
 
 - `differentiate` produces a **linear graph fragment** with external references
 - `merge` resolves external references and must be inserted before the next `differentiate`

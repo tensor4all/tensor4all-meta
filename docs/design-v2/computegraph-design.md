@@ -36,7 +36,7 @@ trait Operand: Clone + Send + Sync + 'static {
     fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;
     fn add(&self, other: &Self) -> Self;
     fn multiply(&self, other: &Self) -> Self;
-    fn reduce_add(&self, axes: &[usize]) -> Self;
+    fn reduce_sum(&self, axes: &[usize]) -> Self;
     fn dot_general(&self, other: &Self, ...) -> Self;
     fn conj(&self) -> Self;
 }
@@ -147,6 +147,35 @@ enum OpMode {
 - external reference resolution
 - cross-fragment CSE
 - logical reachability analysis
+
+### Key Interning
+
+`GlobalValKey` is recursive and grows with graph depth. To keep equality
+comparison O(1) and avoid storing duplicate substructure, all keys are
+interned in a global `KeyInterner`:
+
+```rust
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+struct ValKeyId(u32);
+
+struct KeyInterner<Op: GraphOp> {
+    map: HashMap<GlobalValKey<Op>, ValKeyId>,
+    keys: Vec<GlobalValKey<Op>>,  // id → full key (reverse lookup)
+}
+```
+
+Fragment construction registers every new `GlobalValKey` with the interner
+and stores the resulting `ValKeyId`. Cross-fragment equality, CSE, and
+compilation cache lookups all use `ValKeyId` comparison (O(1)).
+
+The interner is global (shared across all fragments). This is appropriate
+because the primary use case is cross-fragment identity. Thread-safe access
+can be added later (`DashMap` or `RwLock<HashMap>`) if parallel fragment
+construction becomes necessary.
+
+`parents` in `Fragment` form an acyclic structure: a fragment can only
+reference fragments that existed at its construction time, so cycles are
+structurally impossible.
 
 ### ResolvedView
 

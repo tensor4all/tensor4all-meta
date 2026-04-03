@@ -96,7 +96,7 @@ Important distinction:
 
 - `einsum`, `sum`, `mean`, `where`, `greater`, and similar names are
   **surface-level APIs** or aliases
-- `DotGeneral`, `ReduceAdd`, `Select`, `Compare`, and similar names are the
+- `DotGeneral`, `ReduceSum`, `Select`, `Compare`, and similar names are the
   **canonical graph primitives**
 
 `primitive-catalog.md` also separates:
@@ -118,7 +118,7 @@ execution.
 | `Dup` | 1 (→ 2 outputs) | `stablehlo.broadcast_in_dim` (duplicate) |
 | `Conj` | 1 | custom/simple elementwise lowering |
 | `DotGeneral` | 2 | `stablehlo.dot_general` |
-| `ReduceAdd` | 1 | `stablehlo.reduce` (sum) |
+| `ReduceSum` | 1 | `stablehlo.reduce` (sum) |
 | `Transpose` | 1 | `stablehlo.transpose` |
 | `Reshape` | 1 | `stablehlo.reshape` |
 | `BroadcastInDim` | 1 | `stablehlo.broadcast_in_dim` |
@@ -285,6 +285,9 @@ computation is fully compilable even though the primal is a custom_call.
 All programs first compile to a **CompiledProgram**. This is the common
 intermediate representation. Which parts of the primitive vocabulary may appear
 in that program depends on the algebra.
+
+Terminology: **Tier 1** = AD-closed graph core (`primitive-catalog.md` IV),
+**Tier 2** = Standard arithmetic only (`primitive-catalog.md` V).
 
 ```
 Graph → differentiate / transpose → merge → compile
@@ -623,25 +626,28 @@ struct Tensor {
 
 ### TracedTensor (graph-aware wrapper)
 
-`TracedTensor` is a separate struct that wraps graph node references for
-tracing. It records ops into a graph for deferred compilation (JIT path).
-It does not hold data — only shape and dtype metadata plus a graph node ID.
+`TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation and AD.
+All operations are lazy — there is no eager mode.
 
 ```rust
 struct TracedTensor {
-    node_id: NodeId,        // reference into the trace graph
     shape: Vec<usize>,
     dtype: DType,
+    fragment: Arc<Fragment<TensorOp>>,  // graph info (always present)
+    val: LocalValId,
+    data: Option<Tensor>,               // Some for inputs / eval'd results
 }
 ```
 
-- `Tensor`: immediate execution via DefaultBackend (eager mode)
-- `TracedTensor`: records ops into a graph (used for JIT compilation path)
+- `TracedTensor::from(Tensor)` creates a Fragment input node with `data = Some(...)`.
+- Operations (einsum, exp, ...) build graph, return `TracedTensor` with `data = None`.
+- `eval()` triggers compile (cached) + execute, fills in `data`, returns `&Tensor`.
+
+See `tensor-api-pseudocode.md` for full usage examples.
 
 ### Operand implementation
 
-Both `Tensor` and `TracedTensor` implement the `Operand` trait with
-StableHLO-aligned ops:
+`Tensor` implements the `Operand` trait with StableHLO-aligned ops:
 
 ```rust
 impl Operand for Tensor {
@@ -659,7 +665,7 @@ impl Operand for Tensor {
 
 ### Phase 1: Minimal vertical slice
 
-- `DotGeneral`, `Add`, `Mul`, `Neg`, `ReduceAdd` (Tier 1 core)
+- `DotGeneral`, `Add`, `Mul`, `Neg`, `ReduceSum` (Tier 1 core)
 - `SVD` primal (custom_call, LAPACK)
 - DefaultBackend (CPU, BLAS)
 - Tropical: reuse existing CPU + CUDA kernels

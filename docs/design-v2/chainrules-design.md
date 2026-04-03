@@ -80,7 +80,49 @@ cotangent inputs. It must only emit primitives that themselves implement
 
 ---
 
-## V. Closure Responsibility
+## V. ADKey Trait
+
+`chainrules-rs` defines the `ADKey` trait that constrains `InputKey` for AD
+use. `tidu-rs` uses this trait to generate tangent input keys during
+`differentiate`.
+
+```rust
+pub type DiffPassId = u64;
+
+pub trait ADKey: Clone + Hash + Eq + Send + Sync + 'static {
+    /// Create a tangent input key derived from this key.
+    /// `pass` is a unique identifier for the `differentiate` call.
+    fn tangent_of(&self, pass: DiffPassId) -> Self;
+}
+```
+
+`PrimitiveOp` requires `Self::InputKey: ADKey`:
+
+```rust
+pub trait PrimitiveOp: GraphOp where Self::InputKey: ADKey {
+    fn linearize(...) -> ...;
+    fn transpose_rule(...) -> ...;
+}
+```
+
+The concrete implementation of `ADKey` is the downstream implementor's
+choice. A typical pattern is a recursive enum:
+
+```rust
+// tenferro-rs
+enum TensorInputKey {
+    User(String),
+    Tangent { of: Box<TensorInputKey>, pass: DiffPassId },
+}
+```
+
+This gives debuggable keys like
+`Tangent { of: Tangent { of: User("x"), pass: 1 }, pass: 3 }` for
+higher-order AD.
+
+---
+
+## VI. Closure Responsibility
 
 `chainrules-rs` defines the contract but does not enforce closure. The
 downstream implementor (e.g. tenferro-rs) is responsible for ensuring that
