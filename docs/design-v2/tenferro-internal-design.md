@@ -376,23 +376,44 @@ enum StableHloOp {
 
 ### StableHLO lowering: StdTensorOp → StableHloOp
 
-Each `StdTensorOp` maps to exactly one `StableHloOp`:
+Most `StdTensorOp` variants map 1:1 to a `StableHloOp`. Some require 1:N
+expansion:
+
+| StdTensorOp | StableHLO | Mapping |
+|---|---|---|
+| `Add`, `Mul`, `Neg`, `Div`, `Exp`, `Log`, ... | `add`, `multiply`, `negate`, `divide`, `exponential`, `log`, ... | 1:1 |
+| `DotGeneral(cfg)` | `dot_general(cfg)` | 1:1 |
+| `Transpose`, `Reshape`, `BroadcastInDim` | same | 1:1 |
+| `Compare`, `Select`, `Gather`, `Scatter`, ... | same | 1:1 |
+| `ReduceSum { axes }` | `reduce { axes, combiner: add_region }` | 1:1 but combiner is a sub-computation in StableHLO |
+| `Conj` | `real` + `imag` + `negate` + `complex` | 1:4 composite |
+| `Dup` | (none — eliminated during materialize_merge) | 0 |
+| `Svd` | `custom_call("gesvd")` + `get_tuple_element` × 3 | 1:4 |
+| `Qr` | `custom_call("geqrf")` + `get_tuple_element` × 2 | 1:3 |
+| `Solve` | `custom_call("getrf")` + `custom_call("getrs")` | 1:2+ |
 
 ```rust
-fn lower_instruction(inst: &Instruction<StdTensorOp>) -> StableHloInstruction {
-    let op = match &inst.op {
-        StdTensorOp::Semiring(SemiringOpKind::Add) => StableHloOp::Add,
-        StdTensorOp::Semiring(SemiringOpKind::Mul) => StableHloOp::Multiply,
-        StdTensorOp::Semiring(SemiringOpKind::DotGeneral(c)) => StableHloOp::DotGeneral(c.clone()),
+fn lower_instruction(inst: &Instruction<StdTensorOp>) -> Vec<StableHloInstruction> {
+    match &inst.op {
+        // 1:1 cases
+        StdTensorOp::Semiring(SemiringOpKind::Add) =>
+            vec![hlo_inst(StableHloOp::Add, &inst)],
+        StdTensorOp::Exp =>
+            vec![hlo_inst(StableHloOp::Exponential, &inst)],
+        StdTensorOp::Semiring(SemiringOpKind::DotGeneral(c)) =>
+            vec![hlo_inst(StableHloOp::DotGeneral(c.clone()), &inst)],
         StdTensorOp::Semiring(SemiringOpKind::ReduceSum { axes }) =>
-            StableHloOp::Reduce { axes: axes.clone(), combiner: Combiner::Add },
-        StdTensorOp::Exp => StableHloOp::Exponential,
-        StdTensorOp::Svd => StableHloOp::CustomCall {
-            target: "lapack_gesvd".into(), config: vec![],
-        },
+            vec![hlo_inst(StableHloOp::Reduce {
+                axes: axes.clone(), combiner: Combiner::Add,
+            }, &inst)],
+
+        // 1:N expansion
+        StdTensorOp::Conj => lower_conj(&inst),  // real + imag + negate + complex
+        StdTensorOp::Svd => lower_svd(&inst),    // custom_call + get_tuple_element × 3
+        StdTensorOp::Solve => lower_solve(&inst), // getrf + getrs
+
         // ...
-    };
-    StableHloInstruction { op, inputs: inst.inputs.clone(), outputs: inst.outputs.clone(), ... }
+    }
 }
 ```
 
@@ -434,7 +455,7 @@ for interpreter backends.
 ```text
 CompiledProgram<StdTensorOp>
     │
-    │ lower_to_stablehlo() — 1:1 mapping, trivial
+    │ lower_to_stablehlo() — mostly 1:1, some 1:N expansion
     ↓
 StableHloProgram (Rust struct, in-process)
     │
@@ -767,7 +788,7 @@ Top-level facade:
 - `Backend<Op>` trait
 - `StableHloProgram`, `StableHloOp`, `StableHloInstruction` (Rust IR)
 - `lower_to_stablehlo()` (`CompiledProgram<StdTensorOp>` → `StableHloProgram`,
-  1:1 mapping)
+  mostly 1:1, some 1:N expansion for `Conj`, multi-output linalg, `Solve`)
 - Standard backends:
   - `FaerBackend` — StableHLO interpreter, CPU (faer/BLAS/LAPACK)
   - `XlaBackend` — StableHLO → xla-rs builder API → JIT
