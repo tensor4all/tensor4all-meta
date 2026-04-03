@@ -80,6 +80,13 @@ Transpose accumulation must use global identity: when multiple reverse
 contributions flow back to the same original tangent node, bucket by the
 **global key of that tangent value**, not by a fragment-local id.
 
+Fan-out accumulation is handled internally by `transpose`, not by an
+explicit `Dup` primitive. When multiple cotangents flow to the same
+`GlobalValKey`, `transpose` accumulates them with `Add`. This follows
+the JAX approach where `add_jaxvals` is built into the transpose pass
+rather than expressed as a separate primitive in the graph. Downstream
+primitive implementors do not need to implement `Dup`.
+
 ---
 
 ## III. Typical Pipelines

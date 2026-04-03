@@ -115,7 +115,6 @@ execution.
 | `Add` | 2 | `stablehlo.add` |
 | `Mul` | 2 | `stablehlo.multiply` |
 | `Neg` | 1 | `stablehlo.negate` |
-| `Dup` | 1 (→ 2 outputs) | `stablehlo.broadcast_in_dim` (duplicate) |
 | `Conj` | 1 | custom/simple elementwise lowering |
 | `DotGeneral` | 2 | `stablehlo.dot_general` |
 | `ReduceSum` | 1 | `stablehlo.reduce` (sum) |

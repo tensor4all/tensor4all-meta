@@ -240,7 +240,7 @@ Each step should be independently testable before proceeding to the next.
 - `computegraph-rs`: Fragment, resolve, materialize_merge, compile, eval
 - `chainrules-rs`: PrimitiveOp trait
 - `tidu-rs`: differentiate, transpose
-- Scalar primitives: `Add`, `Mul`, `Exp`, `Dup`, `Neg`, `Conj`
+- Scalar primitives: `Add`, `Mul`, `Exp`, `Neg`, `Conj`
 - Tests: forward, backward, and second order on `exp(a*x)`
 
 ### Phase 2: Tensor primitives

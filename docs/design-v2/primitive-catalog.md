@@ -78,7 +78,6 @@ It is unrelated to the AD transform `transpose(linear_fragment)`.
 
 Some primitives produce multiple outputs:
 
-- `Dup(x) -> (x0, x1)`
 - `SVD(A) -> (U, S, Vt)`
 - `QR(A) -> (Q, R)`
 
@@ -182,7 +181,6 @@ Every op in this table is expected to implement `PrimitiveOp` directly.
 | `Mul` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] * x1[i]` | Elementwise multiply; same-shape contract |
 | `Neg` | `x: S -> y: S` | `y[i] = -x[i]` | Unary elementwise |
 | `Conj` | `x: S -> y: S` | `y[i] = conj(x[i])` | Identity on real dtypes, conjugation on complex dtypes |
-| `Dup` | `x: S -> (y0: S, y1: S)` | `y0 = x`, `y1 = x` | Internal linear primitive that makes fan-out explicit. Appears only in linear/transpose fragments, not in primal graphs. |
 | `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive; matrix multiply, batched matmul, and inner product are all special cases. Config defined below. |
 | `Transpose(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Reorder axes according to `perm` | Pure axis permutation |
 | `Reshape(shape)` | `x: [d0, ..., dn-1] -> y: shape` | Reinterpret the same element sequence with a new shape | Total element count must stay unchanged |

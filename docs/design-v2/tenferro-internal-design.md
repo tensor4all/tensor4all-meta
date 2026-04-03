@@ -90,7 +90,7 @@ different `Operand` types, tenferro provides two Op types:
 enum StdTensorOp {
     // Tier 1: semiring-compatible core
     Semiring(SemiringOpKind),
-    Neg, Conj, Dup,
+    Neg, Conj,
 
     // Tier 2: standard arithmetic only
     Div, Abs, Sign, Maximum, Minimum,
@@ -387,7 +387,6 @@ expansion:
 | `Compare`, `Select`, `Gather`, `Scatter`, ... | same | 1:1 |
 | `ReduceSum { axes }` | `reduce { axes, combiner: add_region }` | 1:1 but combiner is a sub-computation in StableHLO |
 | `Conj` | `real` + `imag` + `negate` + `complex` | 1:4 composite |
-| `Dup` | (none — eliminated during materialize_merge) | 0 |
 | `Svd` | `custom_call("gesvd")` + `get_tuple_element` × 3 | 1:4 |
 | `Qr` | `custom_call("geqrf")` + `get_tuple_element` × 2 | 1:3 |
 | `Solve` | `custom_call("getrf")` + `custom_call("getrs")` | 1:2+ |
@@ -807,7 +806,7 @@ Depends on: all of the above + tidu-rs.
 - computegraph-rs: Fragment, resolve, materialize_merge, compile, eval
 - chainrules-rs: PrimitiveOp trait
 - tidu-rs: differentiate, transpose
-- tenferro-ops: scalar subset of StdTensorOp (Add, Mul, Exp, Neg, Dup, Conj)
+- tenferro-ops: scalar subset of StdTensorOp (Add, Mul, Exp, Neg, Conj)
 - tenferro: minimal Engine with CPU eval
 - Tests: forward, backward, second order on `exp(a*x)`
 

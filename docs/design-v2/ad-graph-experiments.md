@@ -6,8 +6,11 @@
 > AD requires only `resolve`, not physical merge. The `Scale(c, t)` and
 > `AddLin(u, v)` primitives correspond to `Mul(c, t) mode=Linear {
 > active_mask=[fixed, active] }` and `Add(u, v) mode=Linear {
-> active_mask=[active, active] }` in the final design. See
-> `ad-architecture.md` for the current design.
+> active_mask=[active, active] }` in the final design. The `Dup` primitive
+> used in these experiments has been removed from the final design;
+> fan-out accumulation is now handled internally by `tidu::transpose`
+> (JAX-style bucketing by `GlobalValKey`). See `ad-architecture.md` for
+> the current design.
 
 ## Scope
 

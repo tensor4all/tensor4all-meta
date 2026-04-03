@@ -756,9 +756,14 @@ A primitive's `linearize` must be linear in tangent inputs. It may:
 
 - reference primal inputs or outputs through `External(GlobalValKey)`
 - emit primal primitives in `OpMode::Linear`
-- emit `Dup` or `Conj` when required by transpose semantics
+- emit `Conj` when required by transpose semantics
 
 It must not introduce nonlinear dependence on tangent inputs.
+
+Fan-out accumulation (when multiple cotangents flow to the same tangent
+node during transpose) is handled internally by `tidu::transpose`, not
+by an explicit `Dup` primitive. `tidu` buckets reverse contributions by
+`GlobalValKey` and accumulates them with `Add`.
 
 A primitive's `transpose_rule` receives cotangent outputs and must produce
 cotangent inputs. It must only emit primitives that themselves implement
@@ -928,7 +933,7 @@ Expected second-order result for `exp(a*x)` with unit seeds:
 - `Fragment<ScalarOp>` plus `ResolvedView<ScalarOp>`
 - `GlobalValKey`, `ValRef`, `OpMode`
 - transforms: `resolve`, `differentiate`, `transpose`, `materialize_merge`
-- primitives: `Add`, `Mul`, `Exp`, `Dup`, `Neg`, `Conj`
+- primitives: `Add`, `Mul`, `Exp`, `Neg`, `Conj`
 - tests: forward, backward, and second order on `exp(a*x)`
 
 ### Phase 2: Tensor primitives

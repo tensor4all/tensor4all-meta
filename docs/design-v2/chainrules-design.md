@@ -59,7 +59,7 @@ A primitive's `linearize` must be linear in tangent inputs. It may:
 
 - reference primal inputs or outputs through `External(GlobalValKey)`
 - emit primitives in `OpMode::Linear`
-- emit `Dup` or `Conj` when required by transpose semantics
+- emit `Conj` when required by transpose semantics
 
 It must not introduce nonlinear dependence on tangent inputs.
 
