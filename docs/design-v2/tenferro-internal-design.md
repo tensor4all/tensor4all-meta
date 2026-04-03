@@ -310,30 +310,148 @@ trait Backend<Op> {
 backend can use `GpuTensor<T>` even though `GraphOp::Operand = T` (a CPU
 type). The backend is responsible for mapping each `Op` to its own kernels.
 
+### StableHLO IR representation
+
+tenferro defines its own Rust data structures that mirror StableHLO semantics.
+This is neither binary nor text — it is an in-process Rust struct passed
+directly to backends. No serialization for faer/GPU backends.
+
+```rust
+/// A single StableHLO instruction
+struct StableHloInstruction {
+    op: StableHloOp,
+    inputs: Vec<usize>,             // slot indices
+    outputs: Vec<usize>,            // slot indices
+    input_types: Vec<TensorType>,   // shape + dtype per input
+    output_types: Vec<TensorType>,  // shape + dtype per output
+}
+
+/// The complete StableHLO program (lowered from CompiledProgram)
+struct StableHloProgram {
+    instructions: Vec<StableHloInstruction>,
+    input_slots: Vec<usize>,
+    output_slots: Vec<usize>,
+    n_slots: usize,
+}
+
+/// StableHLO ops — mirrors the StableHLO spec
+enum StableHloOp {
+    // Elementwise
+    Add, Multiply, Negate, Divide, Abs, Sign,
+    Exponential, Log, Sine, Cosine, Tanh, Sqrt, Rsqrt, Power,
+    ExponentialMinusOne, LogPlusOne,
+    Compare(CompareDir), Select, Clamp,
+    Maximum, Minimum,
+
+    // Shape
+    BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
+    Reshape { shape: Vec<usize> },
+    Transpose { perm: Vec<usize> },
+    Reverse { axes: Vec<usize> },
+    Concatenate { axis: usize },
+    Pad(PadConfig),
+
+    // Contraction
+    DotGeneral(DotGeneralConfig),
+
+    // Reduction
+    Reduce { axes: Vec<usize>, combiner: Combiner },
+
+    // Indexing
+    Gather(GatherConfig),
+    Scatter(ScatterConfig),
+    Slice(SliceConfig),
+    DynamicSlice,
+
+    // Custom call — linalg, user kernels, etc.
+    CustomCall {
+        target: String,
+        config: Vec<u8>,  // opaque serialized config
+    },
+
+    // Control flow (future)
+    If, While,
+}
+```
+
+### StableHLO lowering: StdTensorOp → StableHloOp
+
+Each `StdTensorOp` maps to exactly one `StableHloOp`:
+
+```rust
+fn lower_instruction(inst: &Instruction<StdTensorOp>) -> StableHloInstruction {
+    let op = match &inst.op {
+        StdTensorOp::Semiring(SemiringOpKind::Add) => StableHloOp::Add,
+        StdTensorOp::Semiring(SemiringOpKind::Mul) => StableHloOp::Multiply,
+        StdTensorOp::Semiring(SemiringOpKind::DotGeneral(c)) => StableHloOp::DotGeneral(c.clone()),
+        StdTensorOp::Semiring(SemiringOpKind::ReduceSum { axes }) =>
+            StableHloOp::Reduce { axes: axes.clone(), combiner: Combiner::Add },
+        StdTensorOp::Exp => StableHloOp::Exponential,
+        StdTensorOp::Svd => StableHloOp::CustomCall {
+            target: "lapack_gesvd".into(), config: vec![],
+        },
+        // ...
+    };
+    StableHloInstruction { op, inputs: inst.inputs.clone(), outputs: inst.outputs.clone(), ... }
+}
+```
+
+### custom_call — linalg and user-defined kernels
+
+Operations that have no direct StableHLO op lower to `CustomCall`:
+
+| StdTensorOp | StableHLO | custom_call target |
+|---|---|---|
+| `Svd` | `CustomCall` | `"lapack_gesvd"` / `"cusolver_gesvd"` |
+| `Qr` | `CustomCall` | `"lapack_geqrf"` / `"cusolver_geqrf"` |
+| `Cholesky` | `stablehlo.cholesky` | (direct op, not custom_call) |
+| `Eigh` | `CustomCall` | `"lapack_syevd"` / `"cusolver_syevd"` |
+| `Solve` | `CustomCall` | `"lapack_getrf"` + `"lapack_getrs"` |
+| `LuFullPivot` | `CustomCall` | `"lapack_getc2"` |
+
+Users can also register custom kernels:
+
+```rust
+engine.register_custom_call("my_decomposition", MyDecompositionKernel);
+
+// Then use it in the graph:
+StdTensorOp::CustomCall {
+    target: "my_decomposition".into(),
+    n_inputs: 1, n_outputs: 2,
+}
+```
+
+The `config: Vec<u8>` field in `StableHloOp::CustomCall` carries opaque
+per-call configuration (e.g., "full pivot" vs "partial pivot" for LU).
+Backends deserialize this when dispatching.
+
 ### Standard algebra backends: all go through StableHLO
 
-All standard algebra backends consume StableHLO IR. There is no separate
-"CompiledProgram direct interpreter" path for the standard algebra.
+All standard algebra backends consume `StableHloProgram`. The IR
+representation is Rust data structures passed in-process — no serialization
+for interpreter backends.
 
 ```text
 CompiledProgram<StdTensorOp>
     │
-    │ lower (1:1 mapping, trivial)
+    │ lower_to_stablehlo() — 1:1 mapping, trivial
     ↓
-StableHLO IR
+StableHloProgram (Rust struct, in-process)
     │
-    ├── FaerBackend        StableHLO interpreter (op-by-op, CPU)
-    │                      Tensor = DynTensor
-    │                      dispatches each StableHLO op to faer/BLAS/LAPACK
-    │                      batched ops = kernel + loop (reuse v1 implementation)
+    ├── FaerBackend:      iterate instructions → faer/BLAS/LAPACK dispatch
+    │                     custom_call → registered kernel lookup
+    │                     (no serialization)
     │
-    ├── CustomGpuBackend   StableHLO interpreter (op-by-op, CUDA)
-    │                      Tensor = GpuDynTensor
-    │                      dispatches each StableHLO op to CUDA kernels
+    ├── CustomGpuBackend: iterate instructions → CUDA kernel dispatch
+    │                     custom_call → registered kernel lookup
+    │                     (no serialization)
     │
-    └── XlaBackend         StableHLO → XLA JIT compile → execute
-                           Tensor = XlaBuffer
-                           kernel fusion, static shapes
+    ├── XlaBackend:       build HLO via xla-rs builder API (programmatic)
+    │                     custom_call → XLA custom_call with target name
+    │                     (no text/binary serialization needed)
+    │
+    └── IREE (future):    emit MLIR text → IREE compile
+                          (only this path needs serialization)
 ```
 
 Why all through StableHLO:
@@ -347,20 +465,29 @@ Why all through StableHLO:
   not understand CompiledProgram internals.
 - **Shared correctness tests**: all standard backends consume the same IR,
   so tests are shared.
+- **custom_call extensibility**: linalg ops and user kernels flow through
+  the same pipeline as standard ops.
 
 ```rust
-struct FaerBackend { ctx: CpuContext }
+struct FaerBackend {
+    ctx: CpuContext,
+    custom_calls: HashMap<String, Box<dyn CustomCallKernel<DynTensor>>>,
+}
+
 impl Backend<StdTensorOp> for FaerBackend {
     type Tensor = DynTensor;
     fn eval_program(&mut self, prog, inputs) {
         let hlo = lower_to_stablehlo(prog);
-        // Interpret StableHLO op-by-op:
-        //   stablehlo.dot_general → faer::mat_mul + batch loop
-        //   stablehlo.add         → elementwise add
-        //   stablehlo.exponential → elementwise exp
-        //   stablehlo.reduce(+)   → sum
-        //   stablehlo.custom_call("gesvd") → LAPACK dgesvd
-        self.interpret_stablehlo(&hlo, inputs)
+        for inst in &hlo.instructions {
+            match &inst.op {
+                StableHloOp::Add => faer_add(...),
+                StableHloOp::DotGeneral(cfg) => faer_matmul(cfg, ...),
+                StableHloOp::Reduce { combiner: Combiner::Add, .. } => faer_sum(...),
+                StableHloOp::CustomCall { target, config } =>
+                    self.custom_calls[target].execute(config, ...),
+                // ...
+            }
+        }
     }
 }
 
@@ -369,7 +496,18 @@ impl Backend<StdTensorOp> for XlaBackend {
     type Tensor = XlaBuffer;
     fn eval_program(&mut self, prog, inputs) {
         let hlo = lower_to_stablehlo(prog);
-        let executable = self.client.compile(&hlo);
+        // Build HLO computation via xla-rs builder API
+        let builder = XlaBuilder::new("program");
+        for inst in &hlo.instructions {
+            match &inst.op {
+                StableHloOp::Add => builder.add(...),
+                StableHloOp::DotGeneral(cfg) => builder.dot_general(cfg, ...),
+                StableHloOp::CustomCall { target, config } =>
+                    builder.custom_call(target, config, ...),
+                // ...
+            }
+        }
+        let executable = self.client.compile(&builder.build())?;
         executable.execute(inputs)
     }
 }
@@ -520,6 +658,7 @@ without `TracedTensor`.
 | New scalar algebra for einsum (CPU) | `impl Operand for MyTensor` |
 | Custom GPU backend for custom algebra | `impl Backend<SemiringOp<MyTensor>> for MyGpuBackend` |
 | Custom CPU backend with optimized kernels | `impl Backend<SemiringOp<MyTensor>> for MyOptCpuBackend` |
+| Custom linalg kernel (standard algebra) | `engine.register_custom_call("name", kernel)` |
 | AD for custom algebra | Define own Op enum, impl `PrimitiveOp` (advanced) |
 
 The minimal extension path (CPU only):
@@ -622,14 +761,19 @@ Depends on: computegraph-rs, chainrules-rs, tenferro-ops, tenferro-tensor.
 Top-level facade:
 
 - `TracedTensor` (lazy graph-aware wrapper)
-- `Engine` (compilation cache, backend dispatch, einsum cache)
+- `Engine` (compilation cache, backend dispatch, einsum cache, custom_call
+  registry)
 - Public API: `einsum()`, `grad()`, `jvp()`, `eval()`, `eval_all()`
 - `Backend<Op>` trait
-- StableHLO lowering (`StdTensorOp` → StableHLO, 1:1 mapping)
-- Standard backends: `FaerBackend` (StableHLO interpreter, CPU),
-  `XlaBackend` (StableHLO → JIT)
-- Custom algebra backends: `CpuSemiringBackend` (generic, interprets
-  CompiledProgram directly via `Operand` trait methods)
+- `StableHloProgram`, `StableHloOp`, `StableHloInstruction` (Rust IR)
+- `lower_to_stablehlo()` (`CompiledProgram<StdTensorOp>` → `StableHloProgram`,
+  1:1 mapping)
+- Standard backends:
+  - `FaerBackend` — StableHLO interpreter, CPU (faer/BLAS/LAPACK)
+  - `XlaBackend` — StableHLO → xla-rs builder API → JIT
+- Custom algebra backends:
+  - `CpuSemiringBackend<T>` — generic, interprets `CompiledProgram` directly
+    via `Operand` trait methods
 
 Depends on: all of the above + tidu-rs.
 
