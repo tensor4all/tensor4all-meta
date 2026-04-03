@@ -1,8 +1,10 @@
 # v2 AD Architecture
 
-**Date:** 2026-04-01 (updated 2026-04-02)
+**Date:** 2026-04-01 (rewritten 2026-04-02)
 **Status:** Draft
 **Repos:** chainrules-rs, tidu-rs, tenferro-rs
+**Parent:** `v2-architecture-overview.md`
+**Related:** `v2-computegraph-design.md`, `v2-chainrules-design.md`, `v2-tidu-design.md`, `v2-backend-architecture.md`, `v2-transpose-rules.md`
 
 ---
 
@@ -10,454 +12,619 @@
 
 Build a differentiable programming stack in Rust where:
 
-- **`differentiate` is the only derivative operation.** It takes a graph and
-  produces a NEW linear graph fragment with external references to primal
-  values. Applying it n times (with `merge` in between) gives the n-th
-  derivative. All derivative information comes from this single operation.
-- **`transpose` is not differentiation — it is a graph transformation that
-  reverses tangent data flow** (JVP → VJP). It does not add derivative
-  information. It can be applied to all or part of a linear graph
-  (partial transpose enables cross-country evaluation).
-- **Graph fragments have external references.** `differentiate` and
-  `transpose` produce new graph fragments that reference primal values by
-  content-addressable ID. `merge` resolves these references and unifies
-  same-named nodes (automatic CSE). `merge` must precede the next
-  `differentiate` to enable higher-order tracing.
-- **Evaluation is always forward** (upstream to downstream), after merge.
-- The merged graph can be **compiled to CPU execution or lowered to StableHLO**
-  for GPU/TPU.
+- `differentiate` is the only derivative-producing transform. It consumes a
+  resolved logical view of computation and produces a new linear fragment.
+- `transpose` is not differentiation. It reverses active linear flow in a
+  linear fragment and reuses the same derivative information.
+- AD transforms operate on **fragments**, not on a single eagerly merged
+  graph.
+- What higher-order AD needs is **resolve**, not physical merge. External
+  references must be traceable; they do not need to be copied into one graph
+  at every stage.
+- Physical flattening happens only in `materialize_merge`, typically just
+  before `compile`.
+- Evaluation is always forward on a **materialized graph** after flattening,
+  CSE, and slot assignment.
 
-| Goal | Transformations |
-|------|----------------|
-| JVP (1st derivative, forward) | `differentiate` |
-| VJP (1st derivative, backward) | `differentiate` → `transpose` |
-| n-th derivative | `differentiate` × n |
-| n-th derivative as gradient | `differentiate` × n → `transpose` |
+This is the intended operation set:
 
-Six operations:
-
-```
-build          construct a primal graph
-differentiate  graph → NEW linear graph (JVP), references primal values
-merge          resolve external references + CSE (must precede next differentiate)
-transpose      linear graph → NEW linear graph (flip tangent I/O direction)
-compile        merged graph → TenferroIR (flat SSA)
-eval           TenferroIR + input values → output values
+```text
+build             user constructs a primal fragment
+resolve           create a logical DAG view over one or more fragments
+differentiate     resolved view -> new linear fragment (JVP)
+transpose         linear fragment -> new linear fragment (reverse linear flow)
+materialize_merge resolved view -> MaterializedGraph (flatten + CSE)
+compile           MaterializedGraph -> TenferroIR
+eval              TenferroIR + input values -> output values
 ```
 
-**Pipeline for higher-order AD**: `merge` after each `differentiate` to
-resolve external references before the next `differentiate` can trace
-through primal dependencies.
+The key pipeline distinction is:
 
-```
-1st order:  build → differentiate → merge → transpose → compile → eval
-2nd order:  build → differentiate → merge → differentiate → merge → compile → eval
-n-th order: build → (differentiate → merge) × n → [transpose] → compile → eval
+```text
+differentiate -> resolve -> differentiate -> resolve -> ...
 ```
 
-Three crates, strictly layered:
+not
 
+```text
+differentiate -> physical merge -> differentiate -> physical merge -> ...
 ```
-chainrules2    PrimitiveOp trait (op contract)
+
+`materialize_merge` is still required, but only when a backend, serializer, or
+debugger needs one concrete graph.
+
+Typical pipelines:
+
+```text
+JVP:
+  build -> resolve -> differentiate -> materialize_merge -> compile -> eval
+
+VJP:
+  build -> resolve -> differentiate -> transpose -> materialize_merge -> compile -> eval
+
+2nd directional derivative:
+  build -> resolve -> differentiate -> resolve -> differentiate -> materialize_merge -> compile -> eval
+
+n-th derivative:
+  build -> (resolve -> differentiate) x n -> [transpose] -> materialize_merge -> compile -> eval
+```
+
+Four crates, strictly layered:
+
+```text
+computegraph   GraphOp + Operand traits, Fragment, resolve,
+               materialize_merge, compile (SSA), eval,
+               compilation cache
     ↓
-tidu2          Graph engine (build, differentiate, transpose, merge, compile, eval)
+chainrules     PrimitiveOp: GraphOp (adds linearize + transpose_rule)
     ↓
-tenferro2      Tensor primitives + StableHLO lowering
+tidu           differentiate, transpose — generic AD transforms
+               over PrimitiveOp; no graph infrastructure of its own
+    ↓
+tenferro       Concrete tensor primitives + StableHLO lowering
 ```
+
+`computegraph` provides the general-purpose computation graph engine. It is
+usable without AD (e.g. multi-tensor einsum as a graph of binary
+contractions). `tidu` is a thin layer that adds AD-specific graph transforms
+(`differentiate`, `transpose`), fully generic over `Op: PrimitiveOp`.
+Neither `computegraph` nor `tidu` references specific primitives. The
+responsibility for ensuring that `linearize` and `transpose_rule` produce
+valid, closed fragments belongs entirely to the downstream primitive
+implementor (tenferro).
 
 ---
 
-## II. Computation Graph
+## II. Core Model
 
-### Data structure
+### Fragment vs MaterializedGraph
 
-A computation is a directed acyclic graph (DAG) with two node types:
+A **Fragment** is the unit produced by `build`, `differentiate`, and
+`transpose`.
 
-- **Val node** (circles): a value. External input or one output slot of an Op.
-  Can be consumed by any number of downstream Ops (fan-out).
-- **Op node** (boxes): a primitive operation. Fixed input/output arity per op
-  kind. At most 2 inputs is sufficient for most ops.
+A fragment:
 
+- owns only its **local** nodes and ops
+- may reference values defined elsewhere through external references
+- is valid as long as those external references are **resolvable**
+
+A **MaterializedGraph** is different. It is the fully flattened graph produced
+by `materialize_merge`:
+
+- all reachable definitions are collected
+- same-key nodes are unified
+- a concrete DAG exists for compile, serialization, and debug printing
+
+So the intended mental model is:
+
+```text
+Fragment          = transform-time object
+ResolvedView      = logical traversal object
+MaterializedGraph = compile-time object
 ```
-f(x) = exp(a * x):
 
-  (v0:x)  (v1:a)
-     \     /
-     [Mul]          Op0
-       |
-     (v2:a*x)
-       |
-     [Exp]          Op1
-       |
-     (v3:exp(a*x))
-```
+### Local ids are local only
 
-Val nodes `( )` carry values. Op nodes `[ ]` carry operations.
+Local ids are fragment-scoped. They must not be used as cross-fragment
+identity.
 
 ```rust
-type ValId = usize;
-type OpId = usize;
+type LocalValId = usize;
+type LocalOpId = usize;
 
-struct ValNode {
-    producer: Option<(OpId, usize)>,  // None for inputs
+enum ValRef<Op: GraphOp> {
+    Local(LocalValId),
+    External(GlobalValKey<Op>),
+}
+
+enum GlobalValKey<Op: GraphOp> {
+    Input(Op::InputKey),
+    Derived {
+        op: GlobalOpKey<Op>,
+        output_slot: u8,
+    },
+}
+
+struct GlobalOpKey<Op> {
+    primitive: Op,
+    inputs: Vec<GlobalValKey<Op>>,
+    mode: OpMode,
+}
+
+enum OpMode {
+    Primal,
+    Linear { active_mask: Vec<bool> },
+}
+```
+
+`GlobalValKey` is the identity that matters across fragments. It is
+structural:
+
+- inputs are keyed by `InputKey`
+- derived values are keyed by primitive, global input keys, output slot, and
+  linear metadata
+
+This is what makes the following possible:
+
+- external reference resolution
+- cross-fragment CSE
+- higher-order tracing through earlier fragments
+- transpose accumulation bucketed by global identity
+
+### Active mask is part of identity
+
+Linear nodes use the same primitive set as primal nodes, but the linear mode is
+not optional metadata. It changes the meaning of transpose and therefore must
+participate in identity.
+
+Examples:
+
+```text
+Mul(a, b)   mode=Primal
+Mul(a, dx)  mode=Linear { active_mask=[fixed, active] }
+Add(dx, dy) mode=Linear { active_mask=[active, active] }
+```
+
+The first and second node both evaluate as multiplication, but they are not the
+same graph object. They transpose differently, so they must not alias.
+
+### Fragment data structure
+
+Conceptually:
+
+```rust
+struct ValNode<Op> {
+    key: GlobalValKey<Op>,
+    producer: Option<(LocalOpId, usize)>, // None for fragment inputs
 }
 
 struct OpNode<Op> {
     op: Op,
-    inputs: Vec<ValId>,
-    outputs: Vec<ValId>,
+    inputs: Vec<ValRef<Op>>,
+    outputs: Vec<LocalValId>,
+    mode: OpMode,
 }
 
-struct Graph<Op: PrimitiveOp> {
-    vals: Vec<ValNode>,
+struct Fragment<Op: PrimitiveOp> {
+    vals: Vec<ValNode<Op>>,
     ops: Vec<OpNode<Op>>,
-    op_cache: HashMap<(Op, Vec<ValId>), OpId>,
+    inputs: Vec<LocalValId>,
+    outputs: Vec<LocalValId>,
+    parents: Vec<Arc<Fragment<Op>>>,
 }
 ```
 
-### No constant/variable distinction
+`parents` are not eager ownership. They are the lookup base used by `resolve`.
 
-All leaf nodes are `Input`. Whether an input is a "constant" or a
-"differentiable variable" is decided at differentiation time (`wrt` argument),
-not in the graph structure.
+### Resolver and ResolvedView
 
-### Content-addressable identity
+`resolve` does not copy nodes into one graph. It builds a logical lookup view
+over fragments.
 
-`OpId` is determined by `(op_kind, input_val_ids...)`.
-`ValId` is determined by `(op_id, output_slot)`.
+```rust
+enum ValDef<Op> {
+    Input {
+        key: InputKey,
+    },
+    Produced {
+        op: Op,
+        inputs: Vec<ValRef<Op>>,
+        mode: OpMode,
+        output_slot: usize,
+    },
+}
 
-Adding the same op with the same inputs returns the existing node.
-**This identity is used across graph fragments**: when two fragments contain
-the same `(op_kind, input_val_ids...)`, `merge` unifies them into a single
-node. This is how CSE works across primal, tangent, and cotangent fragments.
+trait Resolver<Op> {
+    fn resolve_val(&self, key: &GlobalValKey<Op>) -> Option<ValDef<Op>>;
+}
 
-### Graph fragments with external references
-
-`differentiate` and `transpose` produce NEW graph fragments that reference
-values from other fragments by content-addressable ID (external references).
-These references are resolved at `merge` time. A fragment is NOT
-self-contained — it depends on external values.
-
+struct ResolvedView<Op> {
+    roots: Vec<Arc<Fragment<Op>>>,
+    resolver: Arc<dyn Resolver<Op>>,
+}
 ```
-G_primal:     v0=Input(x), v1=Input(a), v2=Mul(v0,v1), v3=Exp(v2)
-G_linear:     v4=Input(dx), v5=Scale(v1,v4), v6=Scale(v3,v5)
-                                     ^^          ^^
-                                  ^^           ^^
-                            external references to v1, v3 from G_primal
 
-merge(G_primal, G_linear) → unified graph, external refs resolved
+The intended implementation is a resolver assembled from parent fragments, not a
+mandatory central registry.
+
+`resolve` therefore means:
+
+- an external value is not dangling
+- its definition can be found
+- its dependencies can be followed recursively
+
+It does **not** mean:
+
+- nodes are copied into one physical graph
+- CSE has already run
+- slot assignment has already happened
+
+### Logical traversal
+
+All transform-time walkers operate on the same logical rule:
+
+```text
+Local(LocalValId)       -> follow the local producer
+External(GlobalValKey)  -> ask the resolver for the defining op
 ```
+
+This must work recursively through any number of fragment boundaries.
+
+Topological traversal at transform time is therefore **logical**, not physical:
+
+- visitation is keyed by `GlobalValKey`
+- the ordering is computed on the resolved logical DAG
+- local ids only matter inside the fragment currently being built
+
+### Materialized graph
+
+Compile does not consume a fragment. It consumes the result of
+`materialize_merge`.
+
+```rust
+struct MaterializedGraph<Op> {
+    vals: Vec<MaterializedVal<Op>>,
+    ops: Vec<MaterializedOp<Op>>,
+    inputs: Vec<GlobalValKey<Op>>,
+    outputs: Vec<GlobalValKey<Op>>,
+}
+```
+
+`materialize_merge` is the stage that:
+
+- collects the reachable subgraph
+- deduplicates by global identity
+- computes one concrete topological order
+- produces compile-ready graph state
 
 ---
 
-## III. Differentiation
+## III. Transformations
 
-### `differentiate`: graph → NEW linear graph fragment
+### `build`
 
-Takes a (merged) graph and produces a NEW linear graph fragment representing
-the JVP. The fragment contains external references to primal values by
-content-addressable ID. These must be resolved via `merge` before the next
-`differentiate`.
+`build` creates a primal fragment.
 
-```rust
-fn differentiate(
-    primal_graph: &Graph<Op>,
-    outputs: &[ValId],
-    wrt: &[(ValId, ValId)],    // (Input node, tangent Input node)
-) -> (Graph<Op>, Vec<Option<ValId>>)  // NEW graph + tangent outputs
-```
+- all nodes are `OpMode::Primal`
+- fragment inputs use `GlobalValKey::Input`
+- no eager merge is implied
 
-Walks Ops in topological order. For each Op, calls `op.linearize()` which
-adds tangent nodes to the NEW graph. Primal output vals are referenced (not
-recomputed). `wrt` restricted to Input nodes. Zero propagation skips nodes
-not depending on `wrt`.
+### `resolve`
 
-### `transpose`: flip a linear graph
-
-Takes a linear graph and produces a NEW graph with **tangent I/O reversed**.
-Fixed operands stay the same; only the active (tangent) data flow direction
-flips.
-
-#### Active mask (no dedicated linear primitives)
-
-The linear graph uses **the same ops** as the primal graph (`Mul`, `Add`,
-`Exp`, etc.). Each node in the linear graph carries an **active mask** —
-a boolean per input indicating which operands are active (tangent) and
-which are fixed (coefficient):
-
-```
-Mul(a, b) + mask=[fixed, active]   — b is the tangent variable
-Add(a, b) + mask=[active, active]  — both are tangent variables
-Exp(a)    + mask=[active]          — a is the tangent variable
-```
-
-No `Scale` or `AddLin` needed. The mask is determined during `differentiate`:
-`Some(tangent)` → active, `None` → fixed.
-
-At higher order, a "fixed" operand is NOT necessarily a primal value. It can
-be an earlier tangent or a cotangent-side residual. The mask is recomputed
-at each `differentiate` call. What matters: **in this transform, which
-operands are treated as fixed, and which are the active linear variables.**
-
-#### Transpose rules with mask
-
-Transpose reads the mask to know what to flip:
-
-```
-Op(a, b) mask=[fixed, active]:
-  real:    transpose → Op(a, ct)           (fixed operand stays)
-  complex: transpose → Op(Conj(a), ct)     (conjugate the fixed operand)
-
-Add(a, b) mask=[active, active]:
-  transpose → Dup(ct) → two outputs        (sum ↔ broadcast)
-
-Dup(a) (1 input → 2 outputs):
-  transpose → Add(ct_1, ct_2)              (broadcast ↔ sum)
-```
-
-Only `Dup` and `Conj` are added to the primitive set. All other ops are
-reused from the primal set.
-
-#### Tangent I/O reversal
-
-Transpose swaps active inputs and outputs. Fixed operands are unchanged.
-
-```
-Forward linear graph (from differentiate):
-  v4 = Input(dx)                           ← tangent INPUT
-  v5 = Mul(v1, v4)  mask=[fixed, active]   ← v1 = a (fixed)
-  v6 = Mul(v3, v5)  mask=[fixed, active]   ← v3 = exp(a*x) (fixed)
-                                              v6 = tangent OUTPUT
-
-Transposed graph (reversed, new variable names):
-  v7 = Input(ct_dy)                        ← was OUTPUT, now INPUT
-  v8 = Mul(v3, v7)  mask=[fixed, active]   ← reverse order
-  v9 = Mul(v1, v8)  mask=[fixed, active]   ← was INPUT, now OUTPUT
-                                              (complex: Conj(v3), Conj(v1))
-```
-
-**Only tangent I/O flips. Fixed operands (v1, v3) remain as external
-references.**
-
-#### Cotangent accumulation
-
-Local transpose rules alone are NOT sufficient. When multiple reverse
-contributions land on the **same tangent node**, they must be combined
-with `Add`. Example: `f(x) = x + x` produces `Add(dx, dx)` where
-both inputs are the same tangent. Transpose gives `Dup(ct_y)` → two
-cotangent contributions to `dx`, which must be accumulated.
-
-Algorithm:
-
-```
-transpose(linear_fragment):
-  1. seed cotangent on linear outputs
-  2. traverse linear ops in reverse topological order
-  3. read active mask; emit reverse contributions by local transpose rule
-  4. bucket contributions by original tangent-node identity
-  5. combine each bucket with Add
-```
-
-`differentiate` is identical for real and complex — no conjugation.
-`transpose` is the only operation that differs for complex: it wraps
-fixed operands in `Conj`. Only `Dup` and `Conj` are needed as additional
-primitives.
-
-### `merge`: unify graphs before evaluation
-
-Combines multiple independent graphs. Nodes with the same content-addressable
-ID are unified into a single node. This is automatic CSE across all levels.
-
-```
-merge(G_primal, G_transposed):
-  v0 = Input(x)
-  v1 = Input(a)        ← shared by G_primal and G_transposed
-  v2 = Mul(v0, v1)
-  v3 = Exp(v2)          ← shared: computed once, used by both graphs
-  v7 = Input(ct_y)
-  v8 = Mul(v3, v7)
-  v9 = Mul(v1, v8)
-```
-
-### Linearization of binary ops
-
-Most ops have at most 2 inputs. For `y = f(a, b)`, the linearization is
-`dy = ∂f/∂a · da + ∂f/∂b · db`, using the same ops with active masks:
-
-| da | db | linearized node | mask |
-|----|----|----|---|
-| 0 | 0 | skip (zero propagation) | — |
-| da | 0 | `Mul(∂f/∂a, da)` | `[fixed, active]` |
-| 0 | db | `Mul(∂f/∂b, db)` | `[fixed, active]` |
-| da | db | `Add(Mul(∂f/∂a, da), Mul(∂f/∂b, db))` | Add: `[active, active]` |
-
-The active mask is metadata on each linear graph node, determined by
-which tangent inputs are non-zero. `transpose` reads the mask to know
-which operands to flip and which to keep fixed.
-
-### Higher-order AD = repeat `differentiate` with `merge`
-
-n-th derivative = apply `differentiate` n times, with `merge` after each
-to resolve external references before the next can trace through primal
-dependencies. `transpose` is optional (evaluation choice).
-
-```
-1st derivative:
-  G_lin1 = differentiate(G_primal)
-  G1     = merge(G_primal, G_lin1)          ← resolve external refs
-
-2nd derivative:
-  G_lin2 = differentiate(G1, output=tangent_output, wrt=x)
-  G2     = merge(G1, G_lin2)                ← resolve again
-
-gradient:
-  G_trans = transpose(G_lin1)               ← flip tangent I/O
-  G_grad  = merge(G_primal, G_trans)
-
-Hessian-gradient:
-  G_lin_of_grad = differentiate(G_grad, output=ct_x, wrt=x)
-  G_hess = merge(G_grad, G_lin_of_grad)
-```
-
-Without `merge` between differentiations, external references remain
-dangling and the second `differentiate` cannot trace through primal nodes.
-
-### Concrete example: `f(x) = exp(a * x)`
-
-**Step 1 — Build primal graph G_primal:**
-
-```
-v0 = Input(x)
-v1 = Input(a)
-v2 = Mul(v0, v1)    // a*x
-v3 = Exp(v2)         // y = exp(a*x)
-```
-
-**Step 2 — differentiate(G_primal) → G_linear (new graph fragment):**
-
-Same ops as primal, with active masks:
-
-```
-v4 = Input(t_x)
-v5 = Mul(v1, v4)  mask=[fixed, active]   // a * t_x   (v1 = a, external ref)
-v6 = Mul(v3, v5)  mask=[fixed, active]   // exp(a*x) * a*t_x  (v3, external ref)
-```
-
-**Step 3 — merge(G_primal, G_linear) → resolve external refs:**
-
-Required before transpose or further differentiate.
-
-```
-v0 = Input(x)
-v1 = Input(a)
-v2 = Mul(v0, v1)
-v3 = Exp(v2)          ← v5, v6 can now trace through v3 to x
-v4 = Input(t_x)
-v5 = Mul(v1, v4)  mask=[fixed, active]
-v6 = Mul(v3, v5)  mask=[fixed, active]
-```
-
-**Step 4 — transpose(linear part of merged graph) → G_transposed:**
-
-Tangent I/O flips. Fixed operands stay. Reverse order.
-
-```
-v7 = Input(ct_y)
-v8 = Mul(v3, v7)  mask=[fixed, active]   // reverse of v6
-v9 = Mul(v1, v8)  mask=[fixed, active]   // reverse of v5, v9 = ct_dx
-```
-
-**Step 5 — merge(G_merged, G_transposed) → final graph:**
-
-```
-v0 = Input(x)
-v1 = Input(a)         ← shared across primal + transpose
-v2 = Mul(v0, v1)
-v3 = Exp(v2)          ← shared: computed once, used by v5, v6, v8
-v7 = Input(ct_y)
-v8 = Mul(v3, v7)  mask=[fixed, active]
-v9 = Mul(v1, v8)  mask=[fixed, active]   = ct_x
-```
-
-**Step 6 — compile → CompiledProgram → eval:**
+Conceptually:
 
 ```rust
-// Graph construction + AD transforms (expensive, do once)
-let prog = merged.compile(&[v3, v9], &[v0, v1, v7]);
-
-// Eval (cheap, do many times with different inputs)
-let [y, ct_x] = prog.eval(&[2.0, 3.0, 1.0]);
-let [y2, ct_x2] = prog.eval(&[4.0, 3.0, 1.0]);
+fn resolve<Op>(roots: Vec<Arc<Fragment<Op>>>) -> ResolvedView<Op>;
 ```
 
-**Caching**: graph construction, differentiation, merge, and compile are
-all expensive. tidu2 does not cache — it returns `CompiledProgram<Op>`
-and the caller is responsible for retaining and reusing it. This is
-analogous to JAX's `jit`: trace once, execute many times.
+`resolve` is cheap and logical. It prepares a traversal view over fragment
+parents and external references.
 
-```
-Expensive (once):  build → differentiate → merge → compile → CompiledProgram
-Cheap (many times): CompiledProgram.eval(inputs)
-```
+This is the correct replacement for the old statement:
 
-Primal (`v3`) and gradient (`v9`) are compiled into a single program.
-`v3 = exp(a*x)` computed once, shared by primal output and backward.
-All higher-order methods (FoF, FoR, RoF, RoR) give `d²f/dx² = a² exp(ax)` ✓
-
-### Vector example 1: elementwise `y = exp(a * x)` with `x, a ∈ R^2`
-
-This is the same logic as the scalar example, but with explicit tensor
-shapes. `Mul` and `Exp` are elementwise, so every intermediate stays shape
-`[2]`.
-
-**Step 1 — Build primal graph G_primal:**
-
-```
-u0 = Input(x:[2])
-u1 = Input(a:[2])
-u2 = Mul(u0, u1)    // [2], elementwise a*x
-u3 = Exp(u2)        // [2], y = exp(a*x)
+```text
+"merge must precede next differentiate"
 ```
 
-**Step 2 — differentiate(G_primal) → G_linear (new graph fragment):**
+The precise rule is:
 
-Differentiate with respect to `x`, with tangent input `u4 = t_x:[2]`.
-
-```
-u4 = Input(t_x:[2])
-u5 = Mul(u1, u4)  mask=[fixed, active]   // [2], a * t_x
-u6 = Mul(u3, u5)  mask=[fixed, active]   // [2], exp(a*x) * (a * t_x)
+```text
+resolve must precede any transform that needs to trace through external refs
 ```
 
-**Step 3 — merge(G_primal, G_linear) → resolve external refs:**
+In practice:
 
+- higher-order `differentiate` requires `resolve`
+- dependency analysis requires `resolve`
+- `transpose` usually needs only the linear fragment itself plus active masks
+
+### `differentiate`
+
+`differentiate` consumes a resolved view and returns a new linear fragment.
+
+```rust
+struct LinearFragment<Op> {
+    fragment: Fragment<Op>,
+    tangent_inputs: Vec<(InputKey, LocalValId)>,
+    tangent_outputs: Vec<Option<LocalValId>>,
+}
+
+fn differentiate<Op: PrimitiveOp>(
+    view: &ResolvedView<Op>,
+    outputs: &[GlobalValKey<Op>],
+    wrt: &[InputKey],
+) -> LinearFragment<Op>;
 ```
+
+Important consequences:
+
+- callers specify **which primal inputs** they differentiate with respect to
+- tangent inputs are created **inside the returned fragment**
+- those tangent inputs receive fresh `InputKey`s and are returned to the caller
+- primal values are referenced by `External(GlobalValKey)`, not copied
+
+Algorithm sketch:
+
+```text
+1. Traverse the reachable logical DAG in topological order.
+2. Seed tangent inputs for the requested primal InputKeys.
+3. For each reachable primitive, call its linearization rule.
+4. Emit new local linear nodes into the new fragment.
+5. Reference primal values through External(GlobalValKey).
+6. Skip unreachable tangent flow with zero propagation.
+```
+
+There is no physical merge in this step.
+
+### Linear nodes use the primal primitive set
+
+The linear graph uses the same primitive set as the primal graph. There is no
+dedicated `Scale` primitive.
+
+Examples:
+
+```text
+Mul(a, dx)   mode=Linear { active_mask=[fixed, active] }
+Add(dx, dy)  mode=Linear { active_mask=[active, active] }
+Exp(x)       mode=Primal
+```
+
+That last line matters: `Exp` itself is not a linear node. The linearization of
+`Exp(x)` emits linear nodes such as:
+
+```text
+Mul(External(exp(x)), dx) mode=Linear { active_mask=[fixed, active] }
+```
+
+The design rule is:
+
+- linearization may reference primal inputs or outputs as fixed operands
+- linearization must stay linear in tangent inputs
+- active-vs-fixed information is recorded in `OpMode::Linear`
+
+### `transpose`
+
+`transpose` consumes a linear fragment and produces another linear fragment with
+active inputs and outputs reversed.
+
+```rust
+fn transpose<Op: PrimitiveOp>(
+    linear: &LinearFragment<Op>,
+) -> LinearFragment<Op>;
+```
+
+It does not differentiate again. It reuses the same local linear rules with
+direction reversed.
+
+`tidu2::transpose` is generic. It traverses the linear fragment in reverse
+topological order and, for each op node, calls `Op::transpose_rule` to obtain
+the local transposed contribution. `tidu2` does not know which primitives
+exist; it only requires that every op in the linear fragment implements
+`PrimitiveOp::transpose_rule`.
+
+Transpose accumulation must use global identity. When multiple reverse
+contributions flow back to the same original tangent node, bucket by the
+**global key of that tangent value**, not by a fragment-local id.
+
+### `materialize_merge`
+
+`materialize_merge` is the physical graph-building step.
+
+```rust
+fn materialize_merge<Op: PrimitiveOp>(
+    view: &ResolvedView<Op>,
+    outputs: &[GlobalValKey<Op>],
+) -> MaterializedGraph<Op>;
+```
+
+This step:
+
+- walks the resolved logical DAG from the requested outputs
+- collects reachable definitions
+- deduplicates by `GlobalValKey` / `GlobalOpKey`
+- computes one physical DAG
+- prepares the input to `compile`
+
+This is where "merge" actually belongs.
+
+The terminology should therefore be:
+
+```text
+resolve            = make external references traceable
+materialize_merge  = flatten fragments into one concrete graph
+```
+
+### `compile` and `eval`
+
+`compile` consumes a `MaterializedGraph`, not a fragment.
+
+```rust
+let view = resolve(vec![fragment_a, fragment_b, fragment_c]);
+let graph = materialize_merge(&view, &requested_outputs);
+let prog = compile(&graph);
+let values = prog.eval(&runtime_inputs);
+```
+
+This separation is deliberate:
+
+- transforms stay fragment-based
+- compile stays backend-oriented
+- flattening and CSE happen once, late
+
+---
+
+## IV. Scalar Example: `f(x) = exp(a * x)`
+
+### Step 1: build the primal fragment `F0`
+
+```text
+p0 = Input(x)
+p1 = Input(a)
+p2 = Mul(p0, p1)
+p3 = Exp(p2)
+```
+
+Key identities:
+
+```text
+key(p0) = Input(x)
+key(p1) = Input(a)
+key(p2) = Derived { op=Mul(Input(x), Input(a)), output_slot=0 }
+key(p3) = Derived { op=Exp(key(p2)), output_slot=0 }
+```
+
+### Step 2: differentiate the resolved primal view
+
+```text
+L1 = differentiate(resolve([F0]), outputs=[key(p3)], wrt=[x])
+```
+
+One possible linear fragment:
+
+```text
+t0 = Input(t_x)                                         // new tangent input key
+t1 = Mul(External(key(p1)), Local(t0))                  mode=Linear { active_mask=[fixed, active] }
+t2 = Mul(External(key(p3)), Local(t1))                  mode=Linear { active_mask=[fixed, active] }
+```
+
+Important facts:
+
+- `t0`, `t1`, and `t2` are local to `L1`
+- `key(p1)` and `key(p3)` are external references into `F0`
+- no physical merge has happened
+
+### Step 3: resolve for higher-order tracing
+
+If we want a second derivative, we resolve the combined logical view:
+
+```text
+R1 = resolve([F0, L1])
+```
+
+Now `differentiate` can trace the output of `L1` through `key(p3)` and then
+further through the primal chain back to `x`.
+
+This is the critical distinction:
+
+```text
+R1 is enough for higher-order AD.
+No physical merge is required yet.
+```
+
+### Step 4: transpose the linear fragment
+
+```text
+T1 = transpose(L1)
+```
+
+One possible transposed fragment:
+
+```text
+c0 = Input(ct_y)
+c1 = Mul(External(key(p3)), Local(c0))                  mode=Linear { active_mask=[fixed, active] }
+c2 = Mul(External(key(p1)), Local(c1))                  mode=Linear { active_mask=[fixed, active] }
+```
+
+This computes the cotangent with respect to `x`.
+
+### Step 5: materialize only when compiling
+
+```text
+view  = resolve([F0, T1])
+graph = materialize_merge(view, [key(p3), key(c2)])
+prog  = compile(graph)
+```
+
+Conceptually, the materialized graph contains:
+
+```text
+Input(x)
+Input(a)
+Mul(x, a)
+Exp(a*x)
+Input(ct_y)
+Mul(exp(a*x), ct_y)
+Mul(a, exp(a*x) * ct_y)
+```
+
+### Resulting formulas
+
+```text
+y    = exp(a*x)
+dy   = exp(a*x) * a * dx
+ct_x = a * exp(a*x) * ct_y
+```
+
+### Higher order
+
+Second directional derivative uses `resolve`, then `differentiate` again:
+
+```text
+L2 = differentiate(resolve([F0, L1]), outputs=[key(t2)], wrt=[x])
+```
+
+Again, no physical merge is required before this step.
+
+---
+
+## V. Vector Examples
+
+The vector examples remain mathematically identical to the earlier version.
+What changes is only the graph interpretation: fragments stay separate until
+`materialize_merge`.
+
+For readability, `Sum` below is shorthand for `ReduceAdd` over all axes.
+
+### Vector example 1: elementwise `y = exp(a * x)` with `x, a in R^2`
+
+Primal fragment:
+
+```text
 u0 = Input(x:[2])
 u1 = Input(a:[2])
 u2 = Mul(u0, u1)
 u3 = Exp(u2)
+```
+
+Linear fragment from `differentiate(resolve([F0]), outputs=[key(u3)], wrt=[x])`:
+
+```text
 u4 = Input(t_x:[2])
-u5 = Mul(u1, u4)  mask=[fixed, active]
-u6 = Mul(u3, u5)  mask=[fixed, active]
+u5 = Mul(External(key(u1)), Local(u4))                 mode=Linear { active_mask=[fixed, active] }
+u6 = Mul(External(key(u3)), Local(u5))                 mode=Linear { active_mask=[fixed, active] }
 ```
 
-**Step 4 — transpose(linear part of merged graph) → G_transposed:**
+Transposed fragment:
 
-The tangent output `u6:[2]` becomes the cotangent input `u7 = ct_y:[2]`.
-
-```
+```text
 u7 = Input(ct_y:[2])
-u8 = Mul(u3, u7)  mask=[fixed, active]   // [2], reverse of u6
-u9 = Mul(u1, u8)  mask=[fixed, active]   // [2], reverse of u5
-                                            = ct_x:[2]
+u8 = Mul(External(key(u3)), Local(u7))                 mode=Linear { active_mask=[fixed, active] }
+u9 = Mul(External(key(u1)), Local(u8))                 mode=Linear { active_mask=[fixed, active] }
 ```
 
-**Step 5 — resulting formulas:**
+Resulting formulas:
 
-For `x = [x0, x1]`, `a = [a0, a1]`, `t_x = [dx0, dx1]`,
-`ct_y = [ct_y0, ct_y1]`:
-
-```
+```text
 y    = [exp(a0*x0), exp(a1*x1)]
 dy   = [exp(a0*x0) * a0 * dx0,
         exp(a1*x1) * a1 * dx1]
@@ -465,142 +632,90 @@ ct_x = [a0 * exp(a0*x0) * ct_y0,
         a1 * exp(a1*x1) * ct_y1]
 ```
 
-This stays purely elementwise. Numerically, the JVP matches finite
-differences and the transpose satisfies `<ct_y, dy> = <ct_x, t_x>`.
+This stays purely elementwise. The JVP matches finite differences and the
+transpose satisfies `<ct_y, dy> = <ct_x, t_x>`.
 
-### Vector example 2: reduction `y = Sum(exp(a * x))` with `x, a ∈ R^2`
+### Vector example 2: reduction `y = Sum(exp(a * x))` with `x, a in R^2`
 
-This adds a reduction, so the primal output is scalar (`[]`) while the
-internal activations remain vectors (`[2]`).
+Primal fragment:
 
-**Step 1 — Build primal graph G_primal:**
-
-```
-r0 = Input(x:[2])
-r1 = Input(a:[2])
-r2 = Mul(r0, r1)    // [2], elementwise a*x
-r3 = Exp(r2)        // [2], exp(a*x)
-r4 = Sum(r3)        // [], y = exp(a0*x0) + exp(a1*x1)
-```
-
-**Step 2 — differentiate(G_primal) → G_linear (new graph fragment):**
-
-Differentiate with respect to `x`, with tangent input `r5 = t_x:[2]`.
-
-```
-r5 = Input(t_x:[2])
-r6 = Mul(r1, r5)  mask=[fixed, active]   // [2], a * t_x
-r7 = Mul(r3, r6)  mask=[fixed, active]   // [2], exp(a*x) * (a * t_x)
-r8 = Sum(r7)                             // [], dy
-```
-
-**Step 3 — merge(G_primal, G_linear) → resolve external refs:**
-
-```
+```text
 r0 = Input(x:[2])
 r1 = Input(a:[2])
 r2 = Mul(r0, r1)
 r3 = Exp(r2)
 r4 = Sum(r3)
+```
+
+Linear fragment:
+
+```text
 r5 = Input(t_x:[2])
-r6 = Mul(r1, r5)  mask=[fixed, active]
-r7 = Mul(r3, r6)  mask=[fixed, active]
-r8 = Sum(r7)
+r6 = Mul(External(key(r1)), Local(r5))                 mode=Linear { active_mask=[fixed, active] }
+r7 = Mul(External(key(r3)), Local(r6))                 mode=Linear { active_mask=[fixed, active] }
+r8 = Sum(Local(r7))                                    mode=Linear { active_mask=[active] }
 ```
 
-**Step 4 — transpose(linear part of merged graph) → G_transposed:**
+Transposed fragment:
 
-The transpose of `Sum : [2] → []` is `BroadcastInDim : [] → [2]`. So the
-scalar cotangent is first broadcast back to the unreduced shape, then the
-two `Mul` nodes are reversed as before.
-
-```
+```text
 r9  = Input(ct_y:[])
-r10 = BroadcastInDim(r9, shape=[2], dims=[])   // [2], reverse of r8 = Sum(r7)
-r11 = Mul(r3, r10)  mask=[fixed, active]       // [2], reverse of r7
-r12 = Mul(r1, r11)  mask=[fixed, active]       // [2], reverse of r6
-                                                  = ct_x:[2]
+r10 = BroadcastInDim(Local(r9), shape=[2], dims=[])    mode=Linear { active_mask=[active] }
+r11 = Mul(External(key(r3)), Local(r10))               mode=Linear { active_mask=[fixed, active] }
+r12 = Mul(External(key(r1)), Local(r11))               mode=Linear { active_mask=[fixed, active] }
 ```
 
-**Step 5 — resulting formulas:**
+Resulting formulas:
 
-For `x = [x0, x1]`, `a = [a0, a1]`, `t_x = [dx0, dx1]`, scalar cotangent
-seed `ct_y`:
-
-```
+```text
 y    = exp(a0*x0) + exp(a1*x1)
 dy   = exp(a0*x0) * a0 * dx0 + exp(a1*x1) * a1 * dx1
 ct_x = [a0 * exp(a0*x0) * ct_y,
         a1 * exp(a1*x1) * ct_y]
 ```
 
-This is the smallest vector example that makes the reduction transpose
-explicit. Numerically, the JVP matches finite differences and the transpose
-satisfies `ct_y * dy = <ct_x, t_x>`.
+This is the smallest vector example that makes reduction transpose explicit
+without requiring eager merge.
 
-A reproducible numeric checker for these two vector examples is in
-`docs/design/v2_vector_ad_examples_check.py`.
+A reproducible checker for these two examples remains in:
+
+```text
+docs/design/v2_vector_ad_examples_check.py
+```
 
 ---
 
-## IV. Primitive Set and Operand
+## VI. Primitive Set and Traits
 
-### Operand: multi-dimensional array with StableHLO-compatible ops
+### Operand
 
-`Operand` is the type of data flowing through the graph. It must be a
-**multi-dimensional array** (tensor) of some scalar type. Scalars are
-0-dimensional arrays.
-
-Operand must support operations aligned 1:1 with StableHLO ops:
+`Operand` is the runtime value type. It is tensor-like, and scalars are just
+rank-0 tensors.
 
 ```rust
 trait Operand: Clone + Send + Sync + 'static {
-    fn reshape(&self, shape: &[usize]) -> Self;                           // stablehlo.reshape
-    fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;  // stablehlo.broadcast_in_dim
-    fn add(&self, other: &Self) -> Self;                                   // stablehlo.add
-    fn multiply(&self, other: &Self) -> Self;                              // stablehlo.multiply
-    fn dot_general(&self, other: &Self, ...) -> Self;                      // stablehlo.dot_general
+    fn zero(shape: &[usize]) -> Self;
+    fn one(shape: &[usize]) -> Self;
+    fn reshape(&self, shape: &[usize]) -> Self;
+    fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;
+    fn add(&self, other: &Self) -> Self;
+    fn multiply(&self, other: &Self) -> Self;
+    fn reduce_add(&self, axes: &[usize]) -> Self;
+    fn dot_general(&self, other: &Self, ...) -> Self;
+    fn conj(&self) -> Self;
 }
 ```
 
-This 1:1 alignment means `CompiledProgram` can be lowered to StableHLO
-straightforwardly for the core subset (elementwise, dot_general,
-reductions). Linalg ops use `custom_call`. Complex transcendentals
-and control flow require decomposition.
+`zero` is required for zero propagation (skipping inactive tangent flow).
+`one` is required for seeding reverse-mode AD (`ct_y = one`).
 
-Why these operations are needed:
+This keeps the AD graph close to StableHLO-compatible tensor semantics.
 
-| AD operation | Required Operand ops |
-|-------------|---------------------|
-| forward eval | multiply, add |
-| linearize | multiply, add |
-| transpose (Dup) | broadcast_in_dim |
-| batched JVP (all tangent dirs at once) | reshape (add axes) + multiply (broadcasting) |
-| cross-country composition | reshape + multiply (outer product) or dot_general (contraction) |
+### PrimitiveOp
 
-### Placeholder evaluation and broadcasting
-
-When computing all tangent directions simultaneously, the tangent input is
-a placeholder representing an identity matrix:
-
-```
-x: shape [N]
-dx: placeholder → shape [N, N] (identity matrix, one direction per column)
-```
-
-Broadcasting propagates the batch dimension through the graph. For a
-2-input linearization `dy = ∂f/∂a · da + ∂f/∂b · db`:
-
-```
-∂f/∂a · da:  shape [N1]    →  reshape to [N1, 1]
-∂f/∂b · db:  shape [N2]    →  reshape to [1, N2]
-dy = Add:    [N1, 1] + [1, N2] = [N1, N2]  ← broadcast in Add
-```
-
-The Jacobian shape `[N_out, N_in]` emerges naturally from broadcasting.
-Shape conventions (which axis is which) follow StableHLO / JAX conventions.
-
-### PrimitiveOp trait (defined in chainrules2)
+`PrimitiveOp` provides eval, linearization, and transpose rules. The rules emit
+fragments, not one global graph. `tidu2` is fully generic over this trait and
+never references specific primitives.
 
 ```rust
 pub trait PrimitiveOp: Clone + Hash + Eq + Send + Sync + 'static {
@@ -611,96 +726,97 @@ pub trait PrimitiveOp: Clone + Hash + Eq + Send + Sync + 'static {
 
     fn eval(&self, inputs: &[&Self::Operand]) -> Vec<Self::Operand>;
 
-    /// Produce a NEW linear graph for the JVP.
-    /// Primal values are referenced by ValId (resolved at merge time).
     fn linearize(
         &self,
-        graph: &mut Graph<Self>,
-        primal_in: &[ValId],
-        primal_out: &[ValId],
-        tangent_in: &[Option<ValId>],
-    ) -> Vec<Option<ValId>>
+        builder: &mut FragmentBuilder<Self>,
+        primal_in: &[GlobalValKey<Self>],
+        primal_out: &[GlobalValKey<Self>],
+        tangent_in: &[Option<LocalValId>],
+    ) -> Vec<Option<LocalValId>>
+    where
+        Self: Sized;
+
+    fn transpose_rule(
+        &self,
+        builder: &mut FragmentBuilder<Self>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<Self>],
+        mode: &OpMode,
+    ) -> Vec<Option<LocalValId>>
     where
         Self: Sized;
 }
 ```
 
-Linearize rules are standalone functions; the trait impl is a `match` dispatch.
+`tidu2::differentiate` calls `linearize`; `tidu2::transpose` calls
+`transpose_rule`. Both are graph-level transforms that traverse the fragment
+and delegate local rules to the trait methods.
 
-### Design principle
+### Linearization and transpose rules
 
-A primitive's `linearize` must be **linear in the tangent inputs**. It may:
-- Reference primal output vals as fixed operands (e.g., `Exp` references `exp(x)`)
-- Emit the same primal ops with active masks (e.g., `Exp` emits `Mul` with mask)
-- NOT apply nonlinear ops to tangent inputs
+A primitive's `linearize` must be linear in tangent inputs. It may:
 
-Nodes emitted by `linearize` carry an **active mask** indicating which
-inputs are tangent (active) and which are fixed. `transpose` reads this mask.
+- reference primal inputs or outputs through `External(GlobalValKey)`
+- emit primal primitives in `OpMode::Linear`
+- emit `Dup` or `Conj` when required by transpose semantics
 
-### Two tiers (defined in tenferro2)
+It must not introduce nonlinear dependence on tangent inputs.
 
-**Tier 1 — Semiring Core**: sufficient for einsum-based computation. Compatible
-with custom algebraic backends (tropical, p-adic, polynomial rings, etc.).
+A primitive's `transpose_rule` receives cotangent outputs and must produce
+cotangent inputs. It must only emit primitives that themselves implement
+`PrimitiveOp`. The downstream implementor is responsible for ensuring that
+the set of primitives reachable through `linearize` and `transpose_rule`
+is closed.
 
-- Elementwise: `Add`, `Mul`, `Neg`, `Conj`, `Dup`
-- Tensor: `Einsum`, `Transpose`, `Reshape`, `BroadcastInDim`
-- Reduction: `Sum`, `Prod`
+### Closure responsibility
 
-**Tier 2 — Standard = Core + JAX prims**: full JAX-compatible set.
+`tidu2` does not define or constrain the primitive set. It is fully generic
+over `Op: PrimitiveOp`. The only rule is:
 
-- Transcendental: `Exp`, `Log`, `Sin`, `Cos`, ...
-- Linalg: `SVD`, `Cholesky`, `QR`, `Eig`, `Solve`
-- Indexing: `Gather`, `Scatter`, `Slice`
-- Control: `Cond`, `Scan`, `While`
-- Misc: `Sort`, `FFT`, `Conv`, ...
+> `linearize` and `transpose_rule` must emit only ops that themselves
+> implement `PrimitiveOp`.
 
-Each primitive's `linearize` is expressed in terms of other primitives.
+This ensures that `tidu2` can apply `differentiate` and `transpose` to any
+fragment without knowledge of the specific primitives involved. The concrete
+primitive set and its closure guarantees are entirely the downstream
+implementor's responsibility (e.g. tenferro2).
+
+There is no dedicated `Scale` primitive in this design.
 
 ---
 
-## V. Compilation & Execution
+## VII. Compilation and Execution
 
 ### Pipeline
 
-```
-                ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-                │  G_primal    │   │  G_linear    │   │  G_transposed│
-                │  (build)     │   │  (diff)      │   │  (transpose) │
-                └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
-                       │                  │                   │
-                       └─────────┬────────┘───────────────────┘
-                                 │ merge (unify by content-addressable ID)
-                                 ▼
-                       ┌─────────────────────┐
-                       │  Merged Graph       │
-                       │  (shared nodes, CSE) │
-                       └─────────┬───────────┘
-                                 │ compile (toposort + SSA)
-                                 ▼
-                       ┌─────────────────────┐
-                       │  TenferroIR         │
-                       │  (flat slot-based)  │
-                       └─────────┬───────────┘
-                                 │
-              ┌──────────────────┼──────────────────┐
-              ▼                  │                   ▼
-     ┌────────────────┐         │         ┌──────────────────┐
-     │  Standard      │         │         │  Custom algebra  │
-     │  → StableHLO   │         │         │  → Custom backend│
-     └───────┬────────┘         │         │  (Tier 1 only)   │
-             │                  │         └──────────────────┘
-        ┌────┴────┐             │
-        ▼         ▼             │
-   ┌────────┐ ┌───────┐        │
-   │  faer  │ │  XLA  │        │
-   │(default)│ │(opt.) │        │
-   └────────┘ └───────┘        │
+```text
+Fragments (primal / linear / transposed)
+    |
+    | resolve                          ← computegraph
+    v
+Resolved logical DAG
+    |
+    | materialize_merge                ← computegraph
+    v
+MaterializedGraph
+    |
+    | compile (SSA)                    ← computegraph
+    v
+CompiledProgram
+    |
+    | eval                             ← computegraph
+    | or lower to StableHLO backends   ← tenferro
+    v
+Runtime values
 ```
 
-### CompiledProgram (SSA IR)
+### CompiledProgram
+
+`CompiledProgram` is an SSA-form instruction sequence produced by
+`computegraph::compile`. Each slot is written exactly once.
 
 ```rust
-struct CompiledProgram<Op: PrimitiveOp> {
+struct CompiledProgram<Op: GraphOp> {
     instructions: Vec<Instruction<Op>>,
     input_slots: Vec<usize>,
     output_slots: Vec<usize>,
@@ -714,203 +830,80 @@ struct Instruction<Op> {
 }
 ```
 
-`compile(target_nodes, input_nodes)` topologically sorts from targets,
-producing a flat instruction sequence. Compile once, eval many times.
+`compile` runs only after `materialize_merge`:
 
-### Backend dispatch
+- one physical DAG exists
+- same-key nodes are already unified
+- slot assignment can be computed once
 
-| Primitive tier | Backend | Use case |
-|---------------|---------|----------|
-| Tier 1 only | Custom algebra backend | Tropical, p-adic, polynomial rings |
-| Tier 1 + 2 | StableHLO → IREE/XLA | Standard float/complex on GPU/TPU |
+Compile once, eval many times. `computegraph` caches compiled programs keyed
+by graph structure to avoid recompilation.
 
-tidu2 is backend-agnostic. It produces `CompiledProgram<Op>`. StableHLO
-lowering is conceptually straightforward for the core op subset
-(elementwise, dot_general, reductions map 1:1 to StableHLO).
+### Backend boundary
+
+This document stops at `MaterializedGraph -> CompiledProgram`. Backend-specific
+details (StableHLO lowering, GPU dispatch) remain in `v2-backend-architecture.md`.
+
+The important contract is:
+
+- AD transforms (tidu) are fragment-based and resolver-backed
+- graph infrastructure (computegraph) is AD-agnostic
+- backends only see the materialized or compiled result
 
 ---
 
-## VI. Crate Architecture
+## VIII. Advantages of the Fragment + Resolver Model
 
-### chainrules2
+### No eager merge between transforms
 
-**Role**: define `PrimitiveOp` and `Operand` traits.
+Higher-order AD requires traceability, not a physically merged graph. Delaying
+physical merge avoids repeated flattening and repeated global CSE.
 
-Contains:
-- `PrimitiveOp` trait
-- `Operand` trait (StableHLO-aligned ops)
-- `ValId`, `OpId` types
-- Error types
+### Better fit for partial transforms
 
-### tidu2
+Cross-country evaluation and partial transpose are more natural when transforms
+operate on fragments rather than on one giant graph.
 
-**Role**: graph engine.
+### Global identity is explicit
 
-Contains:
-- `Graph<Op>` data structure
-- `differentiate()` → new graph
-- `transpose()` → new graph
-- `merge()` → unified graph
-- `compile()` → `CompiledProgram`
-- `CompiledProgram::eval()` (CPU execution)
+`GlobalValKey` gives one identity mechanism for:
 
-### tenferro2
+- external refs
+- accumulation buckets
+- CSE
+- logical reachability
 
-**Role**: tensor primitives and hardware backends.
+### Compile-time work is isolated
 
-Contains:
-- `TensorOp` enum implementing `PrimitiveOp` (Tier 1 + Tier 2)
-- `Tensor<T>`, `DynTensor` implementing `Operand`
-- Linearize rules for each primitive
-- StableHLO lowering of `CompiledProgram<TensorOp>`
+Only `materialize_merge` and `compile` need one concrete graph. Transform-time
+code can stay light and local.
 
-### Dependency graph
+### Higher-order AD stays clean
 
-```
-chainrules2          (PrimitiveOp + Operand traits)
-    ↓
-tidu2                (Graph engine)
-    ↓
-tenferro2            (Tensor prims + backends)
+The rule for higher order is simple:
+
+```text
+resolve before the next differentiate
+materialize_merge before compile
 ```
 
 ---
 
-## VII. Advantages of Graph-Based Design
+## IX. Golden Tests
 
-### Cross-country evaluation
-
-Partially transpose a linear graph: forward for the first half, backward
-for the second half.
-
-```
-Linear graph:    dx → [L1] → [L2] → mid → [L3] → [L4] → dy
-
-Split and transpose L3, L4 only:
-  G_fwd:  dx  → [L1] → [L2] → mid_fwd     (keep as-is)
-  G_bwd:  ct_dy → [L4ᵀ] → [L3ᵀ] → mid_bwd  (transpose L3, L4)
-```
-
-Combine via outer product (scalar chain) or einsum (tensor chain):
-
-```
-Scalar:   J = mid_bwd ⊗ mid_fwd                          (broadcast + multiply)
-Tensor:   J = dot_general(mid_bwd, mid_fwd, contract=k)  (contraction over mid dim)
-```
-
-Optimal split point can be determined automatically based on op costs.
-
-### Runtime checkpoint optimization
-
-Each op declares cost and output size:
-
-```rust
-trait OpInfo {
-    fn cost(&self, input_sizes: &[usize]) -> f64;
-    fn output_size(&self, input_sizes: &[usize]) -> usize;
-}
-```
-
-The graph scheduler uses **runtime information** to decide which intermediate
-values to keep vs. recompute. Graph-level optimization, not per-op decisions.
-
-### CSE via merge
-
-Since graphs are merged by content-addressable ID, a value like `exp(x)` is
-guaranteed to appear once in the merged graph regardless of how many
-independent graphs reference it.
-
-### Compile-once-eval-many: Laplacian example
-
-Tr(H) = Σᵢ ∂²f/∂xᵢ². Key insight: `differentiate` twice with the same
-tangent direction v gives vᵀHv directly. No `transpose`, no dot product.
-
-```
-t_y = differentiate(y, wrt=x, tangent=v)     // ∇f · v
-vHv = differentiate(t_y, wrt=x, tangent=v)   // vᵀHv
-```
-
-| Method | Transform | Compile | Eval | Total |
-|--------|-----------|---------|------|-------|
-| FoF + compile once (exact) | 2 | 1 | n | O(n) eval only |
-| FoF + Hutchinson (stochastic) | 2 | 1 | k | O(k), k << n |
-| Forward Laplacian (future) | 1 | 1 | 1 | **O(1)** |
-
-Forward Laplacian propagates (value, tangent, Laplacian) simultaneously:
-
-```
-u = a * b:   Lap(u) = a·Lap(b) + 2·da·db + b·Lap(a)
-u = exp(a):  Lap(u) = exp(a)·(Lap(a) + da²)
-```
-
-Implementable as a specialized graph transformation.
-
----
-
-## Appendix: Design Notes
-
-### A. Custom rules for user-defined functions
-
-Users extend the primitive set by adding variants to their `PrimitiveOp` enum
-(analogous to Julia's `ChainRulesCore.frule` / `rrule`).
-
-To avoid exposing low-level graph internals, provide a `Traced` wrapper:
-
-```rust
-// User writes normal math — Traced records ops into the graph
-fn linearize_dyson(
-    g0: Traced, sigma: Traced,       // primal values
-    t_g0: Traced, t_sigma: Traced,   // tangent values
-) -> Traced {
-    g0.exp() * t_g0 + sigma * t_sigma
-}
-```
-
-```rust
-struct Traced<'g, Op: PrimitiveOp> {
-    ctx: &'g GraphContext<Op>,
-    val_id: ValId,              // hidden from user
-}
-
-impl Mul for Traced<'_, Op> { ... }  // calls ctx.add_op(Mul, ...)
-impl Add for Traced<'_, Op> { ... }  // calls ctx.add_op(Add, ...)
-```
-
-### B. Wrapper structs and pytree-style AD
-
-Domain structs wrapping tensors declare differentiable fields via a trait:
-
-```rust
-#[derive(Differentiable)]
-struct GreenFunction {
-    #[leaf]
-    data: Tensor<f64>,      // AD target (Operand)
-    mesh: ImagTimeMesh,     // metadata, not differentiated
-    beta: f64,              // parameter, not differentiated
-}
-```
-
-The graph operates on leaves (`Tensor<f64>` = Operand). Pack/unpack is
-automatic via `to_leaves` / `from_leaves`.
-
----
-
-## VIII. Golden Tests
-
-Minimal set of tests that validate the graph transform procedure.
-Derived from manual experiments (see `docs/design/ad-graph-experiments.md`).
+Minimal tests that validate the fragment-based transform procedure:
 
 | # | Function | What it checks |
-|---|----------|---------------|
-| 1 | `x + x` | transpose accumulation (same tangent node) |
-| 2 | `x * y` | binary linearization, distinct reverse sinks |
-| 3 | `c * z` (complex) | `Conj` placement only in transpose |
-| 4 | `x²` | duplication, CSE, all 4 second-order modes (FoF/FoR/RoF/RoR) |
-| 5 | `exp(a*x)` | chain rule, external refs, repeated merge, all 4 modes |
-| 6 | `x*y` mixed partial | order symmetry: d²f/dxdy = d²f/dydx |
-| 7 | `exp(a*x)` 3rd order | repeated higher-order closure |
+|---|----------|----------------|
+| 1 | `x + x` | transpose accumulation buckets by global identity |
+| 2 | `x * y` | binary linearization with distinct reverse sinks |
+| 3 | `c * z` (complex) | `Conj` appears only in transpose |
+| 4 | `x^2` | higher-order AD without eager physical merge |
+| 5 | `exp(a*x)` | external refs, resolve-before-differentiate, transpose correctness |
+| 6 | `Sum(exp(a*x))` | reduction transpose via `BroadcastInDim` |
+| 7 | `exp(a*x)` 3rd order | repeated higher-order closure over fragments |
 
-Expected second-order results for `x²` (all seeds = 1):
+Expected second-order result for `x^2` with unit seeds:
 
 | Mode | Output |
 |------|--------|
@@ -919,49 +912,50 @@ Expected second-order results for `x²` (all seeds = 1):
 | RoF | 2 |
 | RoR | 2 |
 
-Expected second-order results for `exp(a*x)` (all seeds = 1):
+Expected second-order result for `exp(a*x)` with unit seeds:
 
 | Mode | Output |
 |------|--------|
-| FoF | a² exp(ax) |
-| FoR | a² exp(ax) |
-| RoF | a² exp(ax) |
-| RoR | a² exp(ax) |
+| FoF | `a^2 exp(ax)` |
+| FoR | `a^2 exp(ax)` |
+| RoF | `a^2 exp(ax)` |
+| RoR | `a^2 exp(ax)` |
 
 ---
 
-## IX. Roadmap
+## X. Roadmap
 
-### Phase 1: Scalar graph AD
+### Phase 1: Scalar fragment AD
 
-- `Graph<ScalarOp>` with `Operand = f64`
-- Primitives: `Mul`, `Add`, `Scale`, `Exp`, `Dup`, `Neg`
-- `differentiate`, `transpose`, `merge`, `compile`, `eval`
-- Tests: forward, backward, FoF, FoR, RoF, RoR for `exp(a*x)`
+- `Fragment<ScalarOp>` plus `ResolvedView<ScalarOp>`
+- `GlobalValKey`, `ValRef`, `OpMode`
+- transforms: `resolve`, `differentiate`, `transpose`, `materialize_merge`
+- primitives: `Add`, `Mul`, `Exp`, `Dup`, `Neg`, `Conj`
+- tests: forward, backward, and second order on `exp(a*x)`
 
 ### Phase 2: Tensor primitives
 
-- `TensorOp` enum with Tier 1 (Semiring Core) + Tier 2 (Standard)
-- `Operand = Tensor<f64>` and `DynTensor` implementing StableHLO-aligned ops
-- Linearize rules for all primitives
-- Batched JVP via placeholder + broadcasting
+- `TensorOp` with full primitive set
+- `DynTensor` implementing `Operand`
+- vector and reduction transpose rules
+- batched JVP via tensor-valued tangent inputs
 
 ### Phase 3: Backend compilation
 
-- StableHLO lowering of `CompiledProgram<TensorOp>` (1:1 for core ops)
-- IREE/XLA integration for GPU/TPU execution
-- Custom algebra backend for Tier 1 programs
+- `MaterializedGraph -> TenferroIR`
+- StableHLO lowering of `CompiledProgram<TensorOp>`
+- CPU / GPU backends consume only compiled or lowered materialized programs
 
 ### Phase 4: Optimization
 
-- Graph scheduler for checkpoint optimization (runtime cost/memory info)
-- Cross-country mode (automatic forward/backward split)
-- Forward Laplacian
-- Operator fusion in compiled IR
+- logical-DAG-aware checkpoint scheduling
+- partial transpose / cross-country mode
+- late materialization heuristics
+- operator fusion in compiled IR
 
 ---
 
-## Superseded Issues
+## XI. Superseded Issues
 
 This document unifies and supersedes:
 

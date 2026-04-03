@@ -12,7 +12,7 @@
 **All computation — primal and derivatives — flows through the same pipeline:**
 
 ```
-Graph (primal and/or AD-transformed)
+MaterializedGraph (after resolve + materialize_merge)
   │
   │ compile
   ▼
@@ -28,10 +28,11 @@ TenferroIR (flat SSA, common to all algebras)
 ```
 
 AD is a graph transformation (differentiate, transpose), not a separate
-execution mode. A primal-only computation follows the same path — just
-without graph transformations. Even eager execution (`apply_op`-equivalent)
-is internally a single-node graph compiled and evaluated through this
-pipeline.
+execution mode. AD-side transforms may remain fragmented until a final
+`materialize_merge` produces the compile-time `MaterializedGraph`. A
+primal-only computation follows the same path — just without AD transforms.
+Even eager execution (`apply_op`-equivalent) is internally a single-node
+materialized graph compiled and evaluated through this pipeline.
 
 ### Three Standard backends (all accept StableHLO)
 
