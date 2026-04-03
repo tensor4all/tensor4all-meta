@@ -3,7 +3,7 @@
 **Date:** 2026-04-02
 **Status:** Draft
 **Repos:** tenferro-rs
-**Related:** `v2-ad-architecture.md`
+**Related:** `ad-architecture.md`, `primitive-catalog.md`
 
 ---
 
@@ -22,7 +22,8 @@ CompiledProgram (flat SSA, common to all algebras)
   │                            ├→ (2) Custom GPU engine (GPU, op-by-op, dynamic shapes)
   │                            └→ (3) XLA              (GPU/TPU, JIT, static shapes)
   │
-  └─ Custom ────→ Custom backend (Semiring Core only)
+  └─ Custom ────→ Custom backend
+                   (semiring-compatible subset of the core tensor vocabulary)
                    ├── CPU: custom kernels
                    └── GPU: optimized CUDA kernels
 ```
@@ -69,16 +70,36 @@ batch size) where kernel fusion provides significant speedup.
 | Tropical | Custom backend → custom kernels | Custom backend → optimized CUDA kernels |
 
 Tropical and other custom algebras bypass StableHLO entirely. They use
-CompiledProgram (Tier 1 only) dispatched directly to custom kernels.
+CompiledProgram restricted to the semiring-compatible subset of the core
+tensor vocabulary, dispatched directly to custom kernels.
 
 ---
 
-## II. Primitive Set
+## II. Primitive Vocabulary
 
-### Tier 1 — Semiring Core
+This section summarizes the concrete `TensorOp` vocabulary that tenferro is
+expected to lower and execute.
 
-Sufficient for einsum-based computation. Compatible with custom algebraic
-backends (tropical, p-adic, polynomial rings).
+For exact per-op definitions, shape contracts, and frontend aliases, see
+[`primitive-catalog.md`](primitive-catalog.md).
+
+`primitive-catalog.md` is the source of truth for what tenferro v2 is expected
+to implement.
+
+Important distinction:
+
+- `einsum`, `sum`, `mean`, `where`, `greater`, and similar names are
+  **surface-level APIs** or aliases
+- `DotGeneral`, `ReduceAdd`, `Select`, `Compare`, and similar names are the
+  **canonical graph primitives**
+
+### Tier 1 — Core AD closure
+
+This is the smallest primitive set needed for explicit tensor linearization,
+transpose rules, and contraction-based execution. It is also the part of the
+vocabulary closest to what custom algebraic backends can support. In practice,
+those backends may implement only the semiring-compatible / structurally neutral
+subset of Tier 1 rather than every Tier-1 op.
 
 | Primitive | Inputs | StableHLO equivalent |
 |-----------|--------|---------------------|
@@ -86,17 +107,33 @@ backends (tropical, p-adic, polynomial rings).
 | `Mul` | 2 | `stablehlo.multiply` |
 | `Neg` | 1 | `stablehlo.negate` |
 | `Dup` | 1 (→ 2 outputs) | `stablehlo.broadcast_in_dim` (duplicate) |
-| `Conj` | 1 | `stablehlo.complex` (swap imag sign) |
-| `Einsum` / `DotGeneral` | 2 | `stablehlo.dot_general` |
+| `Conj` | 1 | custom/simple elementwise lowering |
+| `DotGeneral` | 2 | `stablehlo.dot_general` |
 | `ReduceAdd` | 1 | `stablehlo.reduce` (sum) |
 | `Transpose` | 1 | `stablehlo.transpose` |
 | `Reshape` | 1 | `stablehlo.reshape` |
 | `BroadcastInDim` | 1 | `stablehlo.broadcast_in_dim` |
-| `Dup` | 1 | `stablehlo.broadcast_in_dim` (same) |
 
-### Tier 2 — Standard = Core + JAX prims
+`einsum` is intentionally not listed as a primitive here. The user-facing
+einsum API is lowered into `DotGeneral` plus shape and reduction primitives.
 
-Full JAX-compatible set for general-purpose differentiable programming.
+### Tier 2 — Standard dense tensor vocabulary
+
+This extends the Tier-1 closure with the standard arithmetic and indexing ops
+needed for general-purpose dense differentiable programming.
+
+**Arithmetic & comparison:**
+
+| Primitive | StableHLO |
+|-----------|-----------|
+| `Div` | `stablehlo.divide` |
+| `Abs` | `stablehlo.abs` |
+| `Sign` | `stablehlo.sign` |
+| `Maximum` | `stablehlo.maximum` |
+| `Minimum` | `stablehlo.minimum` |
+| `Compare(dir)` | `stablehlo.compare` |
+| `Select` | `stablehlo.select` |
+| `Clamp` | `stablehlo.clamp` |
 
 **Transcendental:**
 
@@ -112,18 +149,6 @@ Full JAX-compatible set for general-purpose differentiable programming.
 | `Pow` | `stablehlo.power` |
 | `Expm1` | `stablehlo.exponential_minus_one` |
 | `Log1p` | `stablehlo.log_plus_one` |
-
-**Comparison & Selection:**
-
-| Primitive | StableHLO |
-|-----------|-----------|
-| `Maximum` | `stablehlo.maximum` |
-| `Minimum` | `stablehlo.minimum` |
-| `Compare(dir)` | `stablehlo.compare` |
-| `Select` | `stablehlo.select` |
-| `Clamp` | `stablehlo.clamp` |
-| `Abs` | `stablehlo.abs` |
-| `Sign` | `stablehlo.sign` |
 
 **Indexing & Structure:**
 
@@ -167,24 +192,11 @@ dispatches to the appropriate LAPACK/cuSOLVER routine.
 | `Scan` | `stablehlo.while` (unrolled or looped) |
 | `While` | `stablehlo.while` |
 
-### tenferro-prims v1 → v2 mapping
+### Implementation target
 
-tenferro v1 has ~134 ops. v2 reorganizes into Tier 1 + Tier 2:
-
-- **Keep**: ops with direct StableHLO mapping (~85 ops, aligned with JAX lax)
-- **Merge**: `Square` → `Mul(x,x)`, `Reciprocal` → `Div(1,x)` (compose from primitives)
-- **Keep as-is**: `SemiringCore::BatchedGemm` → `DotGeneral`
-- **Add**: `Reshape`, `Transpose`, `BroadcastInDim`, `Pad` (critical gaps from v1)
-
-### Key gaps to fill from v1
-
-| Op | Why needed |
-|----|-----------|
-| `Reshape` | Transpose rules, broadcasting |
-| `Transpose` (permutation) | Transpose of DotGeneral |
-| `BroadcastInDim` | Transpose of reduction, Dup |
-| `Pad` | Transpose of Slice |
-| `Sign`, `IsFinite` | Numerical stability in JVP rules |
+The primitive implementation target itself is not redefined here. Use
+[`primitive-catalog.md`](primitive-catalog.md) as the canonical list, and treat
+this document as the backend/lowering view of that same inventory.
 
 ---
 
@@ -242,7 +254,7 @@ fn lower_instruction(inst: &Instruction<TensorOp>) -> StableHloOp {
 | `f64` | `f64` | ✅ |
 | `Complex<f32>` | `complex<f32>` | ✅ |
 | `Complex<f64>` | `complex<f64>` | ✅ |
-| `Tropical<f64>` | — | ❌ (Tier 1 only, DefaultBackend) |
+| `Tropical<f64>` | — | ❌ (StableHLO path unavailable; use custom backend on semiring-compatible subset) |
 
 ### Linalg as custom_call
 
@@ -261,17 +273,16 @@ computation is fully compilable even though the primal is a custom_call.
 
 ### Architecture: two-level compilation
 
-All algebras first compile to a **CompiledProgram** (Semiring Core + JAX Prims).
-This is the common intermediate representation. Further lowering depends
-on the algebra.
+All programs first compile to a **CompiledProgram**. This is the common
+intermediate representation. Which parts of the primitive vocabulary may appear
+in that program depends on the algebra.
 
 ```
 Graph → differentiate / transpose → merge → compile
     │
     ▼
 CompiledProgram<Op>
-    │         Semiring Core (Tier 1) + JAX Prims (Tier 2)
-    │         common to ALL algebras
+    │         common IR
     │
     ├── Standard algebra (uses Tier 1 + Tier 2):
     │     → lower to StableHLO (Tier 2 ops map 1:1)
@@ -281,15 +292,17 @@ CompiledProgram<Op>
     │     └── XLA backend (optional, ~200MB, GPU support)
     │           JIT compiles StableHLO → LLVM/PTX, fusion, optimization
     │
-    └── Custom algebra — Tropical, p-adic, etc. (Tier 1 only):
-          → Custom backend (implements Semiring Core ops only)
+    └── Custom algebra — Tropical, p-adic, etc.
+          (semiring-compatible subset of Tier 1 only):
+          → Custom backend
           ├── CPU: custom kernels
           └── GPU: hand-optimized CUDA kernels
 ```
 
-**Custom algebra programs may only use Tier 1 (Semiring Core) ops.**
-Using Tier 2 ops (Exp, SVD, etc.) with a custom algebra is a compile-time
-error — these ops have no meaning outside Standard algebra.
+**Custom algebra programs may only use the semiring-compatible subset of
+Tier 1.** Using Tier 2 ops (`Exp`, `SVD`, etc.) with a custom algebra is a
+compile-time error, and even some Tier-1 ops (for example `Neg` or `Conj`)
+may be unavailable when the algebra does not define them.
 
 ### Type erasure boundary
 
@@ -673,5 +686,5 @@ impl Operand for Tensor {
 
 ## Superseded Issues (partially)
 
-- tenferro-rs#616: Traced Tensor + StableHLO IR (AD portions → `v2-ad-architecture.md`)
-- tenferro-rs#618: tenferro v2 roadmap (backend portions here, AD portions → `v2-ad-architecture.md`)
+- tenferro-rs#616: Traced Tensor + StableHLO IR (AD portions → `ad-architecture.md`)
+- tenferro-rs#618: tenferro v2 roadmap (backend portions here, AD portions → `ad-architecture.md`)

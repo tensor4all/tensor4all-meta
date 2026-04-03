@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-03 (rewritten)
 **Status:** Draft
-**Parent:** `v2-architecture-overview.md`
-**Related:** `v2-tensor-api-pseudocode.md`, `v2-ad-architecture.md`
+**Parent:** `README.md`
+**Related:** `tensor-api-pseudocode.md`, `ad-architecture.md`
 
 ---
 
@@ -22,7 +22,7 @@ struct Tensor {
 ```
 
 `TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
-and AD (see `v2-tensor-api-pseudocode.md`).
+and AD (see `tensor-api-pseudocode.md`).
 
 **Why dense only**: structural variants (diagonal, band, triangular, ...)
 cause combinatorial explosion in op implementations. Every op must handle

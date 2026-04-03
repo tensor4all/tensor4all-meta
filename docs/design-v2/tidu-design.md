@@ -3,7 +3,7 @@
 **Date:** 2026-04-03
 **Status:** Draft
 **Repo:** tidu-rs
-**Parent:** `v2-architecture-overview.md`
+**Parent:** `README.md`
 **Depends on:** `computegraph-rs`, `chainrules-rs`
 
 ---

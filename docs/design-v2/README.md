@@ -1,7 +1,10 @@
-# v2 Architecture Overview
+# Design v2 Overview
 
 **Date:** 2026-04-03
 **Status:** Draft
+
+This `README.md` is the umbrella/index document for the `docs/design-v2/`
+directory.
 
 ---
 
@@ -38,12 +41,13 @@ primitives except tenferro-rs.
 
 | Crate | Document | Key Contents |
 |-------|----------|--------------|
-| computegraph-rs | [`v2-computegraph-design.md`](v2-computegraph-design.md) | GraphOp, Operand, Fragment, resolve, materialize_merge, compile (SSA), eval, compilation cache |
-| chainrules-rs | [`v2-chainrules-design.md`](v2-chainrules-design.md) | PrimitiveOp trait (linearize + transpose_rule), closure contract |
-| tidu-rs | [`v2-tidu-design.md`](v2-tidu-design.md) | differentiate, transpose, LinearFragment, pipelines (JVP/VJP/HVP/higher-order) |
-| tenferro-rs | [`v2-backend-architecture.md`](v2-backend-architecture.md) | StableHLO lowering, CPU/GPU backends |
-| tenferro-rs | [`v2-tensor-design.md`](v2-tensor-design.md) | Tensor type, dense-only principle, einsum hyper edges |
-| tenferro-rs | [`v2-tensor-api-pseudocode.md`](v2-tensor-api-pseudocode.md) | TracedTensor API, lazy evaluation, AD examples |
+| computegraph-rs | [`computegraph-design.md`](computegraph-design.md) | GraphOp, Operand, Fragment, resolve, materialize_merge, compile (SSA), eval, compilation cache |
+| chainrules-rs | [`chainrules-design.md`](chainrules-design.md) | PrimitiveOp trait (linearize + transpose_rule), closure contract |
+| tidu-rs | [`tidu-design.md`](tidu-design.md) | differentiate, transpose, LinearFragment, pipelines (JVP/VJP/HVP/higher-order) |
+| tenferro-rs | [`backend-architecture.md`](backend-architecture.md) | StableHLO lowering, CPU/GPU backends |
+| tenferro-rs | [`tensor-design.md`](tensor-design.md) | Tensor type, dense-only principle, einsum hyper edges |
+| tenferro-rs | [`tensor-api-pseudocode.md`](tensor-api-pseudocode.md) | TracedTensor API, lazy evaluation, AD examples |
+| tenferro-rs | [`primitive-catalog.md`](primitive-catalog.md) | Source of truth for the v2 primitive inventory, per-op definitions, surface-to-primitive lowering |
 
 ---
 
@@ -51,9 +55,9 @@ primitives except tenferro-rs.
 
 | Document | Contents |
 |----------|----------|
-| [`v2-ad-architecture.md`](v2-ad-architecture.md) | Detailed AD theory, examples (scalar + vector), golden tests |
-| [`v2-tier1-transpose-rules.md`](v2-tier1-transpose-rules.md) | Per-primitive transpose rule table |
-| [`v2-backend-architecture.md`](v2-backend-architecture.md) | Backend-specific details |
+| [`ad-architecture.md`](ad-architecture.md) | Detailed AD theory, examples (scalar + vector), golden tests |
+| [`primitive-catalog.md`](primitive-catalog.md) | Concrete op list and definitions for readers new to the stack |
+| [`backend-architecture.md`](backend-architecture.md) | Backend-specific details |
 
 ---
 
@@ -76,6 +80,9 @@ boundary is AD-agnostic, not tensor-agnostic.
 AD transforms (`differentiate`, `transpose`) are fully generic over
 `Op: PrimitiveOp`. tidu-rs never references specific primitives such as `Add`
 or `Mul`.
+
+The concrete tensor vocabulary that downstream tenferro supplies is documented
+in [`primitive-catalog.md`](primitive-catalog.md).
 
 ### Closure is downstream responsibility
 
@@ -134,7 +141,7 @@ struct TracedTensor {
 `TracedTensor::from()` consumes the `Tensor` (move semantics, no implicit copy).
 Clone explicitly if the original is still needed.
 
-See `v2-tensor-api-pseudocode.md` for full usage examples.
+See `tensor-api-pseudocode.md` for full usage examples.
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-03
 **Status:** Draft
-**Parent:** `v2-architecture-overview.md`
+**Parent:** `README.md`
 
 ---
 

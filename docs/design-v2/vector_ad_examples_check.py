@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Numerically validate the vector examples in v2-ad-architecture.md.
+"""Numerically validate the vector examples in ad-architecture.md.
 
 This script checks the two 1D vector examples added to the design doc:
 
