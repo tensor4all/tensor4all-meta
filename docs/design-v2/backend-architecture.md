@@ -93,13 +93,16 @@ Important distinction:
 - `DotGeneral`, `ReduceAdd`, `Select`, `Compare`, and similar names are the
   **canonical graph primitives**
 
-### Tier 1 — Core AD closure
+`primitive-catalog.md` also separates:
 
-This is the smallest primitive set needed for explicit tensor linearization,
-transpose rules, and contraction-based execution. It is also the part of the
-vocabulary closest to what custom algebraic backends can support. In practice,
-those backends may implement only the semiring-compatible / structurally neutral
-subset of Tier 1 rather than every Tier-1 op.
+- backend-facing semiring execution subsets for einsum
+- canonical graph primitives for AD / StableHLO lowering
+
+### AD-closed graph core
+
+This is the smallest graph-level primitive set needed for explicit tensor
+linearization, transpose rules, and StableHLO-aligned contraction-based
+execution.
 
 | Primitive | Inputs | StableHLO equivalent |
 |-----------|--------|---------------------|
@@ -117,10 +120,10 @@ subset of Tier 1 rather than every Tier-1 op.
 `einsum` is intentionally not listed as a primitive here. The user-facing
 einsum API is lowered into `DotGeneral` plus shape and reduction primitives.
 
-### Tier 2 — Standard dense tensor vocabulary
+### Standard arithmetic only
 
-This extends the Tier-1 closure with the standard arithmetic and indexing ops
-needed for general-purpose dense differentiable programming.
+This extends the AD-closed graph core with the standard arithmetic and indexing
+ops needed for general-purpose dense differentiable programming.
 
 **Arithmetic & comparison:**
 

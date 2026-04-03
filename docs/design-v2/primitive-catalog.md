@@ -27,6 +27,11 @@ readability, this document separates them explicitly:
 | Graph primitive | `DotGeneral`, `ReduceAdd`, `BroadcastInDim` | what may appear as `TensorOp` nodes in a `Fragment` |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, StableHLO op | how a primitive is executed |
 
+This document uses **two orthogonal classifications**:
+
+1. backend-facing execution subsets inside tenferro
+2. canonical graph primitives that the v2 graph / AD stack talks about
+
 Important distinctions:
 
 - `differentiate`, `transpose`, `resolve`, and `compile` are **transforms**, not
@@ -84,17 +89,77 @@ The output ordering must be part of the primitive definition because
 
 From this document's point of view, the implementation target is:
 
-- implement the full Tier-1 core set
-- implement the structured tensor and linalg primitives listed here when
-  tenferro claims support for them
-- implement the Tier-2 standard numeric set as the dense standard-arithmetic
-  vocabulary
+- implement the backend-facing semiring execution subsets defined below
+- implement the AD-closed graph core defined below
+- implement the `Standard arithmetic only` primitives when tenferro claims
+  standard dense numeric support
 - treat control-flow primitives as future work, not part of the initial
   required set
 
 ---
 
-## III. Tier 1: Core AD-Closed Primitive Set
+## III. Backend-Facing Execution Subsets In tenferro
+
+This section is about what tenferro backends need in order to execute einsum
+and related tensor programs efficiently. These are **not** the same thing as
+the canonical graph primitive vocabulary.
+
+### Tensor-structural prerequisites
+
+The strict semiring minimum below assumes that the tensor layer already provides
+the following structural operations as views or cheap metadata transforms:
+
+- `permute`
+- `reshape`
+- `broadcast`
+- `diagonal`
+
+With those available outside the backend prim vocabulary, repeated labels,
+layout normalization, and singleton expansion do not need separate semiring
+execution ops.
+
+### Semiring core: strict minimum for einsum execution
+
+This is the smallest backend-facing set needed to execute generic einsum after
+contraction planning and structural-view normalization.
+
+| Primitive | Why it is needed |
+|-----------|------------------|
+| `BatchedGemm` | binary contraction primitive for paired labels |
+| `ReduceAdd` | reduction of labels that survive planning but are not present in the final output |
+
+If v2 keeps `diagonal` as a tensor-layer view, `Trace` is **not** part of this
+strict minimum. If diagonal extraction/contraction is not available as a view,
+`Trace` would have to move back into the semiring core.
+
+### Semiring execution helper
+
+| Primitive | Role |
+|-----------|------|
+| `MakeContiguous` | explicit materialization boundary for kernels that require contiguous operands |
+
+`MakeContiguous` is useful in implementations, but it is not part of the
+mathematical minimum needed to describe einsum semantics.
+
+### Semiring fast-path extensions
+
+These ops are not required for correctness, but they can avoid lowering all the
+way to `BatchedGemm` + `ReduceAdd` in common cases.
+
+| Primitive | Role |
+|-----------|------|
+| `Contract` | direct binary einsum/contraction fast path |
+| `ElementwiseMul` | fast path for Hadamard-style products |
+| `ElementwiseAdd` | fast path for semiring accumulation / fused accumulation patterns |
+
+---
+
+## IV. Canonical Graph Primitive Vocabulary
+
+This section is about the graph-level vocabulary that `computegraph-rs`,
+`chainrules-rs`, `tidu-rs`, and tenferro's `TensorOp` layer talk about.
+
+### AD-closed graph core
 
 These are the minimal tensor primitives needed to express:
 
@@ -112,7 +177,7 @@ Every op in this table is expected to implement `PrimitiveOp` directly.
 | `Neg` | `x: S -> y: S` | `y[i] = -x[i]` | Unary elementwise |
 | `Conj` | `x: S -> y: S` | `y[i] = conj(x[i])` | Identity on real dtypes, conjugation on complex dtypes |
 | `Dup` | `x: S -> (y0: S, y1: S)` | `y0 = x`, `y1 = x` | Internal linear primitive that makes fan-out explicit |
-| `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Matrix multiply, batched matmul, and inner product are all special cases |
+| `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive; matrix multiply, batched matmul, and inner product are all special cases |
 | `Transpose(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Reorder axes according to `perm` | Pure axis permutation |
 | `Reshape(shape)` | `x: [d0, ..., dn-1] -> y: shape` | Reinterpret the same element sequence with a new shape | Total element count must stay unchanged |
 | `BroadcastInDim(shape, dims)` | `x: [a0, ..., ak-1] -> y: shape` | Place input axis `j` into output axis `dims[j]`, repeating along the others | Makes all broadcast semantics explicit |
@@ -129,15 +194,15 @@ Every op in this table is expected to implement `PrimitiveOp` directly.
 
 ---
 
-## IV. Structured Tensor Primitives and AD Helpers
+### Structured tensor graph ops and AD helpers
 
-These ops are not part of the minimal Tier-1 closure, but they are part of the
-intended tensor vocabulary because they arise naturally in tensor-network and
-linalg code.
+These ops are not part of the minimal AD-closed core, but they may still appear
+in tenferro's graph vocabulary if v2 chooses to represent them explicitly
+instead of lowering them away through tensor-layer views.
 
 | Primitive | Signature | Definition | Notes |
 |-----------|-----------|------------|-------|
-| `Trace(paired_axes)` | `x: [..., n, ..., n, ...] -> y` | Sum entries where the listed axis pairs are equal | Example: matrix trace `[n, n] -> []` |
+| `Trace(paired_axes)` | `x: [..., n, ..., n, ...] -> y` | Sum entries where the listed axis pairs are equal | Example: matrix trace `[n, n] -> []`; not part of the strict semiring minimum if `diagonal` is a view |
 | `Diag(mode, paired_axes)` | vector/tensor -> tensor/vector | Either embed values onto a diagonal or extract a diagonal slice | Think `i -> ii` or `ii -> i` in einsum notation |
 | `AntiTrace` | `x -> y` | Scatter-add cotangent values back onto traced diagonal positions | Internal AD helper, not part of semiring core |
 | `AntiDiag` | `x -> y` | Scatter or write cotangent values back through diagonal structure | Internal AD helper, not part of semiring core |
@@ -148,11 +213,14 @@ inside transpose rules or decompositions.
 
 ---
 
-## V. Tier 2: Standard Numeric Primitive Set
+## V. Standard Arithmetic Only
 
-Tier 2 is the standard arithmetic vocabulary layered on top of the Tier-1 core.
-These are the primitives needed for general-purpose differentiable programming
-on dense tensors.
+These primitives are available only for the ordinary dense numeric setting
+(real/complex standard arithmetic). They are not assumed to exist for generic
+semirings such as tropical algebra.
+
+This section should be kept as close as practical to the official StableHLO op
+set, so that tenferro's canonical graph primitives lower cleanly to StableHLO.
 
 ### Elementwise arithmetic, comparison, and selection
 
@@ -206,7 +274,7 @@ this document is updated.
 | `ReduceMax` | Max over the listed axes |
 | `ReduceMin` | Min over the listed axes |
 
-`ReduceAdd` stays in Tier 1 because it is essential both for primal tensor code
+`ReduceAdd` stays in the AD-closed graph core because it is essential both for primal tensor code
 and for transpose rules.
 
 ### Linalg primitives
@@ -236,7 +304,25 @@ vertical slice.
 
 ---
 
-## VI. Frontend Sugar and Canonical Lowering
+## VI. StableHLO Alignment
+
+When there is a choice, the canonical graph vocabulary should prefer the
+StableHLO-style name and semantics:
+
+| Prefer in v2 | Instead of |
+|--------------|------------|
+| `DotGeneral` | `einsum` or `dot` as a primitive |
+| `BroadcastInDim` | implicit broadcasting or generic `broadcast` primitive |
+| `Compare(dir)` + `Select` | surface names like `greater`, `greater_equal`, `where` |
+| `ReduceAdd` / `ReduceMax` / ... | opaque reduction primitives whose combiner is not explicit |
+
+The goal is not to copy StableHLO mechanically. The goal is to ensure that the
+`Standard arithmetic only` part of tenferro's graph vocabulary has an obvious,
+low-friction lowering path to StableHLO.
+
+---
+
+## VII. Frontend Sugar and Canonical Lowering
 
 Many familiar user-level ops are better treated as aliases or composites rather
 than as distinct graph primitives.
@@ -264,7 +350,7 @@ This is useful for two reasons:
 
 ---
 
-## VII. Implementation Note
+## VIII. Implementation Note
 
 This catalog is about the **semantic tensor vocabulary** that the v2 graph and
 AD stack talk about. It is intentionally independent of how tenferro chooses to
