@@ -19,6 +19,10 @@
   `Engine` is a **tenferro-rs concept** that wraps `computegraph-rs`'s
   compilation cache with backend-specific execution context (CPU/GPU) and
   extension caches (e.g., `EinsumCache` for contraction path optimization).
+- `eval_all` is the primary evaluation API. It resolves all output fragments
+  together into one `MaterializedGraph`, so shared intermediate nodes (e.g.,
+  primal values needed by both forward output and gradient) are computed once.
+  Single-output `eval` is a convenience wrapper around `eval_all`.
 
 ---
 
@@ -141,10 +145,35 @@ let y = ax.exp();                      // scalar output
 // grad: differentiate + transpose (graph transform, still lazy)
 let grad_x = y.grad(&x);
 
-// eval
-let y_val: &Tensor = y.eval(&mut engine);
-let grad_val: &Tensor = grad_x.eval(&mut engine);
-// grad_val = a * exp(a . x)
+// eval_all: single materialized graph, primal intermediates shared
+let results = engine.eval_all(&mut [&mut y, &mut grad_x]);
+// results[0] = exp(a . x)
+// results[1] = a * exp(a . x)
+```
+
+**Why `eval_all`, not separate `eval` calls:**
+
+Each `eval` independently runs `materialize_merge → compile → eval`. If `y`
+and `grad_x` are evaluated separately, primal intermediates (e.g. `exp(a*x)`)
+are recomputed in both programs.
+
+`eval_all` resolves all fragments together into one `MaterializedGraph`.
+`GlobalValKey`-based deduplication ensures shared nodes are computed once:
+
+```text
+engine.eval_all(&mut [&mut y, &mut grad_x])
+    → resolve([primal_fragment, transposed_fragment])
+    → materialize_merge(view, [key(y), key(grad_x)])
+        // exp(a*x) appears once, shared between y and grad_x
+    → compile (single CompiledProgram)
+    → eval (single execution, both outputs produced)
+```
+
+Separate `eval` calls remain available for convenience when sharing is not
+needed:
+
+```rust
+let y_val: &Tensor = y.eval(&mut engine);  // OK if grad not needed
 ```
 
 ---
@@ -161,7 +190,8 @@ let y = einsum(&mut engine, &[&a, &x], "i,i->").exp();
 let t_x = TracedTensor::from(Tensor::new(&tangent_raw, &[3]));
 let dy = y.jvp(&x, &t_x);  // differentiate only (no transpose)
 
-let dy_val: &Tensor = dy.eval(&mut engine);
+// eval_all: primal intermediate exp(a.x) shared between y and dy
+let results = engine.eval_all(&mut [&mut y, &mut dy]);
 ```
 
 ---
@@ -179,7 +209,8 @@ let grad_x = y.grad(&x);                                      // differentiate +
 let t_x = TracedTensor::from(Tensor::new(&tangent_raw, &[3]));
 let hvp = grad_x.jvp(&x, &t_x);                              // differentiate again
 
-let hvp_val: &Tensor = hvp.eval(&mut engine);
+// eval_all: all primal + first-order + second-order intermediates shared
+let results = engine.eval_all(&mut [&mut y, &mut grad_x, &mut hvp]);
 ```
 
 ---
@@ -271,7 +302,7 @@ let loss = truncated.sum();
 
 // AD through SVD
 let grad_a = loss.grad(&a);
-let grad_val: &Tensor = grad_a.eval(&mut engine);
+let results = engine.eval_all(&mut [&mut loss, &mut grad_a]);
 ```
 
 ---
@@ -308,12 +339,17 @@ y.grad(&x)
     → differentiate(graph, wrt=x) → transpose(linear_fragment)
     → TracedTensor { shape=x.shape, fragment, val, data: None }
 
+engine.eval_all(&mut [&mut y, &mut grad_x])
+    → resolve (gather all reachable fragments from all outputs)
+    → materialize_merge (flatten + CSE, GlobalValKey dedup)
+        // shared primal nodes appear once in the materialized graph
+    → engine.cache.get_or_compile (cache lookup or compile to SSA)
+    → backend.eval_program(prog, inputs)
+    → fills y.data = Some(result), grad_x.data = Some(result)
+    → returns Vec<&Tensor>
+
 y.eval(&mut engine)
     → if data is Some → return &Tensor immediately
-    → resolve (gather reachable fragments)
-    → materialize_merge (flatten + CSE)
-    → engine.cache.get_or_compile (cache lookup or compile to SSA)
-    → compiled.eval(ctx, inputs)
-    → fills y.data = Some(result)
+    → same pipeline as above but for single output
     → returns &Tensor
 ```

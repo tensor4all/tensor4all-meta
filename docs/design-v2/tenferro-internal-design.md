@@ -446,16 +446,27 @@ impl TracedTensor {
     /// Create from concrete data
     fn from(tensor: Tensor) -> Self;
 
-    /// Lazy evaluation: resolve → materialize_merge → compile → eval
+    /// Lazy evaluation (single output, no intermediate sharing)
     fn eval(&mut self, engine: &mut Engine) -> &Tensor;
 
-    /// VJP: differentiate → transpose (via tidu-rs)
+    /// VJP: differentiate → transpose (via tidu-rs), still lazy
     fn grad(&self, wrt: &TracedTensor) -> TracedTensor;
 
-    /// JVP: differentiate only (via tidu-rs)
+    /// JVP: differentiate only (via tidu-rs), still lazy
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor;
 }
+
+impl Engine {
+    /// Evaluate multiple outputs together.
+    /// All fragments are resolved into one MaterializedGraph, so shared
+    /// intermediate nodes (primal values needed by both output and gradient)
+    /// are computed only once via GlobalValKey deduplication.
+    fn eval_all(&mut self, outputs: &mut [&mut TracedTensor]) -> Vec<&Tensor>;
+}
 ```
+
+`eval_all` is the recommended API when primal outputs and their derivatives
+are needed together. Single-output `eval` is a convenience wrapper.
 
 For custom algebras, users work with `Fragment<SemiringOp<T>>` and
 `CompiledProgram<SemiringOp<T>>` directly through the computegraph-rs API,
