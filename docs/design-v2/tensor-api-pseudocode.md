@@ -12,8 +12,8 @@
 - `TracedTensor` is the user-facing type for **standard algebra**. It holds
   shape/dtype, graph info, and optionally data. All lazy operations return
   `TracedTensor`.
-- `Tensor` is the concrete data type (shape + buffer). Users see it at
-  input/output boundaries only.
+- `Tensor` is the concrete dense runtime value (shape + buffer + device).
+  It may live on CPU or GPU. Users see it at input/output boundaries only.
 - `einsum` is a free function that takes `TracedTensor` inputs and returns
   `TracedTensor`. There is no eager `einsum` on `Tensor` — users wrap
   concrete data with `TracedTensor::from` first.
@@ -36,9 +36,10 @@
 ```rust
 // Typed tensor (internal)
 struct TensorData<T: Scalar> {
-    buffer: Vec<T>,
+    buffer: Buffer<T>,
     shape: Vec<usize>,
     strides: Vec<isize>,
+    device: Device,
 }
 
 // Type-erased tensor (user-facing)
@@ -63,7 +64,25 @@ struct TracedTensor {
 - `TracedTensor::from(Tensor)` creates a Fragment input node with `data = Some(...)`.
 - Operations (einsum, exp, ...) create new Fragments and return
   `TracedTensor` with `data = None`.
-- `eval()` fills in `data` and returns `&Tensor`.
+- `eval()` fills in `data` and returns `&Tensor`. The resulting tensor may live
+  on CPU or GPU depending on the `Engine` backend.
+
+```rust
+enum Buffer<T> {
+    Cpu(Vec<T>),
+    Gpu(GpuBufferHandle<T>),
+}
+```
+
+Host access is explicit:
+
+```rust
+impl Tensor {
+    fn device(&self) -> Device;
+    fn to_cpu(&self) -> Tensor;
+    fn to_gpu(&self, device: Device) -> Tensor;
+}
+```
 
 ### Graph origin
 
@@ -120,7 +139,7 @@ let loss = z.sum();                         // data = None
 
 // eval triggers compilation + execution
 let loss_val: &Tensor = loss.eval(&mut engine);
-// loss.data is now Some(...)
+// loss.data is now Some(...); may be CPU or GPU resident
 
 // Already eval'd tensors return data immediately
 let loss_val2: &Tensor = loss.eval(&mut engine);  // no recomputation

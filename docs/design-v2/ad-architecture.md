@@ -76,7 +76,7 @@ computegraph   GraphOp + Operand traits, Fragment, resolve,
                materialize_merge, compile (SSA), eval,
                compilation cache
     ↓
-chainrules     PrimitiveOp: GraphOp (adds linearize + transpose_rule)
+chainrules     PrimitiveOp: GraphOp (adds add + linearize + transpose_rule)
     ↓
 tidu           differentiate, transpose — generic AD transforms
                over PrimitiveOp; no graph infrastructure of its own
@@ -714,16 +714,21 @@ computation graph close to StableHLO-compatible tensor semantics.
 
 ### PrimitiveOp
 
-`PrimitiveOp` extends `GraphOp` with linearization and transpose rules. The
-rules emit fragments, not one global graph. `tidu` is fully generic over this
-trait and never references specific primitives. `eval`, `n_inputs`,
-`n_outputs`, and `type Operand` belong to `GraphOp` (defined in computegraph).
+`PrimitiveOp` extends `GraphOp` with a cotangent-accumulation constructor plus
+linearization and transpose rules. The rules emit fragments, not one global
+graph. `tidu` is fully generic over this trait and never references specific
+primitives. `eval`, `n_inputs`, `n_outputs`, and `type Operand` belong to
+`GraphOp` (defined in computegraph).
 
 ```rust
 pub trait PrimitiveOp: GraphOp
 where
     Self::InputKey: ADKey,
 {
+    fn add() -> Self
+    where
+        Self: Sized;
+
     fn linearize(
         &self,
         builder: &mut FragmentBuilder<Self>,
@@ -747,8 +752,9 @@ where
 ```
 
 `tidu::differentiate` calls `linearize`; `tidu::transpose` calls
-`transpose_rule`. Both are graph-level transforms that traverse the fragment
-and delegate local rules to the trait methods.
+`transpose_rule` and uses `add()` when it needs to accumulate multiple
+cotangent contributions to the same tangent value. All three are graph-level
+contract points delegated to the downstream primitive type.
 
 ### Linearization and transpose rules
 
@@ -763,7 +769,7 @@ It must not introduce nonlinear dependence on tangent inputs.
 Fan-out accumulation (when multiple cotangents flow to the same tangent
 node during transpose) is handled internally by `tidu::transpose`, not
 by an explicit `Dup` primitive. `tidu` buckets reverse contributions by
-`GlobalValKey` and accumulates them with `Add`.
+`GlobalValKey` and accumulates them by emitting `Op::add()` nodes.
 
 A primitive's `transpose_rule` receives cotangent outputs and must produce
 cotangent inputs. It must only emit primitives that themselves implement

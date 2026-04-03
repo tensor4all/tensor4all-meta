@@ -9,15 +9,17 @@
 
 ## I. Principle: tenferro::Tensor is always dense
 
-`Tensor` is a plain multi-dimensional array. It carries no
-structural metadata (diagonal, symmetric, block-diagonal, sparse, etc.).
+`Tensor` is a dense multi-dimensional array. It carries no structural metadata
+(diagonal, symmetric, block-diagonal, sparse, etc.), but it may reside on CPU
+or GPU.
 
 ```rust
 // Typed tensor (internal)
 struct TensorData<T: Scalar> {
-    buffer: Vec<T>,
+    buffer: Buffer<T>,
     shape: Vec<usize>,
     strides: Vec<isize>,
+    device: Device,
 }
 
 // Type-erased tensor (user-facing)
@@ -29,8 +31,20 @@ enum Tensor {
 }
 ```
 
+```rust
+enum Buffer<T> {
+    Cpu(Vec<T>),
+    Gpu(GpuBufferHandle<T>),
+}
+```
+
 `TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
 and AD (see `tensor-api-pseudocode.md`).
+
+`Tensor` is the standard-algebra runtime value shared across CPU and GPU
+backends. Methods such as `device()`, `to_cpu()`, and `to_gpu(...)` are part of
+the tensor boundary; backend-specific handles remain internal implementation
+details.
 
 **Why dense only**: structural variants (diagonal, band, triangular, ...)
 cause combinatorial explosion in op implementations. Every op must handle

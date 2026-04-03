@@ -23,7 +23,7 @@ computegraph-rs    General-purpose computation graph engine
     ↓               materialize_merge, compile, eval, cache)
     ↓
 chainrules-rs      AD trait definitions
-    ↓              (PrimitiveOp: GraphOp + linearize + transpose_rule)
+    ↓              (PrimitiveOp: GraphOp + add + linearize + transpose_rule)
     ↓
 tidu-rs            AD graph transforms
     ↓              (differentiate, transpose — generic over PrimitiveOp)
@@ -42,7 +42,7 @@ primitives except tenferro-rs.
 | Crate | Document | Key Contents |
 |-------|----------|--------------|
 | computegraph-rs | [`computegraph-design.md`](computegraph-design.md) | AD-agnostic graph IR: `GraphOp`, `Operand`, `Fragment`, `resolve`, `materialize_merge`, `compile`, `eval`, cache |
-| chainrules-rs | [`chainrules-design.md`](chainrules-design.md) | `PrimitiveOp` trait and primitive-local `linearize` / `transpose_rule` contract |
+| chainrules-rs | [`chainrules-design.md`](chainrules-design.md) | `PrimitiveOp` trait, cotangent accumulation via `add()`, and primitive-local `linearize` / `transpose_rule` contract |
 | tidu-rs | [`tidu-design.md`](tidu-design.md) | `differentiate`, `transpose`, `LinearFragment`, higher-order AD pipelines |
 | tenferro-rs | [`backend-architecture.md`](backend-architecture.md) | StableHLO-targeted backend architecture, `custom_call`, CPU/GPU/custom-algebra split |
 | tenferro-rs | [`tensor-design.md`](tensor-design.md) | Dense tensor principle, structural tensor information, einsum decomposition |

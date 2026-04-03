@@ -289,25 +289,25 @@ execution path for production backends.
 
 `CompiledProgram<Op>` is pure data — an instruction sequence with slot
 assignments. Any backend can interpret it independently of `GraphOp::eval`,
-using its own tensor type and execution strategy.
+using its own execution strategy.
 
 ### Backend trait
 
 ```rust
 trait Backend<Op> {
-    type Tensor;
-
     fn eval_program(
         &mut self,
         prog: &CompiledProgram<Op>,
-        inputs: &[Self::Tensor],
-    ) -> Vec<Self::Tensor>;
+        inputs: &[Tensor],
+    ) -> Vec<Tensor>;
 }
 ```
 
-`Backend::Tensor` is intentionally decoupled from `GraphOp::Operand`. A GPU
-backend can use `GpuTensor<T>` even though `GraphOp::Operand = T` (a CPU
-type). The backend is responsible for mapping each `Op` to its own kernels.
+For standard algebra backends, `Tensor` is the shared runtime value type across
+CPU and GPU. A GPU backend may internally materialize `XlaBuffer`,
+`CudaBuffer`, or other backend-native handles, but those remain backend
+implementation details and are wrapped back into device-aware `Tensor` values
+at the API boundary.
 
 ### StableHLO IR representation
 
@@ -494,7 +494,6 @@ struct FaerBackend {
 }
 
 impl Backend<StdTensorOp> for FaerBackend {
-    type Tensor = Tensor;
     fn eval_program(&mut self, prog, inputs) {
         let hlo = lower_to_stablehlo(prog);
         for inst in &hlo.instructions {
@@ -512,9 +511,9 @@ impl Backend<StdTensorOp> for FaerBackend {
 
 struct XlaBackend { client: XlaClient }
 impl Backend<StdTensorOp> for XlaBackend {
-    type Tensor = XlaBuffer;
     fn eval_program(&mut self, prog, inputs) {
         let hlo = lower_to_stablehlo(prog);
+        let device_buffers = self.upload_inputs(inputs)?;
         // Build HLO computation via xla-rs builder API
         let builder = XlaBuilder::new("program");
         for inst in &hlo.instructions {
@@ -527,7 +526,8 @@ impl Backend<StdTensorOp> for XlaBackend {
             }
         }
         let executable = self.client.compile(&builder.build())?;
-        executable.execute(inputs)
+        let outputs = executable.execute(&device_buffers)?;
+        self.wrap_outputs(outputs)
     }
 }
 ```
@@ -581,7 +581,7 @@ impl Backend<SemiringOp<TropicalTensor>> for TropicalGpuBackend {
 | | `GraphOp::eval` | `Backend<Op>` |
 |---|---|---|
 | Defined in | computegraph-rs | tenferro-rs |
-| Tensor type | fixed (`Op::Operand`) | per-backend (`Backend::Tensor`) |
+| Tensor type | fixed (`Op::Operand`) | fixed (`Tensor`) for standard algebra; backend-internal buffers are opaque |
 | Multiple backends | no (one `Context`) | yes |
 | Standard algebra | reference impl only | StableHLO → faer/XLA/GPU |
 | Custom algebra | reference impl only | user-defined (CPU/GPU/...) |

@@ -82,7 +82,8 @@ contributions flow back to the same original tangent node, bucket by the
 
 Fan-out accumulation is handled internally by `transpose`, not by an
 explicit `Dup` primitive. When multiple cotangents flow to the same
-`GlobalValKey`, `transpose` accumulates them with `Add`. This follows
+`GlobalValKey`, `transpose` accumulates them by emitting `Op::add()` nodes.
+This follows
 the JAX approach where `add_jaxvals` is built into the transpose pass
 rather than expressed as a separate primitive in the graph. Downstream
 primitive implementors do not need to implement `Dup`.
@@ -138,7 +139,9 @@ fn transpose<Op: PrimitiveOp>(linear: &LinearFragment<Op>) -> LinearFragment<Op>
 The accumulation `Add` nodes emitted during transpose are **normal graph
 nodes** in the transposed fragment. They carry
 `OpMode::Linear { active_mask: [active, active] }` and participate in
-subsequent AD transforms like any other node.
+subsequent AD transforms like any other node. This is why `PrimitiveOp`
+includes `add()`: `tidu` needs one generic way to construct those
+accumulation nodes.
 
 ### Worked example: transpose of `f(x) = (x+x)*x`
 

@@ -11,8 +11,9 @@
 ## I. Purpose
 
 `chainrules-rs` defines the AD trait (`PrimitiveOp`) that extends
-`computegraph::GraphOp` with linearization and transpose rules. It contains
-no graph infrastructure and no concrete primitives.
+`computegraph::GraphOp` with a cotangent-accumulation constructor plus
+linearization and transpose rules. It contains no graph infrastructure and no
+concrete primitives.
 
 This is the v2 counterpart of the AD behavior that JAX stores in
 `primitive_jvps` and `primitive_transposes`. The information is the same kind
@@ -28,7 +29,14 @@ of information, but the representation is different:
 ```rust
 use computegraph::{GraphOp, FragmentBuilder, GlobalValKey, LocalValId, ValRef, OpMode};
 
-pub trait PrimitiveOp: GraphOp {
+pub trait PrimitiveOp: GraphOp
+where
+    Self::InputKey: ADKey,
+{
+    fn add() -> Self
+    where
+        Self: Sized;
+
     fn linearize(
         &self,
         builder: &mut FragmentBuilder<Self>,
@@ -50,6 +58,11 @@ pub trait PrimitiveOp: GraphOp {
         Self: Sized;
 }
 ```
+
+`add()` returns the primitive used by `tidu::transpose` when multiple
+cotangent contributions flow to the same `GlobalValKey`. This keeps fan-out
+accumulation inside the generic transpose pass without requiring a separate
+built-in `Dup` or `Add` primitive in `tidu`.
 
 ---
 
@@ -78,6 +91,11 @@ A primitive's `transpose_rule` receives cotangent outputs and produces
 cotangent inputs. It must only emit primitives that themselves implement
 `PrimitiveOp`.
 
+When transpose encounters fan-out, `tidu` accumulates multiple reverse
+contributions by emitting `PrimitiveOp::add()` nodes. So every downstream
+primitive set used with `tidu` must provide an addition primitive suitable for
+cotangent accumulation.
+
 ---
 
 ## V. ADKey Trait
@@ -100,6 +118,7 @@ pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
 
 ```rust
 pub trait PrimitiveOp: GraphOp where Self::InputKey: ADKey {
+    fn add() -> Self;
     fn linearize(...) -> ...;
     fn transpose_rule(...) -> ...;
 }
@@ -131,11 +150,11 @@ is closed — i.e., every emitted op also implements `PrimitiveOp`.
 
 ---
 
-## VI. Design Boundaries
+## VII. Design Boundaries
 
 ```text
 chainrules-rs owns:
-  - PrimitiveOp trait (linearize + transpose_rule)
+  - PrimitiveOp trait (`add` + `linearize` + `transpose_rule`)
 
 chainrules-rs does NOT own:
   - graph infrastructure → computegraph-rs

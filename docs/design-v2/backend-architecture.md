@@ -366,7 +366,8 @@ are logical transformations, not memory operations.
 
 `MakeContiguous` MAY exist in CompiledProgram as an optional hint, but is
 **ignored on the Standard (StableHLO) path** — both faer and XLA backends
-treat all tensors as contiguous. It is only meaningful on the **Custom
+treat `Tensor` as a logical dense value and may choose their own internal
+layout. It is only meaningful on the **Custom
 backend path** (e.g., Tropical) where strides are used internally:
 
 ```
@@ -375,7 +376,7 @@ CompiledProgram:   Transpose(A)     ← logical operation
        ┌─────────┴─────────┐
        ▼                    ▼
   StableHLO             faer backend
-  all contiguous        stride-based (lazy)
+  logical dense         stride-based (lazy)
   XLA optimizes:        faer optimizes:
    - layout assignment   - strides for transpose (zero-copy)
    - transpose folding   - contiguous only when needed
@@ -386,14 +387,14 @@ CompiledProgram:   Transpose(A)     ← logical operation
 Each backend independently optimizes memory layout. The user and CompiledProgram
 see only logical operations. This is a clean separation of concerns.
 
-**Contract**: the final output of any backend is always contiguous. Internal
-intermediates may be non-contiguous (e.g., faer may defer transpose via
-strides), but this is invisible to the caller.
+**Contract**: the final output of any standard backend is always a dense
+`Tensor` on some device. Internal intermediates may use backend-specific layout
+or non-contiguous views, but this is invisible to the caller.
 
 ### Device management
 
-CompiledProgram is **device-agnostic** — it contains no
-device or memory space information. Device placement is a runtime concern.
+CompiledProgram is **device-agnostic** — it contains no device or memory space
+information. Device placement is a runtime concern carried by `Tensor`.
 
 **Phase 1: all inputs must be on the same device.**
 
@@ -616,9 +617,15 @@ over `TensorData<T>` for each supported scalar type.
 
 ```rust
 struct TensorData<T: Scalar> {
-    buffer: Vec<T>,
+    buffer: Buffer<T>,
     shape: Vec<usize>,
     strides: Vec<isize>,
+    device: Device,
+}
+
+enum Buffer<T> {
+    Cpu(Vec<T>),
+    Gpu(GpuBufferHandle<T>),
 }
 
 enum Tensor {
