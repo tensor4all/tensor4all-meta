@@ -310,22 +310,57 @@ trait Backend<Op> {
 backend can use `GpuTensor<T>` even though `GraphOp::Operand = T` (a CPU
 type). The backend is responsible for mapping each `Op` to its own kernels.
 
-### Standard algebra backends
+### Standard algebra backends: all go through StableHLO
+
+All standard algebra backends consume StableHLO IR. There is no separate
+"CompiledProgram direct interpreter" path for the standard algebra.
 
 ```text
 CompiledProgram<StdTensorOp>
-    |
-    ├── CpuBackend         Tensor = DynTensor       faer/BLAS
-    ├── XlaBackend         Tensor = XlaBuffer        StableHLO → JIT
-    └── CustomGpuBackend   Tensor = GpuDynTensor     StableHLO → CUDA dispatch
+    │
+    │ lower (1:1 mapping, trivial)
+    ↓
+StableHLO IR
+    │
+    ├── FaerBackend        StableHLO interpreter (op-by-op, CPU)
+    │                      Tensor = DynTensor
+    │                      dispatches each StableHLO op to faer/BLAS/LAPACK
+    │                      batched ops = kernel + loop (reuse v1 implementation)
+    │
+    ├── CustomGpuBackend   StableHLO interpreter (op-by-op, CUDA)
+    │                      Tensor = GpuDynTensor
+    │                      dispatches each StableHLO op to CUDA kernels
+    │
+    └── XlaBackend         StableHLO → XLA JIT compile → execute
+                           Tensor = XlaBuffer
+                           kernel fusion, static shapes
 ```
 
+Why all through StableHLO:
+
+- **Same work either way**: interpreting CompiledProgram directly and
+  interpreting StableHLO both dispatch each op to a kernel. Skipping the
+  StableHLO lowering step saves no implementation effort.
+- **v1 reuse**: the existing faer/LAPACK backend already implements every
+  needed kernel. Each kernel maps 1:1 to a StableHLO op.
+- **Backend portability**: new backends only need to interpret StableHLO,
+  not understand CompiledProgram internals.
+- **Shared correctness tests**: all standard backends consume the same IR,
+  so tests are shared.
+
 ```rust
-struct CpuBackend { ctx: CpuContext }
-impl Backend<StdTensorOp> for CpuBackend {
+struct FaerBackend { ctx: CpuContext }
+impl Backend<StdTensorOp> for FaerBackend {
     type Tensor = DynTensor;
     fn eval_program(&mut self, prog, inputs) {
-        // Iterate instructions, dispatch to faer/BLAS
+        let hlo = lower_to_stablehlo(prog);
+        // Interpret StableHLO op-by-op:
+        //   stablehlo.dot_general → faer::mat_mul + batch loop
+        //   stablehlo.add         → elementwise add
+        //   stablehlo.exponential → elementwise exp
+        //   stablehlo.reduce(+)   → sum
+        //   stablehlo.custom_call("gesvd") → LAPACK dgesvd
+        self.interpret_stablehlo(&hlo, inputs)
     }
 }
 
@@ -333,7 +368,9 @@ struct XlaBackend { client: XlaClient }
 impl Backend<StdTensorOp> for XlaBackend {
     type Tensor = XlaBuffer;
     fn eval_program(&mut self, prog, inputs) {
-        // Lower prog to StableHLO → XLA compile → execute
+        let hlo = lower_to_stablehlo(prog);
+        let executable = self.client.compile(&hlo);
+        executable.execute(inputs)
     }
 }
 ```
@@ -389,15 +426,17 @@ impl Backend<SemiringOp<TropicalTensor>> for TropicalGpuBackend {
 | Defined in | computegraph-rs | tenferro-rs |
 | Tensor type | fixed (`Op::Operand`) | per-backend (`Backend::Tensor`) |
 | Multiple backends | no (one `Context`) | yes |
-| Purpose | reference impl, tests | production execution |
-| Custom algebra GPU | not possible | user-defined |
+| Standard algebra | reference impl only | StableHLO → faer/XLA/GPU |
+| Custom algebra | reference impl only | user-defined (CPU/GPU/...) |
 
 `GraphOp::eval` remains useful for:
 - computegraph-rs unit tests (no backend dependency)
 - Quick prototyping and debugging
-- Default CPU fallback
 
-`Backend<Op>` is the primary execution path for production use.
+`Backend<Op>` is the primary execution path for all production use.
+For standard algebra, all backends go through StableHLO lowering.
+For custom algebras, backends interpret `CompiledProgram` directly
+(no StableHLO — custom algebras cannot be lowered to StableHLO).
 
 ### Backend dispatch in Engine
 
@@ -584,9 +623,13 @@ Top-level facade:
 
 - `TracedTensor` (lazy graph-aware wrapper)
 - `Engine` (compilation cache, backend dispatch, einsum cache)
-- Public API: `einsum()`, `grad()`, `jvp()`, `eval()`
-- StableHLO lowering (`StdTensorOp` → StableHLO)
-- Backend implementations (CPU/faer, XLA)
+- Public API: `einsum()`, `grad()`, `jvp()`, `eval()`, `eval_all()`
+- `Backend<Op>` trait
+- StableHLO lowering (`StdTensorOp` → StableHLO, 1:1 mapping)
+- Standard backends: `FaerBackend` (StableHLO interpreter, CPU),
+  `XlaBackend` (StableHLO → JIT)
+- Custom algebra backends: `CpuSemiringBackend` (generic, interprets
+  CompiledProgram directly via `Operand` trait methods)
 
 Depends on: all of the above + tidu-rs.
 
