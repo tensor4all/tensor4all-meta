@@ -49,6 +49,11 @@ So a JAX primitive is not just a name. It is a bundle of:
 - MLIR / StableHLO lowering
 - JVP / transpose / linearization behavior
 
+This registry-based organization is specific to JAX's implementation.
+In the v2 Rust stack, the corresponding AD behavior is expected to live on each
+concrete primitive through `PrimitiveOp::linearize` and
+`PrimitiveOp::transpose_rule`, not through a mandatory global registry.
+
 ---
 
 ## III. Source Files Surveyed

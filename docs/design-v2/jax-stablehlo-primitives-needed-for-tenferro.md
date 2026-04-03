@@ -54,82 +54,48 @@ The most relevant source files were:
 
 ---
 
-## III. Phase-1 JAX Primitive List To Implement
+## III. Phase-1 StableHLO Target Set
 
-This is the current recommended **first-wave primitive list** if the goal is:
+The first concrete implementation target is **not** the JAX primitive list.
+Those JAX-like primitives will all be new v2 primitives anyway.
 
-- keep tenferro close enough to JAX that `jax.linearize` can be ported with
-  minimal semantic drift
-- support `einsum`, `lu`, `solve`, `qr`, and `svd`
+What actually has to run at the backend layer is a StableHLO-level vocabulary.
+For the target feature set (`einsum`, `lu`, `solve`, `qr`, `svd`), the
+recommended phase-1 StableHLO target set is:
 
-### Primitive layer to expose in tenferro
+### Direct StableHLO tensor ops
 
-These are the JAX-like primitive IDs that should exist at tenferro's
-primitive layer.
+- elementwise / scalar:
+  `constant`, `convert`, `add`, `subtract`, `multiply`, `divide`, `negate`,
+  `compare`, `select`, `abs`, `real`, `imag`, `complex`, `power`, `atan2`,
+  `sqrt`, `rsqrt`, `exponential`, `exponential_minus_one`, `log`,
+  `log_plus_one`, `sine`, `cosine`, `tan`, `tanh`, `ceil`, `maximum`,
+  `minimum`
+- shape / indexing / reduction:
+  `iota`, `broadcast_in_dim`, `reshape`, `transpose`, `pad`, `reduce`,
+  `slice`, `dynamic_slice`, `dynamic_update_slice`, `gather`, `scatter`,
+  `sort`
+- contraction / control / linalg:
+  `dot_general`, `triangular_solve`, `while`, `custom_call`
 
-AD helpers:
+### What is intentionally not part of the direct StableHLO target set
 
-- `add_jaxvals_p` / `add_any`
-- `zeros_like_p`
-- `stop_gradient_p`
+These currently have **no direct StableHLO op** and should therefore remain
+either composites or `custom_call`-backed operations:
 
-Tensor primitives:
-
-- arithmetic:
-  `add_p`, `sub_p`, `mul_p`, `div_p`, `neg_p`
-- complex/real helpers:
-  `conj_p`, `real_p`
-- contraction/reduction/shape:
-  `dot_general_p`, `reduce_p`, `broadcast_in_dim_p`, `reshape_p`,
-  `transpose_p`, `squeeze_p`, `pad_p`
-- predicate/select/index helpers:
-  `select_n_p`, `eq_p`, `iota_p`, `sort_p`, `convert_element_type_p`
-
-Structured linalg primitives:
-
-- `lu_p`
-- `triangular_solve_p`
-- `qr_p`
-- `svd_p`
-
-Control-flow / implicit-diff primitive:
-
-- `linear_solve_p` (`custom_linear_solve`)
-
-Important consequence:
-
-- `einsum` stays a composite over tensor primitives
-- `solve` stays a composite over `linear_solve_p`, `lu_p`,
-  `triangular_solve_p`, and tensor primitives
-
-### Infrastructure that must exist around those primitives
-
-These are not primitives, but JAX `linearize` expects this surrounding
-machinery:
-
-- `primitive_jvps`
-- `primitive_transposes`
-- partial-evaluation support for zero tangents / known primals
-
-### Helper kernels that may exist below the primitive layer
-
-These are useful lowering helpers, but they do **not** need to be part of the
-first public tenferro primitive catalog:
-
-- `geqrf_p`
-- `geqp3_p`
-- `householder_product_p`
-- `lu_pivots_to_permutation_p`
-
-### Optional only if tenferro wants pure JAX fallback algorithms
-
-These are not required in the first wave if `lu_p`, `qr_p`, and `svd_p` lower
-directly to backend kernels / custom calls:
-
-- `argmax_p`
-- `gather_p`
-- `scatter_p`
-- `while_p`
+- `lu`
+- `qr`
+- `svd`
+- `solve`
+- `trace`
+- `diag`
+- `conj`
+- `asin`, `acos`, `atan`, `sinh`, `cosh`, `asinh`, `acosh`, `atanh`
+- `hypot`
+- `xlogy`
+- `topk`
+- `var`
+- `std`
 
 ---
 
@@ -151,8 +117,9 @@ usually treats as tensor primitives:
 - `triu`
 - `eye`
 
-These exist today, but they are **tensor/view APIs**, not first-class JAX-like
-primitive IDs with per-primitive JVP registrations.
+These exist today, but they are **tensor/view APIs**, not first-class v2
+tensor primitives with their own `linearize` / `transpose_rule`
+implementations.
 
 ### Execution families in `tenferro-prims`
 
@@ -215,348 +182,177 @@ to express that coverage.
 
 ---
 
-## V. JAX Primitives Needed To Port `linearize`
+## V. Correspondence: Current tenferro -> StableHLO
 
-### Common AD substrate
+This is the table that matters for implementation planning.
 
-Before looking at individual tensor ops, tenferro needs the common AD-facing
-primitive layer that JAX `linearize` assumes exists:
+### Structural tensor/view operations
+
+| Current tenferro surface | Recommended StableHLO target | Direct? | Note |
+|---|---|---:|---|
+| `reshape` | `reshape` | yes | Use `dynamic_reshape` only if runtime shapes become part of the contract |
+| `permute` | `transpose` | yes | Direct axis permutation |
+| `broadcast` | `broadcast_in_dim` | yes | Explicit broadcast, no implicit NumPy-style rules |
+| `select` / `narrow` | `slice`, `dynamic_slice`, `gather` | composite | Depends on whether indices are static or dynamic |
+| `diagonal` | `iota + compare + select + reduce` or `gather` | no | No direct StableHLO diagonal op |
+| `tril` / `triu` | `iota + compare + select` | no | Masked triangular extraction |
+| `eye` | `iota + compare + convert` | no | Construct from index equality |
+| `contiguous` | none | no | Layout/materialization concern, not a semantic StableHLO op |
+
+### Current semiring/scalar/analytic families
+
+| Current tenferro primitive | Recommended StableHLO target | Direct? | Note |
+|---|---|---:|---|
+| `TensorSemiringCore::BatchedGemm` | `dot_general` | yes | Main contraction target |
+| `TensorSemiringCore::ReduceAdd` | `reduce` with add combiner | yes | StableHLO has no dedicated `reduce_sum` op |
+| `TensorSemiringCore::Trace` | `iota + compare + select + reduce` | no | No direct trace op |
+| `TensorSemiringCore::AntiTrace` | `scatter` + add-style combiner | no | AD helper lowering |
+| `TensorSemiringCore::AntiDiag` | `scatter` or masked `select` | no | AD helper lowering |
+| `TensorSemiringCore::MakeContiguous` | none | no | Backend/layout concern |
+| `TensorSemiringFastPath::Contract` | `dot_general` or `multiply + reduce` | mostly | Depends on the contraction pattern |
+| `TensorSemiringFastPath::ElementwiseBinary::{Add,Mul}` | `add`, `multiply` | yes | Direct elementwise lowering |
+| `ScalarUnary::{Neg,Abs,Real,Imag}` | `negate`, `abs`, `real`, `imag` | yes | Direct scalar ops |
+| `ScalarUnary::Conj` | `real + imag + negate + complex` | no | No direct StableHLO `conj` op |
+| `ScalarUnary::Reciprocal` | `divide` | no | Lower as `1 / x` |
+| `ScalarUnary::Square` | `multiply` | no | Lower as `x * x` |
+| `ScalarBinary::{Add,Sub,Mul,Div}` | `add`, `subtract`, `multiply`, `divide` | yes | Direct elementwise lowering |
+| `ScalarBinary::{Maximum,Minimum}` | `maximum`, `minimum` | yes | Direct elementwise lowering |
+| `ScalarBinary::{Greater,GreaterEqual}` | `compare` | yes | Comparison direction in attributes |
+| `ScalarBinary::{ClampMin,ClampMax}` | `maximum`, `minimum` | yes | Binary clamp lowers to max/min |
+| `ScalarTernary::Where` | `select` | yes | Predicate-controlled selection |
+| `ScalarReduction::{Sum,Prod,Max,Min}` | `reduce` | yes | Combiner decides semantics |
+| `ScalarReduction::Mean` | `reduce + divide` | no | Count/normalization handled outside reduce |
+| `AnalyticUnary::{Sqrt,Rsqrt,Exp,Expm1,Ceil,Log,Log1p,Sin,Cos,Tan,Tanh}` | `sqrt`, `rsqrt`, `exponential`, `exponential_minus_one`, `ceil`, `log`, `log_plus_one`, `sine`, `cosine`, `tan`, `tanh` | yes | Direct StableHLO ops exist |
+| `AnalyticUnary::{Asin,Acos,Atan,Sinh,Cosh,Asinh,Acosh,Atanh}` | composite or `custom_call` | no | No direct StableHLO ops |
+| `AnalyticBinary::Pow` | `power` | yes | Direct elementwise lowering |
+| `AnalyticBinary::Atan2` | `atan2` | yes | Direct elementwise lowering |
+| `AnalyticBinary::{Hypot,Xlogy}` | composite or `custom_call` | no | No direct StableHLO ops |
+| `AnalyticReduction::{Var,Std}` | composite | no | Lower through reduce/add/multiply/subtract/sqrt |
+
+### Current indexing / metadata / sort / complex bridge families
+
+| Current tenferro primitive | Recommended StableHLO target | Direct? | Note |
+|---|---|---:|---|
+| `IndexSelect` | `gather` | yes | Slice selection by index tensor |
+| `Gather` | `gather` | yes | Indexed read |
+| `Scatter` | `scatter` | yes | Indexed write / accumulate |
+| `IndexPut` | `scatter` | yes | Overwrite or accumulate mode |
+| `MetadataGenerate::IotaStartZero` | `iota` | yes | Metadata-side range generation |
+| `MetadataGenerate::Constant` | `constant` | yes | Integer/bool constant tensor |
+| `MetadataBinary::{Equal,NotEqual}` | `compare` | yes | Bool/int comparison |
+| `MetadataBinary::{Add,Sub,Mul,BitAnd}` | `add`, `subtract`, `multiply`, `and` | yes | Integer/bool metadata ops |
+| `MetadataTernary::Where` | `select` | yes | Metadata mask select |
+| `MetadataReduction::{Sum,All,Any}` | `reduce` | yes | Add / and / or combiner |
+| `MetadataCast::PointwiseCast` | `convert` | yes | Metadata-to-scalar cast |
+| `MetadataCast::Where` | `select` | yes | Bool metadata as condition |
+| `Sort` / `Argsort` | `sort` | yes | Pair/tuple sort when indices are needed |
+| `Topk` | `sort + slice` | no | No direct StableHLO `top_k` op |
+| `ComplexReal::{Abs,Real,Imag}` | `abs`, `real`, `imag` | yes | Direct lowerings |
+| `ComplexScale::PointwiseMul` | `complex + multiply` | no | Real rhs must be promoted to complex first |
+| `Rng::{Uniform,Normal,Integer}` | `rng_bit_generator` or legacy `rng` | partial | Not part of the main phase-1 AD target |
+
+### Current linalg kernels
+
+| Current tenferro primitive | Recommended StableHLO target | Direct? | Note |
+|---|---|---:|---|
+| `solve_triangular` | `triangular_solve` | yes | Best direct match |
+| `lu` | `custom_call` | no | No direct StableHLO LU op |
+| `qr` | `custom_call` | no | No direct StableHLO QR op |
+| `svd` | `custom_call` | no | No direct StableHLO SVD op |
+| `solve` | composite over `custom_call(lu)` + `triangular_solve` + shape ops | no | If JAX-like AD boundary is needed, wrap as higher-level `linear_solve_p` |
+
+---
+
+## VI. JAX-like Primitive Layer To Add Above StableHLO
+
+These are the **new v2 primitives** to add so that tenferro is close enough to
+JAX for `linearize`-style formulas, but they should be read as a layer
+*above* the StableHLO implementation target.
+
+AD helpers:
 
 - `add_jaxvals_p` / `add_any`
-  - tangent accumulation primitive used by `ad.py`
 - `zeros_like_p`
-  - create zero tangents during partial evaluation / instantiation
 - `stop_gradient_p`
-  - identity on primals, zero on tangents
-- per-primitive JVP registry
-  - JAX `linearize` calls into `ad.primitive_jvps[...]`
 
-Strictly speaking, `linearize` itself is forward-mode and does not require the
-full transpose registry. But if tenferro wants the same primitive layer shape
-as JAX, the natural pair is:
+Tensor primitives:
+
+- arithmetic:
+  `add_p`, `sub_p`, `mul_p`, `div_p`, `neg_p`
+- complex/real helpers:
+  `conj_p`, `real_p`
+- contraction/reduction/shape:
+  `dot_general_p`, `reduce_p`, `broadcast_in_dim_p`, `reshape_p`,
+  `transpose_p`, `squeeze_p`, `pad_p`
+- predicate/select/index helpers:
+  `select_n_p`, `eq_p`, `iota_p`, `sort_p`, `convert_element_type_p`
+
+Structured linalg and control primitives:
+
+- `lu_p`
+- `triangular_solve_p`
+- `qr_p`
+- `svd_p`
+- `linear_solve_p` (`custom_linear_solve`)
+
+Important consequences:
+
+- `einsum` stays a composite over tensor primitives
+- `solve` stays a composite over `linear_solve_p`, `lu_p`,
+  `triangular_solve_p`, and tensor primitives
+- `lu`, `qr`, and `svd` remain first-class tenferro primitives even though
+  they lower to `custom_call` below
+
+### AD contract around those primitives
+
+For JAX, the reference implementation uses:
 
 - `primitive_jvps`
 - `primitive_transposes`
 
-### `einsum`
+For the v2 Rust stack, the aligned form is:
 
-JAX does **not** treat `einsum` itself as a primitive. The implementation in
-`jax/_src/numpy/einsum.py` is a composite built from tensor primitives.
+- each concrete tenferro primitive implements
+  `PrimitiveOp::linearize`
+- each concrete tenferro primitive implements
+  `PrimitiveOp::transpose_rule`
+- `tidu-rs` drives AD through those trait methods
+- partial-evaluation / zero-propagation support still has to exist at the
+  transform level
 
-Primitives directly visible in the primal path:
+### Helper kernels that may exist below the public primitive layer
 
-- `reduce_p`
-- `dot_general_p`
-- `transpose_p`
-- `squeeze_p`
-- `select_n_p`
-
-Additional helper primitives pulled in by internal helpers:
-
-- `iota_p`
-- `broadcast_in_dim_p`
-- `eq_p`
-- `convert_element_type_p`
-
-Meaning:
-
-- if tenferro wants to run a JAX-style `einsum` implementation unchanged, then
-  `dot_general_p` alone is not enough
-- it also needs explicit reduction, masking/select, and shape primitives
-
-### `lu`
-
-For JAX, LU is a first-class primitive:
-
-- `lu_p`
-
-If tenferro wants JAX-like forward AD at the primitive layer, the JVP rule for
-`lu_p` additionally uses:
-
-- `triangular_solve_p`
-- `dot_general_p`
-- `transpose_p`
-- `conj_p`
-- `pad_p`
-- `add_p`
-
-And through triangular/diagonal mask helpers:
-
-- `iota_p`
-- `compare`-style predicates
-- `select_n_p`
-
-If tenferro wants to reuse JAX's pure fallback algorithm for primal LU instead
-of lowering `lu_p` directly to a backend kernel, the required JAX primitive
-surface becomes larger again:
-
-- `argmax_p`
-- scatter/update family
-- `while_p` / loop lowering
-- `div_p`
-- `sub_p`
-
-So the clean JAX-aligned choice is:
-
-- keep `lu_p` as a first-class primitive
-- lower it directly to a backend kernel or custom call
-- do **not** force LU down into only `dot_general + transpose + reshape`
-
-### `solve`
-
-JAX does **not** have a dedicated `solve_p`.
-
-Instead, `solve` is built from:
-
-- `linear_solve_p` (`custom_linear_solve`)
-- `stop_gradient_p`
-- `lu_p`
-- `broadcast_in_dim_p`
-- `dot_general_p`
-- `triangular_solve_p`
-
-The composite `lu_solve` path also needs:
-
-- `reshape_p`
-- `sort_p`
-- `iota_p`
-- permutation/gather-style indexing helpers
-
-This point matters a lot:
-
-- if tenferro wants to preserve JAX's `solve` differentiation strategy, it
-  needs `linear_solve_p`
-- replacing `solve` with a plain traced decomposition of `lu + triangular_solve`
-  changes the AD boundary and loses JAX's implicit-diff structure
-
-### `qr`
-
-For JAX, QR is also a first-class primitive:
-
-- `qr_p`
-
-Its JVP rule uses:
-
-- `triangular_solve_p`
-- `dot_general_p`
-- `transpose_p`
-- `conj_p`
-- `add_p`
-- `sub_p`
-- `mul_p`
-- `real_p`
-
-And via triangular / identity helpers:
-
-- `broadcast_in_dim_p`
-- `iota_p`
-- `select_n_p`
-
-The current JAX primal lowering of `qr_p` internally uses additional linalg
-primitives:
+These are useful lowering helpers, but they do **not** need to be part of the
+public v2 primitive catalog:
 
 - `geqrf_p`
 - `geqp3_p`
 - `householder_product_p`
+- `lu_pivots_to_permutation_p`
 
-So for QR, the clean JAX-aligned surface is again:
-
-- expose `qr_p` as a first-class primitive
-- allow backend lowering to use lower-level helper kernels if desired
-- do not make those helper kernels the user-visible primitive boundary
-
-### `svd`
-
-For JAX, SVD is a first-class primitive:
-
-- `svd_p`
-
-Its JVP rule uses a relatively rich tensor primitive set:
-
-- `dot_general_p`
-- `transpose_p`
-- `conj_p`
-- `real_p`
-- `add_p`
-- `sub_p`
-- `mul_p`
-- `div_p`
-
-And through diagonal / eye / zero-safe inverse helpers:
-
-- `broadcast_in_dim_p`
-- `iota_p`
-- `select_n_p`
-
-As with LU and QR, the important design signal is:
-
-- `svd_p` should remain a first-class primitive
-- its JVP formula depends on normal tensor primitives around it
-- JAX does not expect users to differentiate through a hand-written SVD
-  algorithm expressed only in low-level shape ops
+These only become part of the required primitive surface if tenferro decides
+to port JAX's pure fallback algorithms instead of lowering `lu_p`, `qr_p`, and
+`svd_p` directly to backend kernels / `custom_call`.
 
 ---
 
-## VI. StableHLO Ops Needed Below That Layer
-
-The StableHLO working set splits into two groups:
-
-- ops that exist directly in StableHLO
-- JAX primitives that have **no** direct StableHLO op and therefore need
-  `custom_call` or another backend-only lowering path
-
-### Direct StableHLO ops that matter for this target set
-
-These are the main StableHLO ops that recur across the target JAX primitive
-set:
-
-- `add`
-- `subtract`
-- `multiply`
-- `divide`
-- `compare`
-- `select`
-- `constant`
-- `convert`
-- `broadcast_in_dim`
-- `reshape`
-- `transpose`
-- `pad`
-- `reduce`
-- `dot_general`
-- `iota`
-- `sort`
-- `gather`
-- `scatter`
-- `triangular_solve`
-- `while`
-- `custom_call`
-
-This is the concrete StableHLO vocabulary that shows up once we go below the
-JAX primitive layer for `einsum`, `solve`, `lu`, `qr`, and `svd`.
-
-### `einsum` -> StableHLO
-
-Because JAX `einsum` is already a tensor-primitive composite, the StableHLO
-story is straightforward:
-
-- `reduce_p` -> `reduce`
-- `dot_general_p` -> `dot_general`
-- `transpose_p` -> `transpose`
-- `squeeze_p` -> `reshape`
-- `select_n_p` -> `select`
-- helpers -> `iota`, `compare`, `broadcast_in_dim`, `convert`, `constant`
-
-### `lu_p` -> StableHLO
-
-There is **no** native StableHLO `lu` op.
-
-Current JAX practice is therefore:
-
-- lower `lu_p` to backend-specific `custom_call` where possible
-- or use a pure fallback algorithm that needs
-  `while`, `iota`, `compare`, `select`, scatter/update ops, `divide`,
-  `subtract`, `dot_general`, `triangular_solve`, and `pad`
-
-So StableHLO does not give tenferro a clean 1:1 target for LU. The realistic
-lowering boundary is:
-
-- `lu_p` at the JAX-like primitive layer
-- `custom_call` or backend kernel below it
-
-### `linear_solve_p` / `solve` -> StableHLO
-
-There is no StableHLO `solve` op and no StableHLO `custom_linear_solve` op.
-
-Current JAX `solve` therefore lowers by inlining the solve body. In the
-current implementation that means the StableHLO-side ingredients are:
-
-- `custom_call` through `lu_p`
-- `broadcast_in_dim`
-- `dot_general`
-- `triangular_solve`
-- `reshape`
-- `sort`
-- `iota`
-- gather/permutation helpers
-
-This is the clearest case where the JAX primitive layer is **above** the
-StableHLO layer and should stay there.
-
-### `qr_p` -> StableHLO
-
-There is no native StableHLO `qr` op.
-
-Current JAX practice is:
-
-- keep `qr_p` as the JAX primitive
-- lower it via helper linalg kernels such as `geqrf_p`, `geqp3_p`,
-  `householder_product_p`
-- those helper kernels themselves are custom-call-backed on CPU/GPU
-
-So the important StableHLO fact is simple:
-
-- `qr_p` ultimately needs `custom_call`
-- tensor helper ops such as `pad`, `broadcast_in_dim`, `transpose`,
-  `select`, and `dot_general` are still needed around the edges
-
-### `svd_p` -> StableHLO
-
-There is no native StableHLO `svd` op.
-
-Current JAX practice is:
-
-- keep `svd_p` as the JAX primitive
-- lower it to backend-specific `custom_call`
-- use ordinary tensor ops only in the JVP rule and result post-processing
-
-So for tenferro the StableHLO implication is:
-
-- `svd_p` should stay above StableHLO
-- StableHLO needs `custom_call` plus the normal tensor algebra ops used by the
-  JVP formula
-
----
-
-## VII. Immediate Gap Summary
-
-### Already present in current tenferro
-
-- structured tensor/view operations:
-  `reshape`, `permute`, `broadcast`, `diagonal`, `select`, `narrow`,
-  `contiguous`, `tril`, `triu`
-- backend linalg kernels:
-  `lu`, `solve`, `solve_triangular`, `qr`, `svd`
-- stateless linalg AD rules for the target structured ops
-- scalar and analytic pointwise families
-
-### Missing if the goal is "port JAX `linearize` mostly as-is"
-
-- AD helper primitives:
-  `add_any`, `zeros_like`, `stop_gradient`
-- a JAX-like primitive registry keyed by primitive ID with per-primitive JVP
-  rules
-- JAX-style tensor primitives such as:
-  `dot_general`, `reduce`, `broadcast_in_dim`, `transpose`, `squeeze`,
-  `select`, `compare`, `iota`, `convert_element_type`
-- control-flow/implicit-diff primitive:
-  `custom_linear_solve`
-- structured linalg primitives as first-class primitive IDs:
-  `lu_p`, `qr_p`, `svd_p`, `triangular_solve_p`
-
-### Design consequence
+## VII. Design Consequence
 
 If the target is really "copy JAX `linearize` into tenferro with minimal
-semantic change", then tenferro v2 should not use the current execution-family
-surface as its primary primitive catalog.
+semantic change", then tenferro v2 should be described in two distinct layers:
 
-It needs a JAX-like primitive layer above the current backend families:
+1. a **new JAX-like primitive layer**
+   - this is what `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule`
+     talk about
+   - these primitives are new v2 definitions, not the current tenferro family
+     enums
+2. a **StableHLO lowering layer**
+   - this is the concrete implementation target for backend execution
+   - the correspondence tables above are the real implementation checklist
 
-- tensor primitives such as `dot_general`, `reduce`, `broadcast_in_dim`,
-  `transpose`
-- AD helpers such as `add_any`, `zeros_like`, `stop_gradient`
-- structured linalg primitives such as `lu`, `qr`, `svd`, `triangular_solve`
-- `custom_linear_solve` for `solve`
+So the correct planning order is:
 
-The current semiring/scalar/analytic/linalg backend families can still exist,
-but they belong **below** that layer.
+1. decide the new v2 primitive layer
+2. decide which StableHLO ops are implemented directly
+3. decide which structured ops stay above StableHLO and lower to `custom_call`
+4. map current tenferro families and kernels into that new layering

@@ -14,6 +14,13 @@
 `computegraph::GraphOp` with linearization and transpose rules. It contains
 no graph infrastructure and no concrete primitives.
 
+This is the v2 counterpart of the AD behavior that JAX stores in
+`primitive_jvps` and `primitive_transposes`. The information is the same kind
+of information, but the representation is different:
+
+- JAX: global registries keyed by primitive object
+- v2: methods on the concrete primitive type itself
+
 ---
 
 ## II. PrimitiveOp Trait
@@ -55,6 +62,13 @@ A primitive's `linearize` must be linear in tangent inputs. It may:
 - emit `Dup` or `Conj` when required by transpose semantics
 
 It must not introduce nonlinear dependence on tangent inputs.
+
+The intended mental model is close to JAX `linearize`:
+
+- JAX `linearize` applies a primitive's JVP rule and emits a new composition of
+  JAX primitives in a jaxpr
+- v2 `PrimitiveOp::linearize` emits a new composition of downstream concrete
+  primitives into a fragment
 
 ---
 

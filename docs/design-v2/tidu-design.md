@@ -14,6 +14,12 @@
 that are fully generic over `Op: PrimitiveOp`. It owns no graph infrastructure
 (that belongs to `computegraph-rs`) and references no specific primitives.
 
+Among the JAX concepts, `differentiate` is the closest analogue to
+`jax.linearize`: it traverses a primal computation and builds a new linear
+computation by calling each primitive's local linearization rule. The output is
+not StableHLO and not a backend kernel plan; it is another fragment composed of
+the same downstream primitive vocabulary.
+
 ---
 
 ## II. Transforms
@@ -47,6 +53,9 @@ Algorithm:
 4. Emit new local linear nodes into the new fragment.
 5. Reference primal values through `External(GlobalValKey)`.
 6. Skip unreachable tangent flow with zero propagation.
+
+This is the fragment-level analogue of JAX building a jaxpr whose linearized
+body is itself a composition of primitives.
 
 ### `transpose`
 

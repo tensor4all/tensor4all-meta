@@ -41,13 +41,13 @@ primitives except tenferro-rs.
 
 | Crate | Document | Key Contents |
 |-------|----------|--------------|
-| computegraph-rs | [`computegraph-design.md`](computegraph-design.md) | GraphOp, Operand, Fragment, resolve, materialize_merge, compile (SSA), eval, compilation cache |
-| chainrules-rs | [`chainrules-design.md`](chainrules-design.md) | PrimitiveOp trait (linearize + transpose_rule), closure contract |
-| tidu-rs | [`tidu-design.md`](tidu-design.md) | differentiate, transpose, LinearFragment, pipelines (JVP/VJP/HVP/higher-order) |
-| tenferro-rs | [`backend-architecture.md`](backend-architecture.md) | StableHLO lowering, CPU/GPU backends |
-| tenferro-rs | [`tensor-design.md`](tensor-design.md) | Tensor type, dense-only principle, einsum hyper edges |
-| tenferro-rs | [`tensor-api-pseudocode.md`](tensor-api-pseudocode.md) | TracedTensor API, lazy evaluation, AD examples |
-| tenferro-rs | [`primitive-catalog.md`](primitive-catalog.md) | Source of truth for the v2 primitive inventory, per-op definitions, surface-to-primitive lowering |
+| computegraph-rs | [`computegraph-design.md`](computegraph-design.md) | AD-agnostic graph IR: `GraphOp`, `Operand`, `Fragment`, `resolve`, `materialize_merge`, `compile`, `eval`, cache |
+| chainrules-rs | [`chainrules-design.md`](chainrules-design.md) | `PrimitiveOp` trait and primitive-local `linearize` / `transpose_rule` contract |
+| tidu-rs | [`tidu-design.md`](tidu-design.md) | `differentiate`, `transpose`, `LinearFragment`, higher-order AD pipelines |
+| tenferro-rs | [`backend-architecture.md`](backend-architecture.md) | StableHLO-targeted backend architecture, `custom_call`, CPU/GPU/custom-algebra split |
+| tenferro-rs | [`tensor-design.md`](tensor-design.md) | Dense tensor principle, structural tensor information, einsum decomposition |
+| tenferro-rs | [`tensor-api-pseudocode.md`](tensor-api-pseudocode.md) | `TracedTensor` API, lazy evaluation, AD usage examples |
+| tenferro-rs | [`primitive-catalog.md`](primitive-catalog.md) | v2 core primitive vocabulary, backend-facing execution subsets, per-op definitions, canonical lowering |
 ---
 
 ## Related Documents
@@ -55,13 +55,30 @@ primitives except tenferro-rs.
 | Document | Contents |
 |----------|----------|
 | [`ad-architecture.md`](ad-architecture.md) | Detailed AD theory, examples (scalar + vector), golden tests |
-| [`primitive-catalog.md`](primitive-catalog.md) | Concrete op list and definitions for readers new to the stack |
+| [`primitive-catalog.md`](primitive-catalog.md) | Conceptual v2 primitive catalog: core primitives, standard-arithmetic-only ops, execution subsets, StableHLO alignment |
 | [`backend-architecture.md`](backend-architecture.md) | Backend-specific details |
-| [`stablehlo-primitives.md`](stablehlo-primitives.md) | Full StableHLO op inventory plus deprecated and legacy names to avoid building around |
-| [`jax-primitives.md`](jax-primitives.md) | JAX primitive inventory relevant to tensor ops, control flow, linalg, and AD |
-| [`jax-stablehlo-primitives-needed-for-tenferro.md`](jax-stablehlo-primitives-needed-for-tenferro.md) | Primitive-layer requirements for making tenferro close enough to JAX to reuse `linearize`, including the StableHLO ops needed below that layer |
+| [`stablehlo-primitives.md`](stablehlo-primitives.md) | StableHLO op inventory with concrete per-op descriptions, plus deprecated and legacy names |
+| [`jax-primitives.md`](jax-primitives.md) | JAX primitive inventory with concrete per-primitive descriptions for tensor ops, AD, control flow, and linalg |
+| [`jax-stablehlo-primitives-needed-for-tenferro.md`](jax-stablehlo-primitives-needed-for-tenferro.md) | Phase-1 StableHLO target set, current tenferro-to-StableHLO correspondence tables, and the JAX-like primitive layer to add above StableHLO |
+| [`ad-graph-experiments.md`](ad-graph-experiments.md) | Earlier experiments and notes that informed the fragment-based AD design |
+| [`vector_ad_examples_check.py`](vector_ad_examples_check.py) | Sanity-check script for the vector AD examples in `ad-architecture.md` |
 
 ---
+
+## How To Read The Primitive Documents
+
+The primitive-related documents have different roles:
+
+- [`primitive-catalog.md`](primitive-catalog.md)
+  - the conceptual v2 primitive catalog
+  - defines the internal tensor-op vocabulary and its canonical lowering
+- [`jax-stablehlo-primitives-needed-for-tenferro.md`](jax-stablehlo-primitives-needed-for-tenferro.md)
+  - the implementation-planning document
+  - maps current tenferro operations to the StableHLO ops that actually need to exist below the new v2 primitive layer
+- [`jax-primitives.md`](jax-primitives.md)
+  - reference document for what JAX primitives concretely do
+- [`stablehlo-primitives.md`](stablehlo-primitives.md)
+  - reference document for what StableHLO ops concretely do
 
 ## Key Design Principles
 
@@ -166,6 +183,10 @@ algebra. It serves einsum execution and supports exotic algebras (tropical).
 
 It is orthogonal to `PrimitiveOp` which operates at the tensor-op / AD level.
 The two do not conflict and do not need unification.
+
+The current-tenferro-to-StableHLO correspondence for these execution families
+is summarized in
+[`jax-stablehlo-primitives-needed-for-tenferro.md`](jax-stablehlo-primitives-needed-for-tenferro.md).
 
 ### AD-specific ops leave Semiring Core
 
