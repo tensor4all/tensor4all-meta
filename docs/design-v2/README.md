@@ -59,6 +59,7 @@ primitives except tenferro-rs.
 | [`backend-architecture.md`](backend-architecture.md) | Backend-specific details |
 | [`stablehlo-primitives.md`](stablehlo-primitives.md) | Full StableHLO op inventory plus deprecated and legacy names to avoid building around |
 | [`jax-primitives.md`](jax-primitives.md) | JAX primitive inventory relevant to tensor ops, control flow, linalg, and AD |
+| [`jax-stablehlo-primitives-needed-for-tenferro.md`](jax-stablehlo-primitives-needed-for-tenferro.md) | Primitive-layer requirements for making tenferro close enough to JAX to reuse `linearize`, including the StableHLO ops needed below that layer |
 
 ---
 
