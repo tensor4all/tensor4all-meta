@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-04
 **Status:** Draft
-**Parent:** `README.md`
-**Related:** `primitive-catalog.md`, `backend-architecture.md`, `tenferro-internal-design.md`
+**Parent:** `../README.md`
+**Related:** `primitive-catalog.md`, `backend-contract.md`, `../architecture/tenferro-crates.md`
 
 ---
 

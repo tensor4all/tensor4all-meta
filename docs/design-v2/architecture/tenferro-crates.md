@@ -3,8 +3,8 @@
 **Date:** 2026-04-04
 **Status:** Draft
 **Repo:** tenferro-rs
-**Parent:** `README.md`
-**Related:** `computegraph-design.md`, `chainrules-design.md`, `tidu-design.md`, `backend-architecture.md`, `primitive-catalog.md`
+**Parent:** `../README.md`
+**Related:** `computegraph.md`, `chainrules.md`, `tidu.md`, `../spec/backend-contract.md`, `../spec/primitive-catalog.md`
 
 ---
 

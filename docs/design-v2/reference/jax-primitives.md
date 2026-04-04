@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-03
 **Status:** Draft
-**Parent:** `README.md`
-**Related:** `primitive-catalog.md`, `stablehlo-primitives.md`, `backend-architecture.md`
+**Parent:** `../README.md`
+**Related:** `../spec/primitive-catalog.md`, `stablehlo-primitives.md`, `../spec/backend-contract.md`
 
 ---
 

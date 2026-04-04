@@ -9,7 +9,7 @@
 > active_mask=[active, active] }` in the final design. The `Dup` primitive
 > used in these experiments has been removed from the final design;
 > fan-out accumulation is now handled internally by `tidu::transpose`
-> (JAX-style bucketing by `GlobalValKey`). See `ad-architecture.md` for
+> (JAX-style bucketing by `GlobalValKey`). See `../architecture/ad-pipeline.md` for
 > the current design.
 
 ## Scope

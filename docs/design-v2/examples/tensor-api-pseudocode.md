@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-04
 **Status:** Draft
-**Parent:** `README.md`
+**Parent:** `../README.md`
 
 ---
 
@@ -323,7 +323,7 @@ program. Shape-dependent ops (e.g. `Reshape(target)`) encode shape in the op
 itself, so different shapes produce different topology automatically.
 
 Note: this normalization is performed by the tenferro `Engine`, not by
-computegraph-rs itself (see `computegraph-design.md` Section V).
+computegraph-rs itself (see `../architecture/computegraph.md` Section V).
 
 ---
 

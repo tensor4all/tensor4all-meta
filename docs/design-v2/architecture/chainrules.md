@@ -3,7 +3,7 @@
 **Date:** 2026-04-03
 **Status:** Draft
 **Repo:** chainrules-rs
-**Parent:** `README.md`
+**Parent:** `../README.md`
 **Depends on:** `computegraph-rs`
 
 ---

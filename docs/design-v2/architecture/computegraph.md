@@ -3,7 +3,7 @@
 **Date:** 2026-04-04
 **Status:** Draft
 **Repo:** computegraph-rs (new)
-**Parent:** `README.md`
+**Parent:** `../README.md`
 
 ---
 

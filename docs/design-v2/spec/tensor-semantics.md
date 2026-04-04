@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-04
 **Status:** Draft
-**Parent:** `README.md`
-**Related:** `tensor-api-pseudocode.md`, `ad-architecture.md`
+**Parent:** `../README.md`
+**Related:** `../examples/tensor-api-pseudocode.md`, `../architecture/ad-pipeline.md`
 
 ---
 
@@ -76,7 +76,7 @@ Engine-produced intermediates and outputs use **column-major (Fortran)
 layout** as the standard convention.
 
 `TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
-and AD (see `tensor-api-pseudocode.md`).
+and AD (see `../examples/tensor-api-pseudocode.md`).
 
 `Tensor` is the standard-algebra runtime value shared across CPU and GPU
 backends. Methods such as `placement()`, `resident_device()`, `to_cpu()`, and

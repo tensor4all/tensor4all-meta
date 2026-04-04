@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-03
 **Status:** Draft
-**Parent:** `README.md`
-**Related:** `primitive-catalog.md`, `backend-architecture.md`, `jax-primitives.md`
+**Parent:** `../README.md`
+**Related:** `../spec/primitive-catalog.md`, `../spec/backend-contract.md`, `jax-primitives.md`
 
 ---
 

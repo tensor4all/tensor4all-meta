@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-04
 **Status:** Draft
-**Parent:** `README.md`
-**Related:** `backend-architecture.md`, `tensor-design.md`, `stablehlo-primitives.md`, `jax-primitives.md`
+**Parent:** `../README.md`
+**Related:** `backend-contract.md`, `tensor-semantics.md`, `../reference/stablehlo-primitives.md`, `../reference/jax-primitives.md`
 
 ---
 
@@ -441,8 +441,8 @@ semirings such as tropical algebra.
 
 This section should be kept as close as practical to the official StableHLO op
 set, so that tenferro's Tenferro IR primitives lower cleanly to StableHLO.
-See `stablehlo-primitives.md` for the StableHLO-facing reference and
-`jax-primitives.md` for the JAX-side reference point.
+See `../reference/stablehlo-primitives.md` for the StableHLO-facing reference and
+`../reference/jax-primitives.md` for the JAX-side reference point.
 
 ### Elementwise arithmetic, comparison, and selection
 
@@ -546,7 +546,7 @@ The goal is not to copy StableHLO mechanically. The goal is to ensure that the
 obvious, low-friction lowering path to StableHLO, because the StableHLO IR
 is the single cut point for all backends.
 
-See also `stablehlo-primitives.md` and `jax-primitives.md`.
+See also `../reference/stablehlo-primitives.md` and `../reference/jax-primitives.md`.
 
 ---
 

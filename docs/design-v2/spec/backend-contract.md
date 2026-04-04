@@ -3,7 +3,7 @@
 **Date:** 2026-04-04
 **Status:** Draft
 **Repos:** tenferro-rs
-**Related:** `ad-architecture.md`, `primitive-catalog.md`, `stablehlo-primitives.md`, `jax-primitives.md`
+**Related:** `../architecture/ad-pipeline.md`, `primitive-catalog.md`, `../reference/stablehlo-primitives.md`, `../reference/jax-primitives.md`
 
 ---
 
@@ -140,10 +140,10 @@ For exact per-op definitions, shape contracts, and frontend aliases, see
 to implement.
 
 For StableHLO-side naming and the full current StableHLO op inventory, see
-[`stablehlo-primitives.md`](stablehlo-primitives.md).
+[`stablehlo-primitives.md`](../reference/stablehlo-primitives.md).
 
 For a reference point on how JAX organizes tensor, control-flow, linalg, and
-AD helper primitives, see [`jax-primitives.md`](jax-primitives.md).
+AD helper primitives, see [`jax-primitives.md`](../reference/jax-primitives.md).
 
 Important distinction:
 
@@ -777,7 +777,7 @@ trait SemiringCore<Alg: Semiring> {
 }
 ```
 
-This is the canonical signature (see also `tenferro-internal-design.md`).
+This is the canonical signature (see also `../architecture/tenferro-crates.md`).
 
 The generic execution engine handles the dispatch loop, using liveness
 annotations for buffer management (see "Buffer lifecycle" above):
@@ -1063,7 +1063,7 @@ struct TracedTensor {
 - Operations (einsum, exp, ...) build graph, return `TracedTensor` with `data = None`.
 - `eval()` triggers compile (cached) + execute, fills in `data`, returns `&Tensor`.
 
-See `tensor-api-pseudocode.md` for full usage examples.
+See `../examples/tensor-api-pseudocode.md` for full usage examples.
 
 ### Operand and TensorData traits
 
@@ -1145,5 +1145,5 @@ needs to know about algebra.
 
 ## Superseded Issues (partially)
 
-- tenferro-rs#616: Traced Tensor + StableHLO IR (AD portions → `ad-architecture.md`)
-- tenferro-rs#618: tenferro v2 roadmap (backend portions here, AD portions → `ad-architecture.md`)
+- tenferro-rs#616: Traced Tensor + StableHLO IR (AD portions → `../architecture/ad-pipeline.md`)
+- tenferro-rs#618: tenferro v2 roadmap (backend portions here, AD portions → `../architecture/ad-pipeline.md`)

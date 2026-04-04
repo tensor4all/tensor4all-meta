@@ -3,7 +3,7 @@
 **Date:** 2026-04-03
 **Status:** Draft
 **Repo:** tidu-rs
-**Parent:** `README.md`
+**Parent:** `../README.md`
 **Depends on:** `computegraph-rs`, `chainrules-rs`
 
 ---
@@ -47,7 +47,7 @@ fn differentiate<Op: PrimitiveOp>(
 
 Each call to `differentiate` receives a unique `DiffPassId` (monotonically
 increasing counter). Tangent input keys are generated via
-`wrt_key.tangent_of(pass_id)` (see `ADKey` trait in `chainrules-design.md`).
+`wrt_key.tangent_of(pass_id)` (see `ADKey` trait in `chainrules.md`).
 
 Algorithm:
 

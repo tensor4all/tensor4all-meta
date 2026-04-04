@@ -3,8 +3,8 @@
 **Date:** 2026-04-01 (rewritten 2026-04-02)
 **Status:** Draft
 **Repos:** chainrules-rs, tidu-rs, tenferro-rs
-**Parent:** `README.md`
-**Related:** `computegraph-design.md`, `chainrules-design.md`, `tidu-design.md`, `backend-architecture.md`, `primitive-catalog.md`
+**Parent:** `../README.md`
+**Related:** `computegraph.md`, `chainrules.md`, `tidu.md`, `../spec/backend-contract.md`, `../spec/primitive-catalog.md`
 
 ---
 
@@ -680,7 +680,7 @@ without requiring eager merge.
 A reproducible checker for these two examples remains in:
 
 ```text
-docs/design-v2/vector_ad_examples_check.py
+docs/design-v2/examples/vector_ad_examples_check.py
 ```
 
 ---
@@ -851,7 +851,7 @@ by graph structure to avoid recompilation.
 ### Backend boundary
 
 This document stops at `MaterializedGraph -> CompiledProgram`. Backend-specific
-details (StableHLO lowering, GPU dispatch) remain in `backend-architecture.md`.
+details (StableHLO lowering, GPU dispatch) remain in `../spec/backend-contract.md`.
 
 The important contract is:
 

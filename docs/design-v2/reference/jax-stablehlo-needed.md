@@ -2,14 +2,14 @@
 
 **Date:** 2026-04-03
 **Status:** Draft
-**Parent:** `README.md`
-**Related:** `jax-primitives.md`, `stablehlo-primitives.md`, `primitive-catalog.md`
+**Parent:** `../README.md`
+**Related:** `jax-primitives.md`, `stablehlo-primitives.md`, `../spec/primitive-catalog.md`
 
 ---
 
 ## I. Goal
 
-This note answers a narrower question than `primitive-catalog.md`:
+This note answers a narrower question than `../spec/primitive-catalog.md`:
 
 > If tenferro v2 wants to reuse JAX's `linearize` design with minimal changes,
 > which JAX primitives must tenferro expose, and which StableHLO ops are
@@ -37,7 +37,7 @@ This note is based on:
 
 - current `tenferro-rs` code in `~/tensor4all/tenferro-rs`
 - current JAX code in `~/tensor4all/jax`
-- the StableHLO spec summarized in `stablehlo-primitives.md`
+- the StableHLO spec summarized in `stablehlo-primitives.md` (in this directory)
 
 The most relevant source files were:
 
