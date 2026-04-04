@@ -378,22 +378,23 @@ This matches StableHLO's `dot_general` dimension numbers.
 
 ---
 
-### Structured tensor graph ops and AD helpers
+### Trace, diagonal, and their AD helpers
 
-These ops are not part of the minimal AD-closed core, but they may still appear
-in tenferro's graph vocabulary if v2 chooses to represent them explicitly
-instead of lowering them away through tensor-layer views.
+**Decision:** Trace/Diag/AntiTrace/AntiDiag are **not** dedicated graph
+primitives. They are lowered to existing StableHLO-compatible ops:
 
-| Primitive | Signature | Definition | Notes |
-|-----------|-----------|------------|-------|
-| `Trace(paired_axes)` | `x: [..., n, ..., n, ...] -> y` | Sum entries where the listed axis pairs are equal | Example: matrix trace `[n, n] -> []`; not part of the strict semiring minimum if `diagonal` is a view |
-| `Diag(mode, paired_axes)` | vector/tensor -> tensor/vector | Either embed values onto a diagonal or extract a diagonal slice | Think `i -> ii` or `ii -> i` in einsum notation |
-| `AntiTrace` | `x -> y` | Scatter-add cotangent values back onto traced diagonal positions | Internal AD helper, not part of semiring core |
-| `AntiDiag` | `x -> y` | Scatter or write cotangent values back through diagonal structure | Internal AD helper, not part of semiring core |
+| Surface op | Canonical lowering |
+|-----------|-------------------|
+| `trace(A)` | einsum `ii->` = diagonal extraction (`Gather` pattern) + `ReduceSum` |
+| `diag(A)` / `extract_diag(A)` | einsum `ii->i` = `Gather` pattern |
+| `embed_diag(v)` | einsum `i->ii` = `Scatter` / `BroadcastInDim` + `Mul` with identity mask |
+| AntiTrace (AD helper) | `Scatter` + `BroadcastInDim` in transpose rules |
+| AntiDiag (AD helper) | `Scatter` in transpose rules |
 
-`Trace` and `Diag` matter because they are mathematically meaningful, while
-`AntiTrace` and `AntiDiag` are primarily implementation helpers that may appear
-inside transpose rules or decompositions.
+This keeps the graph vocabulary aligned with StableHLO (which has no
+Trace/Diag ops) and avoids adding non-standard primitives. The einsum engine
+already handles repeated-index patterns (`ii->i`, `ii->`) internally via
+diagonal extraction in v1 (`dispatch.rs` diagonal plan).
 
 ---
 
@@ -531,8 +532,8 @@ than as distinct graph primitives.
 | `greater(x, y)` | `Compare(dir=gt)` |
 | `greater_equal(x, y)` | `Compare(dir=ge)` |
 | `clamp_min(x, lo)` / `clamp_max(x, hi)` | special cases of `Clamp` |
-| `trace(x)` | `Trace(...)` |
-| `diag(x)` / `extract_diag(x)` | `Diag(...)` |
+| `trace(x)` | diagonal extraction (`Gather` pattern) + `ReduceSum` |
+| `diag(x)` / `extract_diag(x)` | diagonal extraction (`Gather` pattern) |
 
 This is useful for two reasons:
 
