@@ -46,11 +46,11 @@ than re-stating.
 
 | Document | Owns |
 |----------|------|
-| [primitive-catalog.md](spec/primitive-catalog.md) | 3-layer IR architecture (Tenferro IR / StableHLO IR / Execution IR), op vocabulary at each layer, dispatch categories, backend trait contracts (`SemiringCore`, `SemiringFastPath`), lowering rules |
-| [backend-contract.md](spec/backend-contract.md) | Backend pipeline, execution engine, backend comparison (XLA vs faer vs custom), responsibility boundaries, buffer lifecycle, memory layout |
+| [primitive-catalog.md](spec/primitive-catalog.md) | Tenferro IR op vocabulary, per-op semantics, StableHLO lowering rules, frontend sugar / canonical lowering |
+| [backend-contract.md](spec/backend-contract.md) | Backend pipeline, Execution IR dispatch categories, backend trait signatures (`SemiringCore`, `SemiringFastPath`), generic execution engine, backend comparison (XLA vs faer vs custom), buffer lifecycle, memory layout |
 | [optimizer-passes.md](spec/optimizer-passes.md) | Optimization pass algorithms (DotDimensionSorter, TransposeFolding, DotDecomposer, ReductionSimplification), pass ordering |
 | [tensor-semantics.md](spec/tensor-semantics.md) | Tensor type semantics, stride model, contiguity rules, dense-only principle, structural types in tensor4all-rs |
-| [ad-contract.md](spec/ad-contract.md) | `PrimitiveOp` trait contract, `linearize`/`transpose_rule` requirements, closure rule, cotangent accumulation |
+| [ad-contract.md](spec/ad-contract.md) | `PrimitiveOp` trait signature, `linearize`/`transpose_rule` requirements, closure rule, cotangent accumulation |
 
 ### architecture/ — Design rationale
 

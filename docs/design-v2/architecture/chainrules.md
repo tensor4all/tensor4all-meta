@@ -26,38 +26,10 @@ of information, but the representation is different:
 
 ## II. PrimitiveOp Trait
 
-```rust
-use computegraph::{GraphOp, FragmentBuilder, GlobalValKey, LocalValId, ValRef, OpMode};
+`PrimitiveOp` extends `GraphOp` with `add()` (cotangent accumulation
+constructor), `linearize` (JVP rule), and `transpose_rule` (VJP rule).
 
-pub trait PrimitiveOp: GraphOp
-where
-    Self::InputKey: ADKey,
-{
-    fn add() -> Self
-    where
-        Self: Sized;
-
-    fn linearize(
-        &self,
-        builder: &mut FragmentBuilder<Self>,
-        primal_in: &[GlobalValKey<Self>],
-        primal_out: &[GlobalValKey<Self>],
-        tangent_in: &[Option<LocalValId>],
-    ) -> Vec<Option<LocalValId>>
-    where
-        Self: Sized;
-
-    fn transpose_rule(
-        &self,
-        builder: &mut FragmentBuilder<Self>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<Self>],
-        mode: &OpMode,
-    ) -> Vec<Option<LocalValId>>
-    where
-        Self: Sized;
-}
-```
+Canonical trait signature: [`../spec/ad-contract.md`](../spec/ad-contract.md).
 
 `add()` returns the primitive used by `tidu::transpose` when multiple
 cotangent contributions flow to the same `GlobalValKey`. This keeps fan-out
@@ -114,15 +86,9 @@ pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
 }
 ```
 
-`PrimitiveOp` requires `Self::InputKey: ADKey`:
-
-```rust
-pub trait PrimitiveOp: GraphOp where Self::InputKey: ADKey {
-    fn add() -> Self;
-    fn linearize(...) -> ...;
-    fn transpose_rule(...) -> ...;
-}
-```
+`PrimitiveOp` requires `Self::InputKey: ADKey`
+(see [`../spec/ad-contract.md`](../spec/ad-contract.md) for the canonical
+`PrimitiveOp` trait signature).
 
 The concrete implementation of `ADKey` is the downstream implementor's
 choice. A typical pattern is a recursive enum:

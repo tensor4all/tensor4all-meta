@@ -26,59 +26,26 @@ The graph infrastructure is equally usable for:
 
 ### Operand
 
-`Operand` is the runtime value type. Scalars are rank-0 tensors.
+`Operand` is the runtime value type (scalars are rank-0 tensors). It provides
+algebraic operations (`zero`, `one`, `add`, `multiply`, `reduce_sum`,
+`dot_general`, `conj`) that the graph engine and AD transforms dispatch
+through. Structural operations (`transpose`, `reshape`, `broadcast_in_dim`)
+are **not** part of `Operand`; they live on a separate `TensorData` trait.
 
-```rust
-trait Operand: Clone + Send + Sync + 'static {
-    fn zero(shape: &[usize]) -> Self;
-    fn one(shape: &[usize]) -> Self;
-    fn add(&self, other: &Self) -> Self;
-    fn multiply(&self, other: &Self) -> Self;
-    fn reduce_sum(&self, axes: &[usize]) -> Self;
-    fn dot_general(&self, other: &Self, ...) -> Self;
-    fn conj(&self) -> Self;
-}
-```
+`Operand` intentionally contains tensor-specific algebraic methods --
+computegraph-rs is designed as a tensor computation graph engine.
 
-`zero` is required for sparse propagation. `one` is required for seeding
-(e.g. reverse-mode AD seeds `ct_y = one`).
-
-Structural operations (`transpose`, `reshape`, `broadcast_in_dim`) are **not**
-part of `Operand`. They are provided by a separate `TensorData` trait with
-generic implementations that work over any `Operand` with shape/stride metadata.
-This keeps `Operand` focused on algebraic operations that the graph engine and
-AD transforms actually dispatch through.
-
-**Note:** `Operand` contains tensor-specific algebraic methods (`dot_general`,
-`reduce_sum`, `conj`, etc.). This is intentional -- computegraph-rs is designed
-as a **tensor computation graph engine**, not a fully generic DAG engine. The
-tensor-oriented interface ensures that graph transforms (e.g. AD in tidu-rs) can
-reason about tensor algebra without depending on concrete primitive types.
+Canonical trait signature: [`../spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV).
+`TensorData` trait: [`../spec/tensor-semantics.md`](../spec/tensor-semantics.md).
 
 ### GraphOp
 
 `GraphOp` is the operation node trait. It defines evaluation and arity.
 `computegraph` is fully generic over this trait and never references specific
-primitives.
+primitives. Associated types: `Operand` (runtime value), `Context` (backend
+execution state), `InputKey` (downstream-chosen key representation).
 
-```rust
-trait GraphOp: Clone + Debug + Hash + Eq + Send + Sync + 'static {
-    type Operand: Operand;
-    type Context;
-    type InputKey: Clone + Debug + Hash + Eq + Send + Sync + 'static;
-
-    fn n_inputs(&self) -> usize;
-    fn n_outputs(&self) -> usize;
-    fn eval(&self, ctx: &mut Self::Context, inputs: &[&Self::Operand]) -> Vec<Self::Operand>;
-}
-```
-
-`InputKey` is an associated type so that downstream implementors can choose
-the representation (e.g. `String`, interned `u64`, domain-specific struct).
-```
-
-`Context` is an associated type so that backends can inject execution state
-(e.g. `CpuContext`, `CudaContext`).
+Canonical trait signature: [`../spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV).
 
 ---
 
