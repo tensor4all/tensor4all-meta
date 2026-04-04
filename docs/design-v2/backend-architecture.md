@@ -478,6 +478,51 @@ IR instruction sequence and dispatches each instruction:
 This design means a backend author can start with the minimum two-method
 contract and add fast paths incrementally as performance needs arise.
 
+### Buffer lifecycle: liveness analysis + buffer pool
+
+The low-level IR is SSA (each slot is written once), but the execution engine
+must manage Rust buffer ownership efficiently. The key mechanism is
+**liveness analysis**: the compiler annotates each instruction input with
+whether it is the **last use** of that slot.
+
+```rust
+struct LowLevelInstruction {
+    op: LowLevelOp,
+    inputs: Vec<usize>,     // input slot indices
+    outputs: Vec<usize>,    // output slot indices
+    last_use: Vec<bool>,    // last_use[i] = true if inputs[i] is consumed here
+}
+```
+
+At execution time, the engine uses this annotation to decide consume vs borrow:
+
+- **`last_use = true`**: the engine calls `slots[i].take()` (Rust ownership
+  transfer). The operation can reuse the input buffer for its output if the
+  layout is compatible, or return the buffer to a **buffer pool** for later
+  reuse.
+- **`last_use = false`**: the engine borrows `slots[i].as_ref()`. The buffer
+  stays alive for downstream consumers.
+
+```rust
+for inst in &program.instructions {
+    let input = if inst.last_use[0] {
+        slots[inst.inputs[0]].take().unwrap()   // consume: buffer reusable
+    } else {
+        slots[inst.inputs[0]].as_ref().unwrap() // borrow: buffer stays
+    };
+    // ... execute op, possibly reusing input buffer ...
+}
+```
+
+**Buffer pool**: freed buffers are returned to a per-engine pool
+(`TensorBufferPool` in v1) and recycled for future allocations. This avoids
+repeated heap allocation in tight loops (e.g., einsum over many contraction
+steps).
+
+The IR semantics remain purely functional (SSA). Consume/borrow decisions are
+an execution engine implementation detail, invisible to the IR and backend
+traits.
+
 ### Type erasure boundary
 
 | Layer | Scalar type T | Algebra Alg |
@@ -658,33 +703,53 @@ trait SemiringCore {
 }
 ```
 
-The generic execution engine handles the dispatch loop:
+The generic execution engine handles the dispatch loop, using liveness
+annotations for buffer management (see "Buffer lifecycle" above):
 
 ```rust
 fn eval_low_level_ir<B: SemiringCore>(
     backend: &B,
     program: &LowLevelProgram,
-    inputs: &[B::Operand],
+    inputs: Vec<B::Operand>,
+    pool: &mut BufferPool,
 ) -> Vec<B::Operand> {
-    let mut slots = vec![None; program.n_slots];
-    for (i, val) in program.input_slots.iter().zip(inputs) {
-        slots[*i] = Some(val.clone());
+    let mut slots: Vec<Option<B::Operand>> = vec![None; program.n_slots];
+    for (&slot, val) in program.input_slots.iter().zip(inputs) {
+        slots[slot] = Some(val);
     }
     for inst in &program.instructions {
+        // Helper: consume (take) or borrow based on last_use annotation
+        let get = |slots: &mut Vec<Option<B::Operand>>, idx: usize, last: bool| {
+            if last { slots[idx].take().unwrap() }
+            else    { slots[idx].as_ref().unwrap().clone() }
+        };
+
         let result = match &inst.op {
             // Structural ops — common infrastructure
-            LowLevelOp::Permute(perm) => permute(&slots[inst.inputs[0]].as_ref().unwrap(), perm),
-            LowLevelOp::Reshape(shape) => reshape(&slots[inst.inputs[0]].as_ref().unwrap(), shape),
-            LowLevelOp::Copy => copy(&slots[inst.inputs[0]].as_ref().unwrap()),
-            // Compute ops — SemiringCore
-            LowLevelOp::BatchedGemm => backend.batched_gemm(
-                slots[inst.inputs[0]].as_ref().unwrap(),
-                slots[inst.inputs[1]].as_ref().unwrap(),
-            ),
-            LowLevelOp::ReduceSum(axes) => backend.reduce_sum(
-                slots[inst.inputs[0]].as_ref().unwrap(),
-                axes,
-            ),
+            LowLevelOp::Permute(perm) => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                permute(input, perm, pool)
+            }
+            LowLevelOp::Copy => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                copy_contiguous(input, pool)
+            }
+            // Compute ops — SemiringCore dispatch
+            LowLevelOp::BatchedGemm { .. } => {
+                let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
+                backend.batched_gemm(&lhs, &rhs, pool)
+                // lhs/rhs buffers returned to pool if consumed
+            }
+            LowLevelOp::ReduceSum(axes) => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                backend.reduce_sum(&input, axes, pool)
+            }
+            // Linalg — kernel registry
+            LowLevelOp::CustomCall { target, .. } => {
+                dispatch_custom_call(target, &inst, &mut slots, pool)
+            }
+            _ => { /* Reshape: metadata-only, no copy */ todo!() }
         };
         slots[inst.outputs[0]] = Some(result);
     }
