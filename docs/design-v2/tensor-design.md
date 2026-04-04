@@ -55,13 +55,10 @@ enum Buffer<T> {
 and slice operations. Strided views avoid data movement in the high-level
 graph layer.
 
-**Reshape semantics:** `Reshape` operates on the **logical element sequence**
-(column-major traversal of the logical shape). It is zero-copy only when the
-tensor's strides are column-major contiguous. For permuted-contiguous views
-(e.g., from `.t()`, where physical memory is contiguous but axis order differs),
-`Reshape` requires a physical copy to column-major before reinterpreting the
-shape. This matches StableHLO's `Reshape`, which operates on dense arrays with
-no stride concept.
+**Note on Reshape:** In the Tenferro IR and StableHLO IR, `Reshape` operates
+on logically dense column-major tensors — there is no stride ambiguity at the
+IR level. Strides are a `Tensor` runtime concern, resolved at eval() time by
+the input pre-processing and the stride-aware execution engine.
 
 At eval() time, input pre-processing checks memory contiguity:
 
