@@ -207,7 +207,7 @@ StableHloProgram (Rust struct, in-process)    ← CUT POINT
     │
     ├── XlaBackend:  StableHLO → XLA directly (unchanged)
     │
-    └── FaerBackend: StableHLO → optimizing compiler → ExecProgram
+    └── CpuBackend: StableHLO → optimizing compiler → ExecProgram
                          → generic execution engine → SemiringCore trait
 ```
 
@@ -273,7 +273,7 @@ Canonical trait signatures: [`spec/backend-contract.md`](../spec/backend-contrac
 
 ### Standard and custom algebra backends
 
-Two standard backends are provided: `FaerBackend` (StableHLO -> optimizing
+Two standard backends are provided: `CpuBackend` (StableHLO -> optimizing
 compiler -> ExecProgram -> generic engine -> faer/BLAS/LAPACK) and
 `XlaBackend` (StableHLO -> XLA directly). Custom algebra backends implement
 `SemiringCore<Alg>` with a minimum of `batched_gemm` + `reduce_sum`.
@@ -492,7 +492,7 @@ Top-level facade:
 - `SemiringCore<Alg>` trait — minimum kernel interface (batched_gemm, reduce_sum, ...)
 - `SemiringFastPath<Alg>` trait — optional fast-path operations (contract, fused ops)
 - Standard backends:
-  - `FaerBackend` — StableHLO → optimizing compiler → ExecProgram →
+  - `CpuBackend` — StableHLO → optimizing compiler → ExecProgram →
     generic engine → `SemiringCore<StandardAlgebra>` (faer/BLAS/LAPACK)
   - `XlaBackend` — StableHLO → XLA directly (unchanged)
 - Custom algebra backends:

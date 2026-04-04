@@ -231,31 +231,49 @@ compiler to produce Execution IR.
 
 ### AD-closed graph core
 
-These are the minimal tensor primitives needed to express:
+These are the tensor primitives needed to express:
 
 - scalar and tensor JVP/VJP rules
 - explicit broadcasting and reshaping
-- general contractions
+- general contractions (including repeated-index patterns like trace/diagonal)
 - reverse-mode accumulation without hidden fan-out
 
-Every op in this table is expected to implement `PrimitiveOp` directly.
+Every op in this table is expected to implement `PrimitiveOp` directly
+(for `StdTensorOp`). The set is **AD-closed**: `linearize` and
+`transpose_rule` of any op in this table emit only ops from this table.
+
+**Implementation note:** the boundary between this core set and the
+"Standard arithmetic extensions" (Section V) is primarily an
+**implementation priority** guide, not a formal algebraic boundary. The
+full `StdTensorOp` set (core + extensions) is also AD-closed. The core
+set is distinguished by two properties: (1) it is AD-closed on its own,
+and (2) all ops in it are well-defined for arbitrary semiring algebras
+(not just standard arithmetic), making them available to `SemiringOp<T>`.
+
+#### Algebraic ops
 
 | Primitive | Signature | Definition | Notes |
 |-----------|-----------|------------|-------|
-| `Add` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] + x1[i]` | Same shape on both inputs; no hidden broadcasting |
-| `Mul` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] * x1[i]` | Elementwise multiply; same-shape contract |
-| `Neg` | `x: S -> y: S` | `y[i] = -x[i]` | Unary elementwise |
-| `Conj` | `x: S -> y: S` | `y[i] = conj(x[i])` | Identity on real dtypes, conjugation on complex dtypes |
-| `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive; matrix multiply, batched matmul, and inner product are all special cases. Config defined below. |
+| `Add` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] + x1[i]` | Same shape on both inputs; no hidden broadcasting. Maps to ⊕ for custom algebras. |
+| `Mul` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] * x1[i]` | Elementwise multiply; same-shape contract. Maps to ⊗ for custom algebras. |
+| `Neg` | `x: S -> y: S` | `y[i] = -x[i]` | Unary elementwise. Standard algebra only (semirings lack additive inverse). |
+| `Conj` | `x: S -> y: S` | `y[i] = conj(x[i])` | Identity on real dtypes, conjugation on complex dtypes. Standard algebra only. |
+| `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive; uses ⊕ and ⊗ for custom algebras. Config defined below. |
+| `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | `y` is formed by summing `x` over the listed axes | Uses ⊕ for custom algebras. Rank drops unless a later op restores it. |
+
+#### Structural ops
+
+These ops rearrange or select elements without any arithmetic. They are
+well-defined for all algebras and handled by common infrastructure at the
+backend level (not part of the custom backend contract).
+
+| Primitive | Signature | Definition | Notes |
+|-----------|-----------|------------|-------|
 | `Transpose(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Reorder axes according to `perm` | Pure axis permutation |
 | `Reshape(shape)` | `x: [d0, ..., dn-1] -> y: shape` | Reinterpret the element sequence with a new shape | Total element count must stay unchanged. In the IR all tensors are logically dense column-major, so there is no stride ambiguity. |
 | `BroadcastInDim(shape, dims)` | `x: [a0, ..., ak-1] -> y: shape` | Place input axis `j` into output axis `dims[j]`, repeating along the others | Makes all broadcast semantics explicit |
-| `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | `y` is formed by summing `x` over the listed axes | Rank drops unless a later op restores it |
-
-**Structural ops** (`Transpose`, `Reshape`, `BroadcastInDim`) are meaningful at
-the graph level for AD and shape inference, but they are handled by common
-infrastructure at the backend level. They are **not** part of the custom backend
-contract.
+| `Gather` | `x: S -> y: S'` | Read values from `x` at positions specified by an index tensor | Needed for repeated-index einsum patterns (trace, diagonal extraction). Pure index-based read; no arithmetic. |
+| `Scatter` | `updates: S, x: S' -> y: S'` | Write or accumulate values into `y` at positions specified by an index tensor | Transpose of `Gather`. Accumulation uses ⊕. Needed for AD of `Gather` and for `embed_diag`. |
 
 ### DotGeneral config
 
@@ -349,10 +367,12 @@ this document is updated.
 
 ### Indexing and structural data movement
 
+`Gather` and `Scatter` are in the AD-closed graph core (Section IV) because
+they are needed for repeated-index einsum patterns and are well-defined for
+all algebras. The remaining indexing ops are standard-arithmetic only:
+
 | Primitive | Definition | Notes |
 |-----------|------------|-------|
-| `Gather` | Read values from `x` at positions specified by an index tensor | Shape-preserving indexed read pattern |
-| `Scatter` | Write or accumulate values into `y` at positions specified by an index tensor | Indexed inverse of gather |
 | `Slice` | Read a static rectangular subregion | Start/limit/stride known in the op |
 | `DynamicSlice` | Read a slice whose start index is data-dependent | Dynamic counterpart of `Slice` |
 | `Pad` | Extend a tensor with edge/interior padding values | Needed for transpose of slicing-like ops |

@@ -60,7 +60,7 @@ Note: `Operand` (see [`primitive-catalog.md`](primitive-catalog.md)) also
 includes `reshape` and `broadcast_in_dim` as methods, because
 computegraph-rs's graph evaluation (`GraphOp::eval`) needs them. `TensorData`
 complements `Operand` with lower-level buffer access (`shape`, `strides`,
-`data`) that the execution engine uses for stride-aware dispatch and
+`as_slice`) that the execution engine uses for stride-aware dispatch and
 physical copies.
 
 ```rust
@@ -68,13 +68,12 @@ trait TensorData {
     type Scalar: Scalar;
     fn shape(&self) -> &[usize];
     fn strides(&self) -> &[isize];
-    fn data(&self) -> &[Self::Scalar];
-    fn from_data(shape: Vec<usize>, data: Vec<Self::Scalar>) -> Self;
+    fn as_slice(&self) -> &[Self::Scalar];
+    fn from_dense(shape: Vec<usize>, data: Vec<Self::Scalar>) -> Self;
 }
 ```
 
-**Note:** This trait is a design-time placeholder. The final signature will
-be determined during v2 implementation — device-resident buffers, zero-copy
+**Note:** Device-resident buffers, zero-copy
 views, and placement metadata may require additional methods or a different
 structure (e.g., `AsSlice` + `ViewAs` traits). See issue discussion for
 context.

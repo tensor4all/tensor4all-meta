@@ -20,7 +20,7 @@
 - `eval()` triggers `materialize_merge -> compile (cached) -> execute`,
   filling in the data.
 - `Engine` holds backend + compilation cache + einsum cache. It is generic
-  over `Backend<StdTensorOp>` (e.g., `FaerBackend`, `XlaBackend`).
+  over `Backend<StdTensorOp>` (e.g., `CpuBackend`, `XlaBackend`).
 - `eval_all` is the primary evaluation API. It resolves all output fragments
   together into one `MaterializedGraph`, so shared intermediate nodes (e.g.,
   primal values needed by both forward output and gradient) are computed once.
@@ -136,7 +136,7 @@ let y = x.exp();
 
 ```rust
 // Create engine with faer CPU backend (default)
-let mut engine = Engine::new(FaerBackend::new());
+let mut engine = Engine::new(CpuBackend::new());
 
 // Or with XLA GPU backend
 let mut engine = Engine::new(XlaBackend::gpu(device_id));
