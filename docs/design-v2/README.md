@@ -45,7 +45,9 @@ The v2 design is organized around three intermediate representations:
 for fragment construction, AD, and einsum decomposition.
 
 **StableHLO IR** (`StableHloOp`) — the **single cut point** between graph/AD
-and execution. Serializable to StableHLO MLIR. XLA backend takes this directly.
+and execution. For standard algebra: serializable to StableHLO MLIR; XLA
+backend takes this directly. For custom algebra: same IR structure but ops
+have semiring-specific semantics (Add=⊕, Mul=⊗); XLA path not available.
 
 **Execution IR** (`ExecOp`) — output of the optimizing compiler. Same ops as
 StableHLO + `BatchedGemm` − `DotGeneral`. faer/custom backends execute this

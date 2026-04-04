@@ -26,7 +26,7 @@ different senses. For readability, this document separates them explicitly:
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
 | Tenferro IR | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` / `SemiringOp<T>` nodes in a `Fragment`; fragment construction, AD, einsum decomposition |
-| StableHLO IR | `StableHloOp` variants | serializable to StableHLO MLIR; the single cut point between graph/AD and backends. XLA backend takes this directly |
+| StableHLO IR | `StableHloOp` variants | serializable to StableHLO MLIR for standard algebra; the single cut point between graph/AD and backends. XLA backend takes this directly (standard algebra only) |
 | Execution IR | StableHLO ops + `BatchedGemm` - `DotGeneral` | output of the optimizing compiler; input to faer / custom backends |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, IREE module, faer routine | how an instruction is executed |
 
@@ -195,11 +195,17 @@ host→device transfer dominates.
 
 No StableHLO ops are inserted for input normalization in either path.
 
-The StableHLO IR is designed to be **actually serializable to
-StableHLO MLIR**. It is not merely "inspired by" StableHLO -- the IR uses
-the same op semantics, the same dimension numbering conventions, and the
-same layout model (dense, no strides). Standard dtypes (f32, f64, c32, c64)
-can be round-tripped through StableHLO serialization.
+**For standard algebra**, the StableHLO IR is **actually serializable to
+StableHLO MLIR**. It uses the same op semantics, the same dimension numbering
+conventions, and the same layout model (dense, no strides). Standard dtypes
+(f32, f64, c32, c64) can be round-tripped through StableHLO serialization.
+
+**For custom algebra** (tropical, etc.), the IR uses the same structure
+(`StableHloOp` types) but the ops have semiring-specific semantics: `Add` means
+⊕, `Mul` means ⊗. This IR is **not serializable to StableHLO MLIR** (XLA would
+interpret Add as standard addition). Custom algebra always goes through the
+optimizing compiler → Execution IR → stride-aware engine path, never through
+XLA.
 
 ### III.2 Optimizing compiler (algebra-agnostic passes)
 
@@ -247,7 +253,8 @@ executed as-is.
 |----------|-----|----------------|
 | Semiring contraction | `BatchedGemm` | `SemiringCore::batched_gemm()` |
 | Semiring reduction | `ReduceSum` | `SemiringCore::reduce_sum()` |
-| Elementwise arithmetic | `Add`, `Mul`, `Neg`, `Conj`, `Div`, `Abs`, `Sign`, `Maximum`, `Minimum` | Standard kernel (faer) |
+| Semiring elementwise | `Add`, `Mul` | Algebra-dependent: standard kernel for standard algebra, `Operand::add()`/`multiply()` for custom algebra |
+| Elementwise arithmetic | `Neg`, `Conj`, `Div`, `Abs`, `Sign`, `Maximum`, `Minimum` | Standard kernel (faer); standard algebra only |
 | Elementwise analytic | `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Pow`, `Expm1`, `Log1p` | Standard kernel |
 | Comparison & selection | `Compare`, `Select`, `Clamp` | Standard kernel |
 | Additional reductions | `ReduceProd`, `ReduceMax`, `ReduceMin` | Standard kernel |
