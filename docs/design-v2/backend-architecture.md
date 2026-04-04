@@ -29,7 +29,7 @@ CompiledProgram (flat SSA of StableHLO-compatible IR)
         │ optimizing compiler (TransposeFolding, DotDecomposer,
         │                      LinalgCustomCallPassthrough)
         ▼
-      Low-level IR (BatchedGemm, ReduceSum, Permute, Reshape, Copy, CustomCall)
+      Low-level IR (BatchedGemm, ReduceSum, Permute, Reshape, CustomCall)
         │               all contiguous, column-major
         │
         │ generic execution engine
@@ -60,7 +60,7 @@ include composite lowerings like `Conj` and multi-output linalg ops like
 
 The **low-level IR** is the output of the optimizing compiler. All operands
 are contiguous and column-major. Its instruction set is small:
-`BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `Copy`, and
+`BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, and
 `CustomCall { target, config }` (for linalg ops like SVD/QR/Eigh/Solve that
 are passed through from the StableHLO IR and dispatched to a registered
 kernel registry -- LAPACK for CPU, cuSOLVER for GPU).
@@ -111,7 +111,7 @@ StableHLO IR directly (no optimizing compiler pass).
 
 Custom algebras receive the same low-level IR as standard backends. They
 implement the `SemiringCore` trait (`batched_gemm` + `reduce_sum`).
-Structural ops (`Permute`, `Reshape`, `Copy`) are handled by common
+Structural ops (`Permute`, `Reshape`) are handled by common
 infrastructure. This means a new algebra backend needs only two method
 implementations to support any einsum-derived program.
 
@@ -370,7 +370,7 @@ CompiledProgram<Op>  (StableHLO-compatible IR — the single cut point)
           │
           ▼
         Low-level IR (contiguous, column-major)
-          │  BatchedGemm, ReduceSum, Permute, Reshape, Copy, CustomCall
+          │  BatchedGemm, ReduceSum, Permute, Reshape, CustomCall
           │
           │  generic execution engine
           │    1. structural ops → common infrastructure
@@ -406,10 +406,9 @@ a sequence of algebra-agnostic passes:
 | **DotDecomposer** | Break multi-contracting-dim `DotGeneral` into sequences that map to `BatchedGemm` |
 | **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the low-level IR as-is |
 
-Note: contiguous materialization is **not** a compiler pass. It happens at the
-StableHLO IR entry point: the lowering inserts explicit permute/copy ops at
-the program head for non-contiguous inputs. All tensors entering the compiler
-are already contiguous and column-major.
+Note: contiguous materialization is **not** a compiler pass. It happens at
+eval() time as a pre-processing step (see Memory layout section below). All
+tensors entering the compiler are already contiguous and column-major.
 
 These passes operate on shape metadata and instruction structure, not on
 element values. They are shared by all non-XLA backends (faer, custom GPU,
@@ -427,12 +426,12 @@ column-major**.
 | `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | Sum over the listed axes |
 | `Permute(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Axis permutation; output is a fresh contiguous allocation |
 | `Reshape(shape)` | `x -> y: shape` | Reinterpret contiguous storage with a new shape |
-| `Copy` | `x -> y` | Materialize a contiguous column-major copy; identity on already-contiguous data |
 | `CustomCall { target, config }` | `inputs -> outputs` | Dispatch to a registered kernel (e.g., LAPACK for SVD/QR/Eigh/Solve). Passed through from StableHLO IR by the optimizing compiler. |
 
-Structural ops (`Permute`, `Reshape`, `Copy`) are handled by **common
+Structural ops (`Permute`, `Reshape`) are handled by **common
 infrastructure** shared across all backends. They are not part of the custom
-backend contract.
+backend contract. Note that `Copy` is not a low-level IR instruction;
+contiguification happens at eval() pre-processing before IR entry.
 
 ### Backend traits
 
@@ -466,7 +465,7 @@ and execute them as one fused operation.
 The generic execution engine is a simple interpreter that walks the low-level
 IR instruction sequence and dispatches each instruction:
 
-1. Structural ops (`Permute`, `Reshape`, `Copy`) are executed by common
+1. Structural ops (`Permute`, `Reshape`) are executed by common
    infrastructure.
 2. `CustomCall` instructions are dispatched to a **registered kernel registry**.
    The faer/CPU backend registers LAPACK routines; a GPU backend registers
@@ -545,7 +544,7 @@ routines via a registered kernel registry. No XLA dependency.
 Low-level IR instruction  →   faer/BLAS dispatch
   BatchedGemm             →   faer::mat_mul / dgemm
   ReduceSum               →   elementwise sum
-  Permute/Reshape/Copy    →   common infrastructure (memory ops)
+  Permute/Reshape          →   common infrastructure (memory ops)
 
 CustomCall (low-level IR) →   LAPACK kernel registry dispatch
   Cholesky                →   dpotrf
@@ -574,19 +573,29 @@ fusion optimization, not raw kernel performance.
 ### Memory layout: column-major throughout
 
 `Tensor` allows **arbitrary strides** at the user level (zero-copy views for
-permute, slice, reshape). However, contiguous materialization happens at the
-**StableHLO IR entry point**, not at the compiler boundary. When the graph is
-lowered to StableHLO IR, each program input that is not already contiguous
-column-major receives an explicit `stablehlo.transpose` or
-`stablehlo.reshape` + `stablehlo.copy` at the head of the program. This
-ensures that all tensor values within the StableHLO IR are dense and
-contiguous, matching real StableHLO semantics (which has no concept of
-strides). Row-major input layout is a runtime error (future support possible).
+permute, slice, reshape). Contiguous materialization is an **eval() time
+pre-processing step** that runs before the StableHLO program, with two cases:
+
+1. **Permuted-contiguous view** (strides are a permutation of column-major
+   contiguous strides, e.g., from `tensor.permute()` or `.t()`): the raw
+   buffer is passed as-is and a `stablehlo.transpose` op is inserted at the
+   program head. No physical copy occurs. XLA's TransposeFolding pass may
+   absorb this transpose into downstream `DotGeneral` ops.
+2. **Non-contiguous view** (e.g., from slicing with non-unit stride): a
+   physical copy to a fresh contiguous buffer is performed at eval() time,
+   **outside the IR**. After copying, the buffer is typically plain
+   column-major, so no transpose is needed.
+
+The StableHLO program always receives contiguous dense inputs. `stablehlo.copy`
+is never used (it does not exist in the StableHLO spec). Row-major input layout
+is a runtime error (future support possible).
 
 ```
 User Tensor:      may have arbitrary strides
                           │
-               contiguous materialization (at StableHLO IR entry)
+               eval() pre-processing:
+                 case 1: permuted-contiguous → pass buffer, insert stablehlo.transpose
+                 case 2: non-contiguous      → physical copy outside IR
                           │
 StableHLO IR:     all tensors contiguous, column-major
                           │
@@ -729,10 +738,6 @@ fn eval_low_level_ir<B: SemiringCore>(
             LowLevelOp::Permute(perm) => {
                 let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
                 permute(input, perm, pool)
-            }
-            LowLevelOp::Copy => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                copy_contiguous(input, pool)
             }
             // Compute ops — SemiringCore dispatch
             LowLevelOp::BatchedGemm { .. } => {
@@ -898,9 +903,10 @@ describes only the canonical public memory kind names.
 
 `Tensor` is the user-facing type-erased tensor. Internally it is an enum
 over concrete typed storage for each supported scalar type. `Tensor` allows
-**arbitrary strides** — contiguous materialization happens at the StableHLO IR
-entry point (the lowering inserts explicit permute/copy at the program head),
-not at the tensor level.
+**arbitrary strides** — contiguous materialization happens at eval() time as
+a pre-processing step (permuted-contiguous views insert `stablehlo.transpose`;
+non-contiguous views are physically copied outside the IR), not at the tensor
+level.
 
 ```rust
 struct Placement {

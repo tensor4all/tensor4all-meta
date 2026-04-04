@@ -521,10 +521,11 @@ Optimization passes:
 - **LinalgCustomCallPassthrough**: pass linalg `CustomCall` ops through to the
   low-level IR as-is
 
-Note: contiguous materialization is **not** a compiler pass. It happens at the
-StableHLO IR entry point: the lowering inserts explicit permute/copy ops at
-the program head for non-contiguous inputs. All tensors entering the compiler
-are already contiguous and column-major.
+Note: contiguous materialization is **not** a compiler pass. It happens at
+eval() time as a pre-processing step: permuted-contiguous views pass the raw
+buffer with a `stablehlo.transpose` inserted at the program head; truly
+non-contiguous views are physically copied outside the IR. All tensors
+entering the compiler are already contiguous and column-major.
 
 ```rust
 fn compile_to_lowlevel(hlo: &StableHloProgram) -> LowLevelProgram {
@@ -547,9 +548,6 @@ enum LowLevelOp {
     ReduceSum { axes: Vec<usize> },
     Permute { perm: Vec<usize> },
     Reshape { shape: Vec<usize> },
-    Copy,
-    ElementwiseMul,
-    ElementwiseAdd,
     CustomCall { target: String, config: Vec<u8> },
 }
 
@@ -591,16 +589,10 @@ fn execute_lowlevel<Alg: Semiring, B: SemiringCore<Alg>>(
                 backend.batched_gemm(batch_dims, *m, *n, *k, ...),
             LowLevelOp::ReduceSum { axes } =>
                 backend.reduce_sum(axes, ...),
-            LowLevelOp::ElementwiseMul =>
-                backend.elementwise_mul(...),
-            LowLevelOp::ElementwiseAdd =>
-                backend.elementwise_add(...),
             LowLevelOp::Permute { perm } =>
                 backend.permute(perm, ...),
             LowLevelOp::Reshape { shape } =>
                 backend.reshape(shape, ...),
-            LowLevelOp::Copy =>
-                backend.copy(...),
             LowLevelOp::CustomCall { target, config } =>
                 backend.dispatch_custom_call(target, config, ...),
         }
@@ -622,11 +614,6 @@ trait SemiringCore<Alg: Semiring> {
         a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer,
     );
     fn reduce_sum(&self, axes: &[usize], input: &Self::Buffer, out: &mut Self::Buffer);
-    fn elementwise_mul(&self, a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer);
-    fn elementwise_add(&self, a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer);
-    fn permute(&self, perm: &[usize], input: &Self::Buffer, out: &mut Self::Buffer);
-    fn reshape(&self, shape: &[usize], input: &Self::Buffer, out: &mut Self::Buffer);
-    fn copy(&self, input: &Self::Buffer, out: &mut Self::Buffer);
 }
 
 /// Optional fast-path operations. Returning `false` falls back to the
@@ -638,17 +625,23 @@ trait SemiringFastPath<Alg: Semiring>: SemiringCore<Alg> {
         out: &mut Self::Buffer,
     ) -> bool { false }
 
-    /// Fused elementwise multiply. Returns true if handled.
-    fn fused_elementwise_mul(
+    /// Fast path for Hadamard products. Returns true if handled.
+    fn elementwise_mul(
+        &self, a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer,
+    ) -> bool { false }
+
+    /// Fast path for semiring accumulation. Returns true if handled.
+    fn elementwise_add(
         &self, a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer,
     ) -> bool { false }
 }
 ```
 
 The minimum a custom backend must implement is `SemiringCore` — specifically
-`batched_gemm` and `reduce_sum`. The other operations in `SemiringCore`
-(`elementwise_mul`, `elementwise_add`, `permute`, `reshape`, `copy`) have
-default implementations based on the buffer type.
+`batched_gemm` and `reduce_sum`. Structural ops (`Permute`, `Reshape`) are
+handled by common infrastructure shared across all backends. Fast-path methods
+(`elementwise_mul`, `elementwise_add`, `contract`) live on `SemiringFastPath`
+and are optional.
 
 ### Standard backends
 

@@ -26,7 +26,7 @@ different senses. For readability, this document separates them explicitly:
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
 | StableHLO-compatible IR (high-level) | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Fragment`; the single cut point between graph/AD and backends |
-| Low-level IR (contiguous, column-major) | `BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `Copy`, `CustomCall` | output of the optimizing compiler; input to faer / custom backends |
+| Low-level IR (contiguous, column-major) | `BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `CustomCall` | output of the optimizing compiler; input to faer / custom backends |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, IREE module, faer routine | how an instruction is executed |
 
 This document uses **three orthogonal classifications**:
@@ -54,9 +54,12 @@ Important distinctions:
   and multi-output linalg ops (e.g., `Svd` -> `custom_call` +
   `get_tuple_element` x N).
 - `Tensor` allows **arbitrary strides** at the user level. Contiguous
-  materialization happens at the **entry point of the StableHLO IR**: the
-  lowering inserts explicit permute/copy ops at the program head for
-  non-contiguous inputs.
+  materialization happens at **eval() time** as a pre-processing step:
+  permuted-contiguous views (e.g., from `permute()` or `.t()`) pass the
+  raw buffer and insert `stablehlo.transpose` at the program head;
+  non-contiguous views (e.g., from slicing) are physically copied to a
+  contiguous buffer outside the IR. The StableHLO program always receives
+  contiguous dense inputs.
 
 Responsibility boundary:
 
@@ -140,19 +143,23 @@ StableHLO op. Documented exceptions include composite lowerings (e.g., `Conj`
 `get_tuple_element` x N).
 
 All tensor values within the StableHLO IR are contiguous and column-major.
-When a user `Tensor` with non-contiguous strides enters as a program input,
-the lowering inserts an explicit permute/copy at the head of the StableHLO
-program to materialize contiguous column-major layout. Row-major input layout
-is a runtime error (future support possible).
+Contiguous materialization is an **eval() pre-processing step** that runs
+before the StableHLO program, handling each input tensor in one of two cases:
 
-When lowering from `CompiledProgram` to StableHLO IR, each program input
-that is not already contiguous column-major receives an explicit
-`stablehlo.transpose` or `stablehlo.reshape` + `stablehlo.copy` at the
-head of the program. This ensures that all tensor values within the
-StableHLO IR are dense and contiguous, matching real StableHLO semantics
-(which has no concept of strides). Row-major input layout is treated as
-a runtime error in the current design; future versions may support layout
-negotiation.
+1. **Permuted-contiguous view** (strides are a permutation of column-major
+   contiguous strides, e.g., from `tensor.permute()` or `.t()`): the raw
+   buffer is passed as-is and a `stablehlo.transpose` op is inserted at the
+   program head. No physical copy occurs. XLA's TransposeFolding pass may
+   absorb this transpose into downstream `DotGeneral` ops.
+2. **Non-contiguous view** (e.g., from slicing with non-unit stride): a
+   physical copy to a fresh contiguous buffer is performed at eval() time,
+   **outside the IR**. After copying, the buffer is typically plain
+   column-major, so no transpose is needed.
+
+The StableHLO program always receives contiguous dense inputs. `stablehlo.copy`
+is never used (it does not exist in the StableHLO spec). Row-major input
+layout is a runtime error in the current design; future versions may support
+layout negotiation.
 
 The StableHLO-compatible IR is designed to be **actually serializable to
 StableHLO MLIR**. It is not merely "inspired by" StableHLO -- the IR uses
@@ -192,12 +199,12 @@ column-major**.
 | `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | Sum over the listed axes |
 | `Permute(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Axis permutation; output is a fresh contiguous allocation |
 | `Reshape(shape)` | `x -> y: shape` | Reinterpret contiguous storage with a new shape |
-| `Copy` | `x -> y` | Materialize a contiguous column-major copy; identity on already-contiguous data |
 | `CustomCall { target, config }` | `inputs -> outputs` | Dispatch to a registered kernel (e.g., LAPACK routine for SVD/QR/Eigh/Solve). The optimizing compiler passes linalg `custom_call` ops through to the low-level IR as-is. |
 
-Structural ops (`Permute`, `Reshape`, `Copy`) are handled by **common
+Structural ops (`Permute`, `Reshape`) are handled by **common
 infrastructure** shared across all backends. They are not part of the custom
-backend contract.
+backend contract. Note that `Copy` is not a low-level IR instruction;
+contiguification happens at eval() pre-processing before IR entry.
 
 ### III.4 Backend traits
 
@@ -241,7 +248,7 @@ is provided by tenferro's common infrastructure.
 The generic execution engine is a simple interpreter that walks the low-level
 IR instruction sequence and dispatches each instruction:
 
-1. Structural ops (`Permute`, `Reshape`, `Copy`) are executed by common
+1. Structural ops (`Permute`, `Reshape`) are executed by common
    infrastructure.
 2. `CustomCall` instructions are dispatched to a **registered kernel registry**.
    The faer/CPU backend registers LAPACK routines (e.g., `dgesvd`, `dgeqrf` +
