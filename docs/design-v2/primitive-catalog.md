@@ -370,7 +370,7 @@ Every op in this table is expected to implement `PrimitiveOp` directly.
 | `Conj` | `x: S -> y: S` | `y[i] = conj(x[i])` | Identity on real dtypes, conjugation on complex dtypes |
 | `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive; matrix multiply, batched matmul, and inner product are all special cases. Config defined below. |
 | `Transpose(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Reorder axes according to `perm` | Pure axis permutation |
-| `Reshape(shape)` | `x: [d0, ..., dn-1] -> y: shape` | Reinterpret the same element sequence with a new shape | Total element count must stay unchanged |
+| `Reshape(shape)` | `x: [d0, ..., dn-1] -> y: shape` | Reinterpret the **logical** element sequence (column-major traversal) with a new shape | Total element count must stay unchanged. Zero-copy only when strides are column-major contiguous; permuted-contiguous views require a physical copy to column-major before reshape. |
 | `BroadcastInDim(shape, dims)` | `x: [a0, ..., ak-1] -> y: shape` | Place input axis `j` into output axis `dims[j]`, repeating along the others | Makes all broadcast semantics explicit |
 | `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | `y` is formed by summing `x` over the listed axes | Rank drops unless a later op restores it |
 
@@ -548,14 +548,25 @@ See also `stablehlo-primitives.md` and `jax-primitives.md`.
 Many familiar user-level ops are better treated as aliases or composites rather
 than as distinct graph primitives.
 
+### Constants and literals
+
+Constants (scalar or tensor literals) are **not** Tenferro IR primitives.
+They enter the graph as `Fragment` input nodes with attached data
+(`TracedTensor::from(Tensor::new(...))`). At StableHLO lowering, these
+become `stablehlo.constant` ops. Canonical lowerings that reference literal
+values (e.g., `1 / n` in `mean`, `1` in `reciprocal`) construct these as
+`Fragment` inputs.
+
+### Lowering table
+
 | Surface op | Tenferro IR form |
 |------------|----------------------|
 | `einsum(...)` | contraction planning + `DotGeneral`/`Mul`/`Transpose`/`Reshape`/`BroadcastInDim`/`ReduceSum` |
 | `sum(x, axes)` | `ReduceSum(x, axes)` |
-| `mean(x, axes)` | `ReduceSum(x, axes)` followed by scale by `1 / n` |
+| `mean(x, axes)` | `ReduceSum(x, axes)` followed by `Mul(result, constant(1/n))` |
 | `sub(x, y)` | `Add(x, Neg(y))` |
 | `square(x)` | `Mul(x, x)` |
-| `reciprocal(x)` | `Div(1, x)` |
+| `reciprocal(x)` | `Div(constant(1), x)` |
 | `where(pred, a, b)` | `Select(pred, a, b)` |
 | `greater(x, y)` | `Compare(dir=gt)` |
 | `greater_equal(x, y)` | `Compare(dir=ge)` |

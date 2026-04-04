@@ -51,10 +51,19 @@ enum Buffer<T> {
 }
 ```
 
-`Tensor` allows **arbitrary strides**, enabling zero-copy views for permute,
-slice, and reshape operations. Strided views avoid data movement in the
-high-level graph layer. At eval() time, input pre-processing checks memory
-contiguity:
+`Tensor` allows **arbitrary strides**, enabling zero-copy views for permute
+and slice operations. Strided views avoid data movement in the high-level
+graph layer.
+
+**Reshape semantics:** `Reshape` operates on the **logical element sequence**
+(column-major traversal of the logical shape). It is zero-copy only when the
+tensor's strides are column-major contiguous. For permuted-contiguous views
+(e.g., from `.t()`, where physical memory is contiguous but axis order differs),
+`Reshape` requires a physical copy to column-major before reinterpreting the
+shape. This matches StableHLO's `Reshape`, which operates on dense arrays with
+no stride concept.
+
+At eval() time, input pre-processing checks memory contiguity:
 
 1. **Contiguous data** (including permuted-contiguous views from
    `tensor.permute()` or `.t()`, and contiguous slices): passed as-is with
