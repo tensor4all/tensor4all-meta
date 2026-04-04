@@ -1,6 +1,6 @@
 # v2 tenferro-rs Internal Design
 
-**Date:** 2026-04-03
+**Date:** 2026-04-04
 **Status:** Draft
 **Repo:** tenferro-rs
 **Parent:** `README.md`
@@ -85,11 +85,20 @@ different `Operand` types, tenferro provides two Op types:
 
 ### StdTensorOp — standard algebra, full vocabulary, AD-capable
 
+StdTensorOp is **flat** — every variant maps 1:1 to a StableHLO op. There is
+no `Semiring(SemiringOpKind)` wrapper; the semiring-compatible operations
+(`Add`, `Mul`, `DotGeneral`, etc.) are top-level variants, making the
+StdTensorOp → StableHLO lowering a trivial match.
+
 ```rust
 enum StdTensorOp {
-    // Tier 1: semiring-compatible core
-    Semiring(SemiringOpKind),
-    Neg, Conj,
+    // Tier 1: semiring-compatible core (flat, mirrors StableHLO 1:1)
+    Add, Mul, Neg, Conj,
+    DotGeneral(DotGeneralConfig),
+    Transpose { perm: Vec<usize> },
+    Reshape { shape: Vec<usize> },
+    BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
+    ReduceSum { axes: Vec<usize> },
 
     // Tier 2: standard arithmetic only
     Div, Abs, Sign, Maximum, Minimum,
@@ -109,7 +118,9 @@ enum StdTensorOp {
     ReduceMin { axes: Vec<usize> },
 
     // Linalg (AD rules in ops/ad/linalg.rs, execution via custom_call)
-    Svd, Qr, Cholesky, Eigh, Solve,
+    Cholesky, Svd, Qr, Eigh, Solve,
+
+    CustomCall { target: String, n_inputs: usize, n_outputs: usize },
 }
 
 impl GraphOp for StdTensorOp {
@@ -124,7 +135,15 @@ impl PrimitiveOp for StdTensorOp {
 }
 
 impl SemiringOps for StdTensorOp {
-    // delegates to Semiring(...) variant
+    fn add() -> Self { StdTensorOp::Add }
+    fn mul() -> Self { StdTensorOp::Mul }
+    fn dot_general(c: DotGeneralConfig) -> Self { StdTensorOp::DotGeneral(c) }
+    fn reduce_sum(axes: Vec<usize>) -> Self { StdTensorOp::ReduceSum { axes } }
+    fn transpose(perm: Vec<usize>) -> Self { StdTensorOp::Transpose { perm } }
+    fn reshape(shape: Vec<usize>) -> Self { StdTensorOp::Reshape { shape } }
+    fn broadcast_in_dim(shape: Vec<usize>, dims: Vec<usize>) -> Self {
+        StdTensorOp::BroadcastInDim { shape, dims }
+    }
 }
 ```
 
@@ -142,16 +161,17 @@ impl<T: Operand> GraphOp for SemiringOp<T> {
     type InputKey = String;
 
     fn eval(&self, ctx: &mut SemiringContext<T>, inputs: &[&T]) -> Vec<T> {
-        // delegates entirely to T: Operand methods
+        // Algebraic ops → Operand trait methods
+        // Structural ops → generic functions over TensorData
         match &self.kind {
             SemiringOpKind::Add => vec![inputs[0].add(inputs[1])],
             SemiringOpKind::Mul => vec![inputs[0].multiply(inputs[1])],
             SemiringOpKind::DotGeneral(cfg) => vec![inputs[0].dot_general(inputs[1], cfg)],
             SemiringOpKind::ReduceSum { axes } => vec![inputs[0].reduce_sum(axes)],
-            SemiringOpKind::Transpose { perm } => vec![inputs[0].transpose(perm)],
-            SemiringOpKind::Reshape { shape } => vec![inputs[0].reshape(shape)],
+            SemiringOpKind::Transpose { perm } => vec![transpose(inputs[0], perm)],
+            SemiringOpKind::Reshape { shape } => vec![reshape(inputs[0], shape)],
             SemiringOpKind::BroadcastInDim { shape, dims } =>
-                vec![inputs[0].broadcast_in_dim(shape, dims)],
+                vec![broadcast_in_dim(inputs[0], shape, dims)],
         }
     }
 }
@@ -174,8 +194,16 @@ impl Operand for TropicalTensor {
     fn multiply(&self, other: &Self) -> Self { ... } // tropical: +
     fn dot_general(&self, other: &Self, config: &DotGeneralConfig) -> Self { ... }
     fn reduce_sum(&self, axes: &[usize]) -> Self { ... }
-    // ...
 }
+
+impl TensorData for TropicalTensor {
+    type Scalar = f64;
+    fn shape(&self) -> &[usize] { ... }
+    fn strides(&self) -> &[usize] { ... }
+    fn data(&self) -> &[f64] { ... }
+    fn from_data(shape: Vec<usize>, data: Vec<f64>) -> Self { ... }
+}
+// transpose, reshape, broadcast_in_dim are provided automatically
 
 type TropicalOp = SemiringOp<TropicalTensor>;
 // einsum, compile, eval all work
@@ -186,7 +214,9 @@ type TropicalOp = SemiringOp<TropicalTensor>;
 ## V. SemiringOpKind — Shared Vocabulary
 
 `SemiringOpKind` is the set of operations that all algebras must support.
-It is shared between `StdTensorOp` and `SemiringOp<T>`:
+It is used **only** inside `SemiringOp<T>` — the generic custom-algebra op
+type. `StdTensorOp` does **not** wrap `SemiringOpKind`; it has its own flat
+variants that mirror StableHLO 1:1.
 
 ```rust
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -201,10 +231,9 @@ enum SemiringOpKind {
 }
 ```
 
-`StdTensorOp::Semiring(SemiringOpKind)` wraps it as a variant.
-`SemiringOp<T>` wraps it as a newtype.
-
-This avoids duplicating op definitions across algebra types.
+`SemiringOp<T>` wraps it as a newtype. The `SemiringOps` trait bridges both
+worlds: `StdTensorOp` implements it by mapping to flat variants,
+`SemiringOp<T>` implements it by mapping to `SemiringOpKind` variants.
 
 ---
 
@@ -225,6 +254,8 @@ trait SemiringOps: GraphOp + Sized {
 ```
 
 Both `StdTensorOp` and `SemiringOp<T>` implement `SemiringOps`.
+`StdTensorOp` maps directly to its flat variants (e.g. `fn add() -> Self { StdTensorOp::Add }`).
+`SemiringOp<T>` maps to the corresponding `SemiringOpKind` variants.
 
 Einsum is algebra-agnostic:
 
@@ -279,35 +310,32 @@ eval`.
 
 ---
 
-## VIII. Backend Architecture
+## VIII. Backend Architecture — 2-Level IR
 
-### Design principle: Backend trait separate from GraphOp::eval
+### Design principle
 
-`GraphOp::eval` is a built-in reference implementation (CPU, single-threaded).
-It is useful for testing and simple execution, but it is **not** the primary
-execution path for production backends.
+All execution flows through a 2-level IR with StableHLO as the cut point:
 
-`CompiledProgram<Op>` is pure data — an instruction sequence with slot
-assignments. Any backend can interpret it independently of `GraphOp::eval`,
-using its own execution strategy.
-
-### Backend trait
-
-```rust
-trait Backend<Op> {
-    fn eval_program(
-        &mut self,
-        prog: &CompiledProgram<Op>,
-        inputs: &[Tensor],
-    ) -> Vec<Tensor>;
-}
+```text
+CompiledProgram<StdTensorOp>
+    │
+    │ lower_to_stablehlo() — flat 1:1 mapping (+ some 1:N for Conj, linalg)
+    ↓
+StableHloProgram (Rust struct, in-process)    ← CUT POINT
+    │
+    ├── XlaBackend:  StableHLO → XLA directly (unchanged)
+    │
+    └── FaerBackend: StableHLO → optimizing compiler → LowLevelProgram
+                         → generic execution engine → SemiringCore trait
 ```
 
-For standard algebra backends, `Tensor` is the shared runtime value type across
-CPU and GPU. A GPU backend may internally materialize `XlaBuffer`,
-`CudaBuffer`, or other backend-native handles, but those remain backend
-implementation details and are wrapped back into device-aware `Tensor` values
-at the API boundary.
+XLA consumes StableHLO directly (it already does its own optimization).
+All other backends go through the optimizing compiler to produce a
+`LowLevelProgram`, which a generic engine interprets by dispatching to
+backend traits.
+
+For custom algebras (`SemiringOp<T>`), the same 2-level structure applies:
+`SemiringOp<T>` lowers to StableHLO, then to `LowLevelProgram`.
 
 ### StableHLO IR representation
 
@@ -375,8 +403,8 @@ enum StableHloOp {
 
 ### StableHLO lowering: StdTensorOp → StableHloOp
 
-Most `StdTensorOp` variants map 1:1 to a `StableHloOp`. Some require 1:N
-expansion:
+Because `StdTensorOp` is flat (no `Semiring(...)` wrapper), most variants map
+1:1 to a `StableHloOp` with a trivial match. Some require 1:N expansion:
 
 | StdTensorOp | StableHLO | Mapping |
 |---|---|---|
@@ -386,31 +414,65 @@ expansion:
 | `Compare`, `Select`, `Gather`, `Scatter`, ... | same | 1:1 |
 | `ReduceSum { axes }` | `reduce { axes, combiner: add_region }` | 1:1 but combiner is a sub-computation in StableHLO |
 | `Conj` | `real` + `imag` + `negate` + `complex` | 1:4 composite |
-| `Svd` | `custom_call("gesvd")` + `get_tuple_element` × 3 | 1:4 |
-| `Qr` | `custom_call("geqrf")` + `get_tuple_element` × 2 | 1:3 |
+| `Svd` | `custom_call("gesvd")` + `get_tuple_element` x 3 | 1:4 |
+| `Qr` | `custom_call("geqrf")` + `get_tuple_element` x 2 | 1:3 |
 | `Solve` | `custom_call("getrf")` + `custom_call("getrs")` | 1:2+ |
 
 ```rust
 fn lower_instruction(inst: &Instruction<StdTensorOp>) -> Vec<StableHloInstruction> {
     match &inst.op {
-        // 1:1 cases
-        StdTensorOp::Semiring(SemiringOpKind::Add) =>
+        // 1:1 cases — flat variants map directly
+        StdTensorOp::Add =>
             vec![hlo_inst(StableHloOp::Add, &inst)],
+        StdTensorOp::Mul =>
+            vec![hlo_inst(StableHloOp::Multiply, &inst)],
         StdTensorOp::Exp =>
             vec![hlo_inst(StableHloOp::Exponential, &inst)],
-        StdTensorOp::Semiring(SemiringOpKind::DotGeneral(c)) =>
+        StdTensorOp::DotGeneral(c) =>
             vec![hlo_inst(StableHloOp::DotGeneral(c.clone()), &inst)],
-        StdTensorOp::Semiring(SemiringOpKind::ReduceSum { axes }) =>
+        StdTensorOp::ReduceSum { axes } =>
             vec![hlo_inst(StableHloOp::Reduce {
                 axes: axes.clone(), combiner: Combiner::Add,
             }, &inst)],
+        StdTensorOp::Transpose { perm } =>
+            vec![hlo_inst(StableHloOp::Transpose { perm: perm.clone() }, &inst)],
 
         // 1:N expansion
         StdTensorOp::Conj => lower_conj(&inst),  // real + imag + negate + complex
-        StdTensorOp::Svd => lower_svd(&inst),    // custom_call + get_tuple_element × 3
+        StdTensorOp::Svd => lower_svd(&inst),    // custom_call + get_tuple_element x 3
         StdTensorOp::Solve => lower_solve(&inst), // getrf + getrs
 
         // ...
+    }
+}
+```
+
+#### SemiringOp\<T\> lowering
+
+`SemiringOp<T>` also lowers to StableHLO. The mapping is through
+`SemiringOpKind`:
+
+```rust
+fn lower_semiring_instruction<T: Operand>(
+    inst: &Instruction<SemiringOp<T>>,
+) -> Vec<StableHloInstruction> {
+    match &inst.op.kind {
+        SemiringOpKind::Add => vec![hlo_inst(StableHloOp::Add, &inst)],
+        SemiringOpKind::Mul => vec![hlo_inst(StableHloOp::Multiply, &inst)],
+        SemiringOpKind::DotGeneral(c) =>
+            vec![hlo_inst(StableHloOp::DotGeneral(c.clone()), &inst)],
+        SemiringOpKind::ReduceSum { axes } =>
+            vec![hlo_inst(StableHloOp::Reduce {
+                axes: axes.clone(), combiner: Combiner::Add,
+            }, &inst)],
+        SemiringOpKind::Transpose { perm } =>
+            vec![hlo_inst(StableHloOp::Transpose { perm: perm.clone() }, &inst)],
+        SemiringOpKind::Reshape { shape } =>
+            vec![hlo_inst(StableHloOp::Reshape { shape: shape.clone() }, &inst)],
+        SemiringOpKind::BroadcastInDim { shape, dims } =>
+            vec![hlo_inst(StableHloOp::BroadcastInDim {
+                shape: shape.clone(), dims: dims.clone(),
+            }, &inst)],
     }
 }
 ```
@@ -426,7 +488,6 @@ Operations that have no direct StableHLO op lower to `CustomCall`:
 | `Cholesky` | `stablehlo.cholesky` | (direct op, not custom_call) |
 | `Eigh` | `CustomCall` | `"lapack_syevd"` / `"cusolver_syevd"` |
 | `Solve` | `CustomCall` | `"lapack_getrf"` + `"lapack_getrs"` |
-| `LuFullPivot` | `CustomCall` | `"lapack_getc2"` |
 
 Users can also register custom kernels:
 
@@ -444,68 +505,180 @@ The `config: Vec<u8>` field in `StableHloOp::CustomCall` carries opaque
 per-call configuration (e.g., "full pivot" vs "partial pivot" for LU).
 Backends deserialize this when dispatching.
 
-### Standard algebra backends: all go through StableHLO
+### Optimizing compiler (StableHLO → Low-level IR)
 
-All standard algebra backends consume `StableHloProgram`. The IR
-representation is Rust data structures passed in-process — no serialization
-for interpreter backends.
+For non-XLA backends, an **optimizing compiler** transforms `StableHloProgram`
+into `LowLevelProgram`. This compiler is algebra-agnostic — it works
+identically for standard and custom algebras.
+
+Optimization passes:
+
+- **TransposeFolding**: eliminate or fuse adjacent `Transpose` instructions
+- **DotDecomposer**: decompose complex `DotGeneral` configurations into
+  sequences of simpler operations (permute + batched GEMM)
+- **Contiguous materialization**: insert `Copy` instructions where needed to
+  ensure all operands satisfy column-major contiguity requirements
+
+```rust
+fn compile_to_lowlevel(hlo: &StableHloProgram) -> LowLevelProgram {
+    let hlo = transpose_folding(hlo);
+    let hlo = dot_decomposer(&hlo);
+    let ll = lower_to_lowlevel(&hlo);      // StableHLO → LowLevelOp
+    let ll = contiguous_materialization(ll); // insert Copy where needed
+    ll
+}
+```
+
+### Low-level IR
+
+`LowLevelProgram` is a flat instruction sequence where all tensors are
+contiguous and column-major. This IR is what the generic execution engine
+interprets.
+
+```rust
+enum LowLevelOp {
+    BatchedGemm { batch_dims: Vec<usize>, m: usize, n: usize, k: usize },
+    ReduceSum { axes: Vec<usize> },
+    Permute { perm: Vec<usize> },
+    Reshape { shape: Vec<usize> },
+    Copy,
+    ElementwiseMul,
+    ElementwiseAdd,
+}
+
+struct LowLevelInstruction {
+    op: LowLevelOp,
+    inputs: Vec<usize>,             // slot indices
+    outputs: Vec<usize>,            // slot indices
+    input_types: Vec<TensorType>,
+    output_types: Vec<TensorType>,
+}
+
+struct LowLevelProgram {
+    instructions: Vec<LowLevelInstruction>,
+    input_slots: Vec<usize>,
+    output_slots: Vec<usize>,
+    n_slots: usize,
+}
+```
+
+All tensors at this level are contiguous column-major. The optimizing compiler
+guarantees this invariant.
+
+### Generic execution engine
+
+The generic engine interprets `LowLevelProgram` by dispatching each
+instruction to the appropriate method on backend traits:
+
+```rust
+fn execute_lowlevel<Alg: Semiring, B: SemiringCore<Alg>>(
+    backend: &B,
+    prog: &LowLevelProgram,
+    inputs: &[B::Buffer],
+) -> Vec<B::Buffer> {
+    let mut slots: Vec<Option<B::Buffer>> = vec![None; prog.n_slots];
+    // ... load inputs into slots ...
+    for inst in &prog.instructions {
+        match &inst.op {
+            LowLevelOp::BatchedGemm { batch_dims, m, n, k } =>
+                backend.batched_gemm(batch_dims, *m, *n, *k, ...),
+            LowLevelOp::ReduceSum { axes } =>
+                backend.reduce_sum(axes, ...),
+            LowLevelOp::ElementwiseMul =>
+                backend.elementwise_mul(...),
+            LowLevelOp::ElementwiseAdd =>
+                backend.elementwise_add(...),
+            LowLevelOp::Permute { perm } =>
+                backend.permute(perm, ...),
+            LowLevelOp::Reshape { shape } =>
+                backend.reshape(shape, ...),
+            LowLevelOp::Copy =>
+                backend.copy(...),
+        }
+    }
+    // ... collect outputs from slots ...
+}
+```
+
+### Backend traits
+
+Two traits define what a backend must implement:
+
+```rust
+/// Minimum required operations for any semiring backend.
+trait SemiringCore<Alg: Semiring> {
+    type Buffer;
+    fn batched_gemm(
+        &self, batch_dims: &[usize], m: usize, n: usize, k: usize,
+        a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer,
+    );
+    fn reduce_sum(&self, axes: &[usize], input: &Self::Buffer, out: &mut Self::Buffer);
+    fn elementwise_mul(&self, a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer);
+    fn elementwise_add(&self, a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer);
+    fn permute(&self, perm: &[usize], input: &Self::Buffer, out: &mut Self::Buffer);
+    fn reshape(&self, shape: &[usize], input: &Self::Buffer, out: &mut Self::Buffer);
+    fn copy(&self, input: &Self::Buffer, out: &mut Self::Buffer);
+}
+
+/// Optional fast-path operations. Returning `false` falls back to the
+/// generic engine's decomposition.
+trait SemiringFastPath<Alg: Semiring>: SemiringCore<Alg> {
+    /// Full contraction (einsum-level). Returns true if handled.
+    fn contract(
+        &self, subscripts: &Subscripts, inputs: &[&Self::Buffer],
+        out: &mut Self::Buffer,
+    ) -> bool { false }
+
+    /// Fused elementwise multiply. Returns true if handled.
+    fn fused_elementwise_mul(
+        &self, a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer,
+    ) -> bool { false }
+}
+```
+
+The minimum a custom backend must implement is `SemiringCore` — specifically
+`batched_gemm` and `reduce_sum`. The other operations in `SemiringCore`
+(`elementwise_mul`, `elementwise_add`, `permute`, `reshape`, `copy`) have
+default implementations based on the buffer type.
+
+### Standard backends
 
 ```text
 CompiledProgram<StdTensorOp>
     │
-    │ lower_to_stablehlo() — mostly 1:1, some 1:N expansion
+    │ lower_to_stablehlo() — flat 1:1 mapping
     ↓
-StableHloProgram (Rust struct, in-process)
+StableHloProgram
     │
-    ├── FaerBackend:      iterate instructions → faer/BLAS/LAPACK dispatch
-    │                     custom_call → registered kernel lookup
-    │                     (no serialization)
+    ├── XlaBackend:  StableHLO → XLA directly
+    │                (XLA does its own optimization)
     │
-    ├── CustomGpuBackend: iterate instructions → CUDA kernel dispatch
-    │                     custom_call → registered kernel lookup
-    │                     (no serialization)
-    │
-    ├── XlaBackend:       build HLO via xla-rs builder API (programmatic)
-    │                     custom_call → XLA custom_call with target name
-    │                     (no text/binary serialization needed)
-    │
-    └── IREE (future):    emit MLIR text → IREE compile
-                          (only this path needs serialization)
+    └── FaerBackend: StableHLO → optimizing compiler → LowLevelProgram
+                         → generic execution engine
+                         → SemiringCore<StandardAlgebra> impl (faer/BLAS/LAPACK)
 ```
-
-Why all through StableHLO:
-
-- **Same work either way**: interpreting CompiledProgram directly and
-  interpreting StableHLO both dispatch each op to a kernel. Skipping the
-  StableHLO lowering step saves no implementation effort.
-- **v1 reuse**: the existing faer/LAPACK backend already implements every
-  needed kernel. Each kernel maps 1:1 to a StableHLO op.
-- **Backend portability**: new backends only need to interpret StableHLO,
-  not understand CompiledProgram internals.
-- **Shared correctness tests**: all standard backends consume the same IR,
-  so tests are shared.
-- **custom_call extensibility**: linalg ops and user kernels flow through
-  the same pipeline as standard ops.
 
 ```rust
 struct FaerBackend {
-    ctx: CpuContext,
     custom_calls: HashMap<String, Box<dyn CustomCallKernel<Tensor>>>,
+}
+
+impl SemiringCore<StandardAlgebra> for FaerBackend {
+    type Buffer = Tensor;
+    fn batched_gemm(&self, batch_dims, m, n, k, a, b, out) {
+        faer_matmul(batch_dims, m, n, k, a, b, out);
+    }
+    fn reduce_sum(&self, axes, input, out) {
+        faer_sum(axes, input, out);
+    }
+    // ... other SemiringCore methods ...
 }
 
 impl Backend<StdTensorOp> for FaerBackend {
     fn eval_program(&mut self, prog, inputs) {
         let hlo = lower_to_stablehlo(prog);
-        for inst in &hlo.instructions {
-            match &inst.op {
-                StableHloOp::Add => faer_add(...),
-                StableHloOp::DotGeneral(cfg) => faer_matmul(cfg, ...),
-                StableHloOp::Reduce { combiner: Combiner::Add, .. } => faer_sum(...),
-                StableHloOp::CustomCall { target, config } =>
-                    self.custom_calls[target].execute(config, ...),
-                // ...
-            }
-        }
+        let ll = compile_to_lowlevel(&hlo);
+        execute_lowlevel::<StandardAlgebra, _>(self, &ll, &inputs)
     }
 }
 
@@ -535,65 +708,72 @@ impl Backend<StdTensorOp> for XlaBackend {
 ### Custom algebra backends
 
 Users define their own backends for custom algebras by implementing
-`Backend<SemiringOp<T>>`:
-
-```text
-CompiledProgram<SemiringOp<TropicalTensor>>
-    |
-    ├── CpuBackend                   Tensor = TropicalTensor
-    ├── TropicalGpuBackend           Tensor = GpuTropicalTensor
-    └── (user-defined backends...)   Tensor = ...
-```
+`SemiringCore<Alg>`:
 
 ```rust
 // Generic CPU backend — works for any Operand type
 struct CpuSemiringBackend;
-impl<T: Operand> Backend<SemiringOp<T>> for CpuSemiringBackend {
-    type Tensor = T;
-    fn eval_program(&mut self, prog, inputs) {
-        // Iterate instructions, delegate to T::add, T::dot_general, ...
-        // (equivalent to GraphOp::eval, but through Backend trait)
+impl<T: Operand> SemiringCore<T::Algebra> for CpuSemiringBackend {
+    type Buffer = T;
+    fn batched_gemm(&self, batch_dims, m, n, k, a, b, out) {
+        // Delegate to T::dot_general
     }
+    fn reduce_sum(&self, axes, input, out) {
+        // Delegate to T::reduce_sum
+    }
+    // ...
 }
 
 // User-defined GPU backend for Tropical
 struct TropicalGpuBackend { cuda_ctx: CudaContext }
-impl Backend<SemiringOp<TropicalTensor>> for TropicalGpuBackend {
-    type Tensor = GpuTropicalTensor;
-    fn eval_program(&mut self, prog, inputs) {
-        for inst in &prog.instructions {
-            match &inst.op.kind {
-                SemiringOpKind::DotGeneral(cfg) => self.cuda_gemm(cfg, ...),
-                SemiringOpKind::Add => self.cuda_add(...),
-                SemiringOpKind::ReduceSum { axes } => self.cuda_reduce(axes, ...),
-                SemiringOpKind::Mul => self.cuda_mul(...),
-                SemiringOpKind::Transpose { .. } => ...,
-                SemiringOpKind::Reshape { .. } => ...,
-                SemiringOpKind::BroadcastInDim { .. } => ...,
-            }
-        }
+impl SemiringCore<TropicalAlgebra> for TropicalGpuBackend {
+    type Buffer = GpuTropicalTensor;
+    fn batched_gemm(&self, batch_dims, m, n, k, a, b, out) {
+        self.cuda_tropical_gemm(batch_dims, m, n, k, a, b, out);
     }
+    fn reduce_sum(&self, axes, input, out) {
+        self.cuda_tropical_reduce(axes, input, out);
+    }
+    // ...
 }
 ```
 
-### GraphOp::eval vs Backend trait
+The full pipeline for custom algebras:
 
-| | `GraphOp::eval` | `Backend<Op>` |
-|---|---|---|
-| Defined in | computegraph-rs | tenferro-rs |
-| Tensor type | fixed (`Op::Operand`) | fixed (`Tensor`) for standard algebra; backend-internal buffers are opaque |
-| Multiple backends | no (one `Context`) | yes |
-| Standard algebra | reference impl only | StableHLO → faer/XLA/GPU |
-| Custom algebra | reference impl only | user-defined (CPU/GPU/...) |
+```text
+CompiledProgram<SemiringOp<TropicalTensor>>
+    │
+    │ lower_semiring_to_stablehlo()
+    ↓
+StableHloProgram
+    │
+    │ compile_to_lowlevel()  (same optimizing compiler — algebra-agnostic)
+    ↓
+LowLevelProgram
+    │
+    │ execute_lowlevel::<TropicalAlgebra, TropicalGpuBackend>(...)
+    ↓
+Results
+```
+
+### GraphOp::eval vs Backend trait vs SemiringCore trait
+
+| | `GraphOp::eval` | `Backend<Op>` | `SemiringCore<Alg>` |
+|---|---|---|---|
+| Defined in | computegraph-rs | tenferro | tenferro |
+| Operates on | `CompiledProgram` | `CompiledProgram` | `LowLevelProgram` |
+| Tensor type | fixed (`Op::Operand`) | `Tensor` / backend-internal | `Buffer` (backend-defined) |
+| Standard algebra | reference impl | StableHLO → XLA or lowlevel | faer/BLAS kernels |
+| Custom algebra | reference impl | StableHLO → lowlevel | user-defined kernels |
+| Use case | unit tests, prototyping | top-level entry point | kernel implementation |
 
 `GraphOp::eval` remains useful for:
 - computegraph-rs unit tests (no backend dependency)
 - Quick prototyping and debugging
 
-`Backend<Op>` is the primary execution path for all production use.
-For standard algebra, all backends go through StableHLO lowering.
-For custom algebras, backends interpret `CompiledProgram` directly
-(no StableHLO — custom algebras cannot be lowered to StableHLO).
+`Backend<Op>` is the top-level entry point that orchestrates
+lowering + compilation + execution. `SemiringCore<Alg>` is the low-level
+trait that backend authors implement to provide kernels.
 
 ### Backend dispatch in Engine
 
@@ -696,11 +876,15 @@ Adding a GPU backend:
 
 ---
 
-## XI. Operand Trait
+## XI. Operand and TensorData Traits
 
-`Operand` (defined in computegraph-rs) provides the minimum operations needed
-for graph evaluation. For einsum execution via `SemiringOp<T>`, the tensor
-type must support all of these:
+The previous single `Operand` trait is split into two concerns:
+
+### Operand — pure algebra
+
+`Operand` (defined in computegraph-rs) provides the **algebraic** operations
+needed for semiring evaluation. These are the operations that change meaning
+across different algebras:
 
 ```rust
 trait Operand: Clone + Send + Sync + 'static {
@@ -710,16 +894,48 @@ trait Operand: Clone + Send + Sync + 'static {
     fn multiply(&self, other: &Self) -> Self;
     fn dot_general(&self, other: &Self, config: &DotGeneralConfig) -> Self;
     fn reduce_sum(&self, axes: &[usize]) -> Self;
-    fn transpose(&self, perm: &[usize]) -> Self;
-    fn reshape(&self, shape: &[usize]) -> Self;
-    fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;
-    fn conj(&self) -> Self;
 }
 ```
 
 `zero` is needed for zero propagation in AD. `one` is needed for reverse-mode
 seeding (`ct_y = one`). For custom algebras without AD, `zero` and `one`
 still serve as identity elements for the semiring.
+
+### TensorData — buffer access
+
+`TensorData` provides structural access to the underlying buffer. This is
+needed by backends and the generic execution engine, but is **not** part of
+the algebra:
+
+```rust
+trait TensorData: Operand {
+    type Scalar;
+    fn shape(&self) -> &[usize];
+    fn strides(&self) -> &[usize];
+    fn data(&self) -> &[Self::Scalar];
+    fn from_data(shape: Vec<usize>, data: Vec<Self::Scalar>) -> Self;
+}
+```
+
+### Structural ops — generic functions, not trait methods
+
+Structural operations (`transpose`, `reshape`, `broadcast_in_dim`) are the
+same for all algebras — they only rearrange data, they do not depend on the
+semiring. They are implemented as generic functions over `TensorData`, not as
+methods on `Operand`:
+
+```rust
+fn transpose<T: TensorData>(tensor: &T, perm: &[usize]) -> T { ... }
+fn reshape<T: TensorData>(tensor: &T, shape: &[usize]) -> T { ... }
+fn broadcast_in_dim<T: TensorData>(tensor: &T, shape: &[usize], dims: &[usize]) -> T { ... }
+```
+
+This separation means:
+- Implementors of custom algebras only need to define the algebraic operations
+  (`add`, `multiply`, `dot_general`, `reduce_sum`) plus buffer access.
+- Structural ops are provided for free by the framework.
+- The `SemiringOp<T>::eval` implementation calls `Operand` methods for
+  algebraic ops and the generic functions for structural ops.
 
 ---
 
@@ -750,13 +966,13 @@ Simplified from v1. No AD-related code.
 
 The core crate:
 
-- `SemiringOpKind` enum (shared vocabulary)
+- `SemiringOpKind` enum (shared vocabulary, used only in `SemiringOp<T>`)
 - `SemiringOps` trait
 - `SemiringOp<T>` generic wrapper + `GraphOp` impl
-- `StdTensorOp` enum (full vocabulary)
+- `StdTensorOp` enum — **flat**, every variant mirrors a StableHLO op 1:1
 - `impl GraphOp for StdTensorOp`
 - `impl PrimitiveOp for StdTensorOp` (linearize + transpose_rule)
-- `impl SemiringOps for StdTensorOp`
+- `impl SemiringOps for StdTensorOp` — maps to flat variants directly
 - `TensorInputKey` + `impl ADKey`
 
 Depends on: computegraph-rs, chainrules-rs, tenferro-tensor.
@@ -782,13 +998,24 @@ Top-level facade:
 - `Backend<Op>` trait
 - `StableHloProgram`, `StableHloOp`, `StableHloInstruction` (Rust IR)
 - `lower_to_stablehlo()` (`CompiledProgram<StdTensorOp>` → `StableHloProgram`,
-  mostly 1:1, some 1:N expansion for `Conj`, multi-output linalg, `Solve`)
+  flat 1:1 mapping, some 1:N expansion for `Conj`, multi-output linalg, `Solve`)
+- `lower_semiring_to_stablehlo()` (`CompiledProgram<SemiringOp<T>>` →
+  `StableHloProgram`)
+- Optimizing compiler: `compile_to_lowlevel()` (StableHLO → `LowLevelProgram`)
+  - TransposeFolding, DotDecomposer, contiguous materialization passes
+  - Algebra-agnostic — same passes for standard and custom algebras
+- `LowLevelProgram`, `LowLevelOp`, `LowLevelInstruction`
+- Generic execution engine: `execute_lowlevel()` — interprets `LowLevelProgram`,
+  dispatches to `SemiringCore`/`SemiringFastPath` trait methods
+- `SemiringCore<Alg>` trait — minimum kernel interface (batched_gemm, reduce_sum, ...)
+- `SemiringFastPath<Alg>` trait — optional fast-path operations (contract, fused ops)
 - Standard backends:
-  - `FaerBackend` — StableHLO interpreter, CPU (faer/BLAS/LAPACK)
-  - `XlaBackend` — StableHLO → xla-rs builder API → JIT
+  - `FaerBackend` — StableHLO → optimizing compiler → LowLevelProgram →
+    generic engine → `SemiringCore<StandardAlgebra>` (faer/BLAS/LAPACK)
+  - `XlaBackend` — StableHLO → XLA directly (unchanged)
 - Custom algebra backends:
-  - `CpuSemiringBackend<T>` — generic, interprets `CompiledProgram` directly
-    via `Operand` trait methods
+  - `CpuSemiringBackend<T>` — generic, implements `SemiringCore` via
+    `Operand` trait methods
 
 Depends on: all of the above + tidu-rs.
 

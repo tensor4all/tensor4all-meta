@@ -1,6 +1,6 @@
 # Design v2 Overview
 
-**Date:** 2026-04-03
+**Date:** 2026-04-04
 **Status:** Draft
 
 This `README.md` is the umbrella/index document for the `docs/design-v2/`
@@ -29,7 +29,8 @@ tidu-rs            AD graph transforms
     ↓              (differentiate, transpose — generic over PrimitiveOp)
     ↓
 tenferro-rs        Concrete tensor primitives + backends
-                   (Tensor, StableHLO lowering, CPU/GPU dispatch)
+                   (Tensor, StableHLO lowering, optimizing compiler,
+                    low-level IR, CPU/GPU dispatch)
 ```
 
 Each layer depends only on the layers above it. No layer references specific
@@ -90,10 +91,12 @@ multi-tensor einsum (graph of binary contractions) or any DAG-structured
 computation.
 
 **Note on `Operand`:** While `Operand` is defined in computegraph-rs, its
-methods are tensor-oriented (`dot_general`, `reshape`, `broadcast_in_dim`,
-etc.). This is a deliberate design choice -- computegraph-rs is a **tensor
-computation graph engine**, not a fully generic DAG engine. The abstraction
-boundary is AD-agnostic, not tensor-agnostic.
+methods are tensor-oriented algebraic operations (`dot_general`, `reduce_sum`,
+`conj`, etc.). Structural operations (`transpose`, `reshape`,
+`broadcast_in_dim`) live in a separate `TensorData` trait. This is a deliberate
+design choice -- computegraph-rs is a **tensor computation graph engine**, not a
+fully generic DAG engine. The abstraction boundary is AD-agnostic, not
+tensor-agnostic.
 
 ### tidu-rs is primitive-agnostic
 
@@ -103,6 +106,19 @@ or `Mul`.
 
 The concrete tensor vocabulary that downstream tenferro supplies is documented
 in [`primitive-catalog.md`](primitive-catalog.md).
+
+### 2-level IR architecture
+
+StableHLO IR is the **single cut point** between the graph layer and execution.
+All compiled graphs are first lowered to StableHLO. From there:
+
+- **XLA backend**: executes StableHLO directly.
+- **faer/custom backends**: an optimizing compiler lowers StableHLO to a
+  **low-level IR** (fused kernels, memory planning) that faer or custom engines
+  evaluate.
+
+This 2-level design means the graph/AD layers never see backend details, and
+backend authors only need to consume StableHLO or the low-level IR.
 
 ### Closure is downstream responsibility
 
@@ -171,8 +187,11 @@ See `tensor-api-pseudocode.md` for full usage examples.
 ## Typical Pipeline
 
 ```text
-build → resolve → differentiate → transpose → resolve → materialize_merge → compile → eval
+build → resolve → differentiate → transpose → resolve → materialize_merge → compile
         ╰─ computegraph ─╯   ╰── tidu ──╯              ╰──── computegraph ────╯
+
+    → lower_to_stablehlo → [XLA: direct] or [optimizing compiler → low-level IR → eval]
+      ╰──────────────────────── tenferro ──────────────────────────────────────────────╯
 ```
 
 ---

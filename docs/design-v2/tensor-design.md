@@ -1,6 +1,6 @@
 # v2 Tensor Design: Structure and Einsum
 
-**Date:** 2026-04-03 (rewritten)
+**Date:** 2026-04-04
 **Status:** Draft
 **Parent:** `README.md`
 **Related:** `tensor-api-pseudocode.md`, `ad-architecture.md`
@@ -50,6 +50,13 @@ enum Buffer<T> {
     Backend(BufferHandle<T>),
 }
 ```
+
+`Tensor` allows **arbitrary strides**, enabling zero-copy views for permute,
+slice, and reshape operations. Strided views avoid data movement in the
+high-level graph layer. Contiguous materialization happens at the **StableHLO IR
+entry point**: when the graph is lowered to StableHLO, all inputs are
+materialized into contiguous buffers. **Column-major (Fortran) layout** is the
+standard throughout the low-level IR and backend execution.
 
 `TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
 and AD (see `tensor-api-pseudocode.md`).

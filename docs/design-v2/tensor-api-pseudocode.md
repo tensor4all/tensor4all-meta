@@ -1,6 +1,6 @@
 # v2 Tensor API Pseudocode
 
-**Date:** 2026-04-03
+**Date:** 2026-04-04
 **Status:** Draft
 **Parent:** `README.md`
 
@@ -312,11 +312,18 @@ let _ = my_model(&mut engine, &x3, &w3).eval(&mut engine);  // may recompile
 ```
 
 Cache key is based on **normalized graph topology** (op types, connectivity,
-modes), not on concrete `InputKey` values. This ensures that repeated
+modes), not on concrete `InputKey` or `DiffPassId` values. The `Engine`
+normalizes away these identity tokens when computing cache keys: it replaces
+concrete `InputKey` and `DiffPassId` values with canonical sequential
+identifiers based on traversal order. This ensures that repeated
 `differentiate` calls with different `DiffPassId`s produce cache hits when the
-graph structure is the same. Shape-dependent ops (e.g. `Reshape(target)`)
-encode shape in the op itself, so different shapes produce different topology
-automatically.
+graph topology is identical -- for example, two independent higher-order AD
+passes that produce structurally equivalent graphs will share the same compiled
+program. Shape-dependent ops (e.g. `Reshape(target)`) encode shape in the op
+itself, so different shapes produce different topology automatically.
+
+Note: this normalization is performed by the tenferro `Engine`, not by
+computegraph-rs itself (see `computegraph-design.md` Section V).
 
 ---
 
@@ -424,7 +431,9 @@ engine.eval_all(&mut [&mut y, &mut grad_x])
     → materialize_merge (flatten + CSE, GlobalValKey dedup)
         // shared primal nodes appear once in the materialized graph
     → engine.cache.get_or_compile (cache lookup or compile to SSA)
-    → backend.eval_program(prog, inputs)
+    → lower_to_stablehlo (compile to StableHLO IR)
+    → [XLA backend]: execute StableHLO directly via XLA
+      [faer/custom backend]: optimizing compiler → low-level IR → eval
     → fills y.data = Some(result), grad_x.data = Some(result)
     → returns Vec<&Tensor>
 

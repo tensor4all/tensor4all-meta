@@ -1,6 +1,6 @@
 # v2 computegraph-rs Design
 
-**Date:** 2026-04-03
+**Date:** 2026-04-04
 **Status:** Draft
 **Repo:** computegraph-rs (new)
 **Parent:** `README.md`
@@ -32,8 +32,6 @@ The graph infrastructure is equally usable for:
 trait Operand: Clone + Send + Sync + 'static {
     fn zero(shape: &[usize]) -> Self;
     fn one(shape: &[usize]) -> Self;
-    fn reshape(&self, shape: &[usize]) -> Self;
-    fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;
     fn add(&self, other: &Self) -> Self;
     fn multiply(&self, other: &Self) -> Self;
     fn reduce_sum(&self, axes: &[usize]) -> Self;
@@ -45,11 +43,17 @@ trait Operand: Clone + Send + Sync + 'static {
 `zero` is required for sparse propagation. `one` is required for seeding
 (e.g. reverse-mode AD seeds `ct_y = one`).
 
-**Note:** `Operand` contains tensor-specific methods (`dot_general`, `reshape`,
-`broadcast_in_dim`, etc.). This is intentional -- computegraph-rs is designed as
-a **tensor computation graph engine**, not a fully generic DAG engine. The
+Structural operations (`transpose`, `reshape`, `broadcast_in_dim`) are **not**
+part of `Operand`. They are provided by a separate `TensorData` trait with
+generic implementations that work over any `Operand` with shape/stride metadata.
+This keeps `Operand` focused on algebraic operations that the graph engine and
+AD transforms actually dispatch through.
+
+**Note:** `Operand` contains tensor-specific algebraic methods (`dot_general`,
+`reduce_sum`, `conj`, etc.). This is intentional -- computegraph-rs is designed
+as a **tensor computation graph engine**, not a fully generic DAG engine. The
 tensor-oriented interface ensures that graph transforms (e.g. AD in tidu-rs) can
-reason about tensor structure without depending on concrete primitive types.
+reason about tensor algebra without depending on concrete primitive types.
 
 ### GraphOp
 
@@ -270,6 +274,14 @@ Compile once, eval many times.
 `computegraph` caches compiled programs keyed by graph structure
 (`GlobalValKey`-based identity) to avoid recompilation when the same graph
 is submitted multiple times with different input values.
+
+Note: `GlobalValKey` contains concrete `InputKey` and (via downstream usage)
+`DiffPassId` values. Two graphs that differ only in these identity tokens but
+have identical topology are **not** automatic cache hits at the computegraph
+level. Normalization of `InputKey`/`DiffPassId` to achieve cache hits across
+higher-order AD passes is the responsibility of the downstream consumer (e.g.
+tenferro `Engine`), not computegraph itself. computegraph provides the raw
+structural identity; the Engine maps that to a normalized cache key.
 
 ---
 
