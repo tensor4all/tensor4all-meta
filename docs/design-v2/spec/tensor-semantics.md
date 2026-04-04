@@ -54,9 +54,14 @@ enum Buffer<T> {
 ### TensorData trait (canonical signature)
 
 `TensorData` provides structural buffer access for the execution engine's
-common infrastructure (permute, reshape, copy). It is separate from `Operand`
-(which provides algebraic operations). Both `Tensor` and custom algebra
-types implement `TensorData`.
+common infrastructure. Both `Tensor` and custom algebra types implement it.
+
+Note: `Operand` (see [`primitive-catalog.md`](primitive-catalog.md)) also
+includes `reshape` and `broadcast_in_dim` as methods, because
+computegraph-rs's graph evaluation (`GraphOp::eval`) needs them. `TensorData`
+complements `Operand` with lower-level buffer access (`shape`, `strides`,
+`data`) that the execution engine uses for stride-aware dispatch and
+physical copies.
 
 ```rust
 trait TensorData {
@@ -68,8 +73,11 @@ trait TensorData {
 }
 ```
 
-Generic structural operations (`transpose`, `reshape`, `broadcast_in_dim`)
-are free functions over `TensorData`, not methods on `Operand`.
+**Note:** This trait is a design-time placeholder. The final signature will
+be determined during v2 implementation — device-resident buffers, zero-copy
+views, and placement metadata may require additional methods or a different
+structure (e.g., `AsSlice` + `ViewAs` traits). See issue discussion for
+context.
 
 ### Arbitrary strides
 

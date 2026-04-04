@@ -27,13 +27,10 @@ The graph infrastructure is equally usable for:
 ### Operand
 
 `Operand` is the runtime value type (scalars are rank-0 tensors). It provides
-algebraic operations (`zero`, `one`, `add`, `multiply`, `reduce_sum`,
-`dot_general`, `conj`) that the graph engine and AD transforms dispatch
-through. Structural operations (`transpose`, `reshape`, `broadcast_in_dim`)
-are **not** part of `Operand`; they live on a separate `TensorData` trait.
-
-`Operand` intentionally contains tensor-specific algebraic methods --
-computegraph-rs is designed as a tensor computation graph engine.
+both algebraic operations (`zero`, `one`, `add`, `multiply`, `reduce_sum`,
+`dot_general`, `conj`) and structural operations (`reshape`,
+`broadcast_in_dim`). computegraph-rs is designed as a **tensor computation
+graph engine**, so `Operand` is intentionally tensor-specific.
 
 Canonical trait signature: [`../spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV).
 `TensorData` trait: [`../spec/tensor-semantics.md`](../spec/tensor-semantics.md).

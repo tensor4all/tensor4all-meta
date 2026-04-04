@@ -84,7 +84,10 @@ pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
 ## LinearFragment (canonical definition)
 
 Defined in `tidu-rs/src/linear_fragment.rs`. Returned by
-`PrimitiveOp::linearize` (via `tidu::differentiate`).
+`tidu::differentiate` (which internally calls `PrimitiveOp::linearize`
+per op node — note that `linearize` itself returns
+`Vec<Option<LocalValId>>`, not `LinearFragment`; the fragment is
+assembled by `differentiate`).
 
 ```rust
 pub struct LinearFragment<Op: GraphOp> {
@@ -113,9 +116,10 @@ pub struct LinearFragment<Op: GraphOp> {
    map) only needs a `transpose_rule`. Examples: `Transpose`, `Reshape`,
    `BroadcastInDim`.
 
-4. **Primal reuse**: `linearize` may reference primal values in its
-   `LinearFragment` via `GlobalValKey`. These are resolved during
-   `materialize_merge` so that shared primal computations are not duplicated.
+4. **Primal reuse**: `linearize` may reference primal values via
+   `External(GlobalValKey)` in the fragment builder. These are resolved
+   during `materialize_merge` so that shared primal computations are not
+   duplicated.
 
 5. **No AD for custom algebra**: `SemiringOp<T>` does NOT implement
    `PrimitiveOp`. AD is only available for `StdTensorOp` (standard algebra).
