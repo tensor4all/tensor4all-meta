@@ -30,7 +30,7 @@ CompiledProgram (flat SSA of StableHLO-compatible IR)
         │                      LinalgCustomCallPassthrough)
         ▼
       Low-level IR (BatchedGemm, ReduceSum, Permute, Reshape, CustomCall)
-        │               all contiguous, column-major
+        │               engine-produced data is column-major
         │
         │ generic execution engine
         │   structural ops → common infrastructure
@@ -55,11 +55,14 @@ The **StableHLO-compatible IR** is the single cut point between graph/AD and
 all backends. It contains the full canonical graph primitive vocabulary
 (`StdTensorOp` variants, most mapping 1:1 to a StableHLO op; exceptions
 include composite lowerings like `Conj` and multi-output linalg ops like
-`Svd`). All tensor values at this level are **contiguous and column-major**
-(contiguification happens at the StableHLO IR entry point).
+`Svd`). The StableHLO program is **layout-independent** -- input layout
+normalization is a pure runtime concern handled by the execution engine, not
+an IR transformation.
 
-The **low-level IR** is the output of the optimizing compiler. All operands
-are contiguous and column-major. Its instruction set is small:
+The **low-level IR** is the output of the optimizing compiler. Input operands
+may be contiguous with arbitrary axis ordering; the engine inspects strides at
+dispatch time. Engine-produced intermediates and outputs are column-major
+contiguous. Its instruction set is small:
 `BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, and
 `CustomCall { target, config }` (for linalg ops like SVD/QR/Eigh/Solve that
 are passed through from the StableHLO IR and dispatched to a registered
@@ -369,7 +372,7 @@ CompiledProgram<Op>  (StableHLO-compatible IR — the single cut point)
           │    LinalgCustomCallPassthrough — pass linalg custom_call ops through
           │
           ▼
-        Low-level IR (contiguous, column-major)
+        Low-level IR (stride-aware engine dispatch)
           │  BatchedGemm, ReduceSum, Permute, Reshape, CustomCall
           │
           │  generic execution engine
@@ -406,9 +409,11 @@ a sequence of algebra-agnostic passes:
 | **DotDecomposer** | Break multi-contracting-dim `DotGeneral` into sequences that map to `BatchedGemm` |
 | **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the low-level IR as-is |
 
-Note: contiguous materialization is **not** a compiler pass. It happens at
-eval() time as a pre-processing step (see Memory layout section below). All
-tensors entering the compiler are already contiguous and column-major.
+Note: input contiguity checking is **not** a compiler pass. It happens at
+eval() time as a runtime pre-processing step (see Memory layout section
+below). Only truly non-contiguous data (memory gaps) is physically copied.
+Contiguous data with arbitrary axis ordering is passed through as-is; the
+engine handles stride differences at dispatch time.
 
 These passes operate on shape metadata and instruction structure, not on
 element values. They are shared by all non-XLA backends (faer, custom GPU,
@@ -417,8 +422,11 @@ custom algebra).
 ### Low-level IR
 
 The output of the optimizing compiler is a flat sequence of low-level
-instructions. Every tensor operand at this level is **contiguous and
-column-major**.
+instructions. Input operands may be contiguous with arbitrary axis ordering.
+The engine inspects strides and adjusts dispatch accordingly (e.g., BLAS
+trans flags for transposed inputs, v1-style fusability checks on dimension
+groups for BatchedGemm). Engine-produced intermediates and outputs are
+column-major contiguous.
 
 | Instruction | Signature | Definition |
 |-------------|-----------|------------|
@@ -431,7 +439,8 @@ column-major**.
 Structural ops (`Permute`, `Reshape`) are handled by **common
 infrastructure** shared across all backends. They are not part of the custom
 backend contract. Note that `Copy` is not a low-level IR instruction;
-contiguification happens at eval() pre-processing before IR entry.
+only truly non-contiguous input data (memory gaps) is physically copied at
+eval() pre-processing before IR entry.
 
 ### Backend traits
 
@@ -470,9 +479,12 @@ IR instruction sequence and dispatches each instruction:
 2. `CustomCall` instructions are dispatched to a **registered kernel registry**.
    The faer/CPU backend registers LAPACK routines; a GPU backend registers
    cuSOLVER equivalents. Unrecognized targets are a runtime error.
-3. For compute ops, the engine first checks `SemiringFastPath` for an
-   applicable pattern match.
-4. If no fast path fires, the engine falls back to `SemiringCore` methods.
+3. For compute ops, the engine's `prepare` step inspects input strides before
+   dispatching. For `BatchedGemm`, this uses v1's `prepare_one_operand`
+   approach: fusability check on dimension groups, BLAS trans flags for
+   transposed inputs.
+4. The engine first checks `SemiringFastPath` for an applicable pattern match.
+5. If no fast path fires, the engine falls back to `SemiringCore` methods.
 
 This design means a backend author can start with the minimum two-method
 contract and add fast paths incrementally as performance needs arise.
@@ -570,38 +582,43 @@ fall back to Eigen (unoptimized). faer has optimized kernels everywhere:
 XLA is optional, primarily for GPU. Its CPU path is useful only for
 fusion optimization, not raw kernel performance.
 
-### Memory layout: column-major throughout
+### Memory layout: stride-aware execution
 
 `Tensor` allows **arbitrary strides** at the user level (zero-copy views for
-permute, slice, reshape). Contiguous materialization is an **eval() time
-pre-processing step** that runs before the StableHLO program, with two cases:
+permute, slice, reshape). At eval() time, input pre-processing checks memory
+contiguity:
 
-1. **Permuted-contiguous view** (strides are a permutation of column-major
-   contiguous strides, e.g., from `tensor.permute()` or `.t()`): the raw
-   buffer is passed as-is and a `stablehlo.transpose` op is inserted at the
-   program head. No physical copy occurs. XLA's TransposeFolding pass may
-   absorb this transpose into downstream `DotGeneral` ops.
-2. **Non-contiguous view** (e.g., from slicing with non-unit stride): a
-   physical copy to a fresh contiguous buffer is performed at eval() time,
-   **outside the IR**. After copying, the buffer is typically plain
-   column-major, so no transpose is needed.
+1. **Contiguous data** (including permuted-contiguous views from
+   `tensor.permute()` or `.t()`, and contiguous slices): passed as-is with
+   zero copy. The strides are preserved.
+2. **Non-contiguous data** (memory gaps from slicing): physically copied to
+   a contiguous buffer before execution.
 
-The StableHLO program always receives contiguous dense inputs. `stablehlo.copy`
-is never used (it does not exist in the StableHLO spec). Row-major input layout
-is a runtime error (future support possible).
+No StableHLO ops are inserted for input normalization. The StableHLO program
+is layout-independent -- the same compiled program is used regardless of input
+strides. The compile cache needs no layout signature in its key.
+
+The engine is stride-aware. Contiguous-but-permuted inputs are handled via
+BLAS trans flags and v1-style fusability checks (see `prepare_one_operand`).
+Only non-contiguous data (memory gaps) is physically copied.
 
 ```
 User Tensor:      may have arbitrary strides
                           │
                eval() pre-processing:
-                 case 1: permuted-contiguous → pass buffer, insert stablehlo.transpose
-                 case 2: non-contiguous      → physical copy outside IR
+                 contiguity check:
+                   contiguous (any axis order) → pass directly, zero copy
+                   non-contiguous (gaps)       → physical copy
                           │
-StableHLO IR:     all tensors contiguous, column-major
+                   program execution
+                          │
+                   StableHLO IR (layout-independent)
                           │
                    optimizing compiler (TransposeFolding, DotDecomposer, etc.)
                           │
-Low-level IR:     all operands contiguous, column-major
+                   Low-level IR → stride-aware engine dispatch
+                          │
+                   engine-produced intermediates/outputs: column-major
 ```
 
 The XLA backend handles its own memory layout internally (XLA assigns layouts
@@ -903,10 +920,10 @@ describes only the canonical public memory kind names.
 
 `Tensor` is the user-facing type-erased tensor. Internally it is an enum
 over concrete typed storage for each supported scalar type. `Tensor` allows
-**arbitrary strides** — contiguous materialization happens at eval() time as
-a pre-processing step (permuted-contiguous views insert `stablehlo.transpose`;
-non-contiguous views are physically copied outside the IR), not at the tensor
-level.
+**arbitrary strides** — at eval() time, input pre-processing checks memory
+contiguity: contiguous data (including permuted views) is passed as-is with
+zero copy; only truly non-contiguous data (memory gaps) is physically copied.
+No StableHLO ops are inserted for input normalization.
 
 ```rust
 struct Placement {

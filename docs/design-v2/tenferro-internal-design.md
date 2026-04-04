@@ -521,11 +521,12 @@ Optimization passes:
 - **LinalgCustomCallPassthrough**: pass linalg `CustomCall` ops through to the
   low-level IR as-is
 
-Note: contiguous materialization is **not** a compiler pass. It happens at
-eval() time as a pre-processing step: permuted-contiguous views pass the raw
-buffer with a `stablehlo.transpose` inserted at the program head; truly
-non-contiguous views are physically copied outside the IR. All tensors
-entering the compiler are already contiguous and column-major.
+Note: input contiguity checking is **not** a compiler pass. It happens at
+eval() time as a runtime pre-processing step: contiguous data (including
+permuted views) is passed as-is with zero copy; only truly non-contiguous
+data (memory gaps) is physically copied. No StableHLO ops are inserted for
+input normalization. The execution engine is stride-aware and handles
+permuted inputs at dispatch time.
 
 ```rust
 fn compile_to_lowlevel(hlo: &StableHloProgram) -> LowLevelProgram {
@@ -538,9 +539,10 @@ fn compile_to_lowlevel(hlo: &StableHloProgram) -> LowLevelProgram {
 
 ### Low-level IR
 
-`LowLevelProgram` is a flat instruction sequence where all tensors are
-contiguous and column-major. This IR is what the generic execution engine
-interprets.
+`LowLevelProgram` is a flat instruction sequence. Input operands may be
+contiguous with arbitrary axis ordering; the engine inspects strides at
+dispatch time. Engine-produced intermediates and outputs are column-major
+contiguous. This IR is what the generic execution engine interprets.
 
 ```rust
 enum LowLevelOp {
@@ -567,13 +569,17 @@ struct LowLevelProgram {
 }
 ```
 
-All tensors at this level are contiguous column-major. The optimizing compiler
-guarantees this invariant.
+Engine-produced intermediates and outputs at this level are column-major
+contiguous. Input operands may have arbitrary contiguous axis ordering; the
+engine inspects strides at dispatch time.
 
 ### Generic execution engine
 
 The generic engine interprets `LowLevelProgram` by dispatching each
-instruction to the appropriate method on backend traits:
+instruction to the appropriate method on backend traits. Before dispatching
+compute ops like `BatchedGemm`, the engine inspects input strides and uses
+v1's `prepare_one_operand` approach: fusability check on dimension groups,
+BLAS trans flags for transposed inputs.
 
 ```rust
 fn execute_lowlevel<Alg: Semiring, B: SemiringCore<Alg>>(
@@ -586,6 +592,7 @@ fn execute_lowlevel<Alg: Semiring, B: SemiringCore<Alg>>(
     for inst in &prog.instructions {
         match &inst.op {
             LowLevelOp::BatchedGemm { batch_dims, m, n, k } =>
+                // Engine inspects input strides, sets BLAS trans flags
                 backend.batched_gemm(batch_dims, *m, *n, *k, ...),
             LowLevelOp::ReduceSum { axes } =>
                 backend.reduce_sum(axes, ...),

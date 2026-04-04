@@ -53,22 +53,21 @@ enum Buffer<T> {
 
 `Tensor` allows **arbitrary strides**, enabling zero-copy views for permute,
 slice, and reshape operations. Strided views avoid data movement in the
-high-level graph layer. Contiguous materialization happens at **eval() time**
-as a pre-processing step with two cases:
+high-level graph layer. At eval() time, input pre-processing checks memory
+contiguity:
 
-1. **Permuted-contiguous view** (strides are a permutation of column-major
-   contiguous strides, e.g., from `tensor.permute()` or `.t()`): the raw
-   buffer is passed as-is and a `stablehlo.transpose` op is inserted at the
-   program head. No physical copy occurs.
-2. **Non-contiguous view** (e.g., from slicing with non-unit stride): a
-   physical copy to a fresh contiguous buffer is performed at eval() time,
-   **outside the IR**. After copying, the buffer is typically plain
-   column-major, so no transpose is needed.
+1. **Contiguous data** (including permuted-contiguous views from
+   `tensor.permute()` or `.t()`, and contiguous slices): passed as-is with
+   zero copy. The strides are preserved.
+2. **Non-contiguous data** (memory gaps from slicing): physically copied to
+   a contiguous buffer before execution.
 
-The StableHLO program always receives contiguous dense inputs. Row-major
-input layout is a runtime error (future support possible). **Column-major
-(Fortran) layout** is the standard throughout the StableHLO IR, low-level
-IR, and backend execution.
+No StableHLO ops are inserted for input normalization -- the StableHLO
+program is layout-independent. The execution engine is stride-aware: it
+inspects strides at dispatch time and uses BLAS trans flags for transposed
+inputs, v1-style fusability checks on dimension groups for BatchedGemm, etc.
+Engine-produced intermediates and outputs use **column-major (Fortran)
+layout** as the standard convention.
 
 `TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
 and AD (see `tensor-api-pseudocode.md`).

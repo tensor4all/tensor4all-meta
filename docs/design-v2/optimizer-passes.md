@@ -10,8 +10,8 @@
 ## I. Purpose
 
 This document specifies the optimization passes in tenferro v2's optimizing
-compiler. The compiler transforms StableHLO IR into low-level IR (contiguous,
-column-major) for non-XLA backends.
+compiler. The compiler transforms StableHLO IR into low-level IR for non-XLA
+backends.
 
 The pass design is based on two sources:
 
@@ -368,7 +368,7 @@ StableHLO IR (input)
     │     Reshape → Reshape (metadata or copy)
     │     CustomCall → CustomCall
     ↓
-Low-level IR (output, all contiguous column-major)
+Low-level IR (output, stride-aware engine dispatch)
 ```
 
 **Why this order matters:**
@@ -411,7 +411,7 @@ absorbed by a subsequent DotGeneral via TransposeFolding).
 | DotMerger | Merges dots sharing an operand. Useful for XLA's JIT but not needed for step-by-step interpreter. |
 | TransposeFolding for Convolution | No convolution support in v2 initial scope. |
 | AlgebraicSimplifier (full) | Most patterns are XLA-specific. We adopt only ReductionSimplification. |
-| LayoutAssignment | XLA-specific. We standardize on column-major. |
+| LayoutAssignment | XLA-specific. Engine-produced data is column-major; inputs are stride-aware. |
 | Kernel fusion | No kernel fusion in v2's step-by-step interpreter. |
 
 These can be added later if needed (e.g., DotMerger when implementing

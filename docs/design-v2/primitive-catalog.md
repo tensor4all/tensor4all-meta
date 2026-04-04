@@ -26,7 +26,7 @@ different senses. For readability, this document separates them explicitly:
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
 | StableHLO-compatible IR (high-level) | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Fragment`; the single cut point between graph/AD and backends |
-| Low-level IR (contiguous, column-major) | `BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `CustomCall` | output of the optimizing compiler; input to faer / custom backends |
+| Low-level IR | `BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `CustomCall` | output of the optimizing compiler; input to faer / custom backends |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, IREE module, faer routine | how an instruction is executed |
 
 This document uses **three orthogonal classifications**:
@@ -53,13 +53,14 @@ Important distinctions:
   lowerings (e.g., `Conj` -> 4 ops: `real` + `imag` + `negate` + `complex`)
   and multi-output linalg ops (e.g., `Svd` -> `custom_call` +
   `get_tuple_element` x N).
-- `Tensor` allows **arbitrary strides** at the user level. Contiguous
-  materialization happens at **eval() time** as a pre-processing step:
-  permuted-contiguous views (e.g., from `permute()` or `.t()`) pass the
-  raw buffer and insert `stablehlo.transpose` at the program head;
-  non-contiguous views (e.g., from slicing) are physically copied to a
-  contiguous buffer outside the IR. The StableHLO program always receives
-  contiguous dense inputs.
+- `Tensor` allows **arbitrary strides** at the user level. Input
+  pre-processing happens at **eval() time**: contiguous data (including
+  permuted-contiguous views from `permute()` or `.t()`) is passed as-is
+  with zero copy, preserving strides; only truly non-contiguous data
+  (memory gaps from slicing) is physically copied to a contiguous buffer.
+  No StableHLO ops are inserted for input normalization -- the StableHLO
+  program is layout-independent. The execution engine is stride-aware and
+  handles permuted inputs via BLAS trans flags at dispatch time.
 
 Responsibility boundary:
 
@@ -104,8 +105,11 @@ The output ordering must be part of the primitive definition because
 
 ### Column-major (Fortran) convention
 
-Both the StableHLO IR and the low-level IR use **column-major (Fortran)
-ordering** throughout. This is a global convention, not a per-op choice.
+Engine-produced intermediates and outputs use **column-major (Fortran)
+ordering**. This is the convention for all data produced by the execution
+engine. Input tensors may be contiguous with arbitrary axis ordering; the
+engine inspects strides and adjusts dispatch accordingly (e.g., BLAS trans
+flags for transposed inputs).
 
 ### What tenferro v2 is expected to implement
 
@@ -142,31 +146,26 @@ StableHLO op. Documented exceptions include composite lowerings (e.g., `Conj`
 -> 4 ops) and multi-output linalg ops (e.g., `Svd` -> `custom_call` +
 `get_tuple_element` x N).
 
-All tensor values within the StableHLO IR are contiguous and column-major.
-Contiguous materialization is an **eval() pre-processing step** that runs
-before the StableHLO program, handling each input tensor in one of two cases:
+All tensor inputs are passed to the StableHLO program as-is. Input layout
+normalization is a pure runtime concern handled by the execution engine,
+not an IR transformation. The StableHLO program is layout-independent.
+At eval() time, input pre-processing checks memory contiguity:
 
-1. **Permuted-contiguous view** (strides are a permutation of column-major
-   contiguous strides, e.g., from `tensor.permute()` or `.t()`): the raw
-   buffer is passed as-is and a `stablehlo.transpose` op is inserted at the
-   program head. No physical copy occurs. XLA's TransposeFolding pass may
-   absorb this transpose into downstream `DotGeneral` ops.
-2. **Non-contiguous view** (e.g., from slicing with non-unit stride): a
-   physical copy to a fresh contiguous buffer is performed at eval() time,
-   **outside the IR**. After copying, the buffer is typically plain
-   column-major, so no transpose is needed.
+1. **Contiguous data** (including permuted-contiguous views from
+   `tensor.permute()` or `.t()`, and contiguous slices): passed as-is with
+   zero copy. The strides are preserved.
+2. **Non-contiguous data** (memory gaps from slicing): physically copied to
+   a contiguous buffer before execution.
 
-The StableHLO program always receives contiguous dense inputs. `stablehlo.copy`
-is never used (it does not exist in the StableHLO spec). Row-major input
-layout is a runtime error in the current design; future versions may support
-layout negotiation.
+No StableHLO ops are inserted for input normalization. The compile cache is
+layout-independent -- the same StableHLO program is used regardless of input
+strides.
 
 The StableHLO-compatible IR is designed to be **actually serializable to
 StableHLO MLIR**. It is not merely "inspired by" StableHLO -- the IR uses
 the same op semantics, the same dimension numbering conventions, and the
 same layout model (dense, no strides). Standard dtypes (f32, f64, c32, c64)
-can be round-tripped through StableHLO serialization. Row-major layout is
-a runtime error; only column-major is supported.
+can be round-tripped through StableHLO serialization.
 
 ### III.2 Optimizing compiler (algebra-agnostic passes)
 
@@ -179,19 +178,23 @@ sequence of algebra-agnostic passes:
 | **DotDecomposer** | Break multi-contracting-dim `DotGeneral` into sequences that map to `BatchedGemm` |
 | **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the low-level IR as-is |
 
-Note: contiguous materialization is **not** a compiler pass. It happens at the
-StableHLO IR entry point (see Section III.1), before the optimizing compiler
-runs. All tensors entering the compiler are already contiguous and column-major.
+Note: input contiguity checking is **not** a compiler pass. It happens at
+eval() time as a runtime pre-processing step (see Section III.1). Only truly
+non-contiguous data (memory gaps) is physically copied. Contiguous data with
+arbitrary axis ordering is passed through as-is.
 
 These passes are **algebra-agnostic**: they operate on shape metadata and
 instruction structure, not on element values. They are shared by all non-XLA
 backends.
 
-### III.3 Low-level IR (contiguous, column-major)
+### III.3 Low-level IR
 
 The output of the optimizing compiler is a flat sequence of low-level
-instructions. Every tensor operand at this level is **contiguous and
-column-major**.
+instructions. Input operands may be contiguous with arbitrary axis ordering.
+The engine inspects strides and adjusts dispatch accordingly (e.g., BLAS
+trans flags for transposed inputs, v1-style `prepare_one_operand` fusability
+checks on dimension groups for BatchedGemm). Engine-produced intermediates
+and outputs are column-major contiguous.
 
 | Instruction | Signature | Definition |
 |-------------|-----------|------------|
@@ -204,7 +207,8 @@ column-major**.
 Structural ops (`Permute`, `Reshape`) are handled by **common
 infrastructure** shared across all backends. They are not part of the custom
 backend contract. Note that `Copy` is not a low-level IR instruction;
-contiguification happens at eval() pre-processing before IR entry.
+only truly non-contiguous input data (memory gaps) is physically copied at
+eval() pre-processing before IR entry.
 
 ### III.4 Backend traits
 
@@ -254,9 +258,12 @@ IR instruction sequence and dispatches each instruction:
    The faer/CPU backend registers LAPACK routines (e.g., `dgesvd`, `dgeqrf` +
    `dorgqr`, `dsyevd`); a GPU backend registers cuSOLVER equivalents. Unrecognized
    targets are a runtime error.
-3. For compute ops, the engine first checks `SemiringFastPath` for an
-   applicable pattern match.
-4. If no fast path fires, the engine falls back to `SemiringCore` methods.
+3. For compute ops, the engine's `prepare` step inspects input strides before
+   dispatching. For `BatchedGemm`, this uses v1's `prepare_one_operand`
+   approach: fusability check on dimension groups, BLAS trans flags for
+   transposed inputs.
+4. The engine first checks `SemiringFastPath` for an applicable pattern match.
+5. If no fast path fires, the engine falls back to `SemiringCore` methods.
 
 This design means a backend author can start with the minimum two-method
 contract and add fast paths incrementally as performance needs arise.
