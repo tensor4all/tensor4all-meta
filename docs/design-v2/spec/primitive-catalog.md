@@ -190,21 +190,32 @@ trait GraphOp: Clone + Debug + Hash + Eq + Send + Sync + 'static {
 
 ### Operand
 
-`Operand` is the runtime value type. Algebraic methods only — structural
-operations (`transpose`, `reshape`, `broadcast_in_dim`) live in `TensorData`
-(see [`tensor-semantics.md`](tensor-semantics.md)).
+`Operand` is the runtime value type. Defined in
+`computegraph-rs/src/traits.rs`. Contains both algebraic and structural
+methods — computegraph-rs is a tensor computation graph engine, not a
+fully generic DAG engine.
 
 ```rust
-trait Operand: Clone + Send + Sync + 'static {
+pub trait Operand: Clone + Send + Sync + 'static {
     fn zero(shape: &[usize]) -> Self;
     fn one(shape: &[usize]) -> Self;
+    fn reshape(&self, shape: &[usize]) -> Self;
+    fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;
     fn add(&self, other: &Self) -> Self;
     fn multiply(&self, other: &Self) -> Self;
-    fn dot_general(&self, other: &Self, config: &DotGeneralConfig) -> Self;
     fn reduce_sum(&self, axes: &[usize]) -> Self;
+    fn dot_general(
+        &self, other: &Self,
+        lhs_contracting: &[usize], rhs_contracting: &[usize],
+        lhs_batch: &[usize], rhs_batch: &[usize],
+    ) -> Self;
     fn conj(&self) -> Self;
 }
 ```
+
+`TensorData` (see [`tensor-semantics.md`](tensor-semantics.md)) provides
+additional buffer access methods (`shape`, `strides`, `data`) needed by the
+execution engine's common infrastructure.
 
 ---
 

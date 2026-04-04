@@ -35,7 +35,7 @@ performance characteristics of v1's hand-tuned execution engine.
 | Direct output writing | `dispatch.rs:331-401` | GEMM writes directly to output buffer via fused strides | DotDimensionSorter |
 | Lazy output propagation | `execute.rs:205-228` | Intermediates in N-ary chain stay non-contiguous | TransposeFolding (cascaded) |
 | Pre-reduction | `dispatch.rs:121-139` | Reduce unique-only axes before GEMM to shrink tensor | ReductionSimplification |
-| Diagonal extraction | `dispatch.rs:105-119` | Zero-copy diagonal view | Not needed (handled at graph level by Trace/Diag ops) |
+| Diagonal extraction | `dispatch.rs:105-119` | Zero-copy diagonal view | Not needed (diagonal lowered to Gather/ReduceSum at graph level) |
 | Buffer pooling | `execute.rs:232-247` | Reuse buffers via Arc refcount + pool | Execution engine (liveness + pool) |
 | Backend fast-path | `dispatch.rs:195-218` | Delegate to cuTENSOR etc. | SemiringFastPath trait |
 
@@ -287,40 +287,47 @@ emits a Permute (physical copy) only for that operand.
 
 **Source:** XLA `AlgebraicSimplifier` (reduction hoisting patterns)
 
-**Purpose:** Hoist ReduceSum of axes that are unique to one operand (not shared
-with the other operand, not in the output) before the DotGeneral. This shrinks
-the tensor before contraction.
+**Purpose:** When the einsum builder emits `ReduceSum + DotGeneral` as
+separate nodes (because an axis appears in only one operand and not in
+the output), this pass ensures the ReduceSum runs before the DotGeneral,
+shrinking the tensor before contraction.
 
-**When to fire:** a DotGeneral input has a ReduceSum ancestor that reduces
-axes not involved in the contraction.
+Note: `einsum("ijk,jl->il")` cannot be a single `DotGeneral` — k is in
+LHS only and not in the output. The einsum builder decomposes this into
+`ReduceSum(A, axis=k)` followed by `DotGeneral`. This pass is about
+ensuring that decomposition is optimal (reduction before contraction, not
+after).
+
+**When to fire:** a `ReduceSum` feeds into a `DotGeneral`, and the reduced
+axes are independent of the contraction (not batch dims, not contracting
+dims).
 
 **Algorithm:**
 
 ```
 PROCEDURE HoistIndependentReductions(program):
-  FOR each DotGeneral instruction:
-    FOR each operand (lhs, rhs):
-      used_dims = batch_dims ∪ contracting_dims ∪ non_contracting_dims_in_output
+  FOR each ReduceSum → DotGeneral sequence:
+    reduced_axes = axes being reduced
+    dot_used_dims = batch_dims ∪ contracting_dims
 
-      // Check if operand has dims NOT in used_dims
-      reducible_dims = operand.dims - used_dims
-      IF reducible_dims is empty:
-        CONTINUE
-
-      // Insert ReduceSum before the DotGeneral
-      reduced = ReduceSum(operand, axes=reducible_dims)
-      REPLACE operand with reduced in the DotGeneral
+    IF reduced_axes ∩ dot_used_dims is empty:
+      // Reduction is independent of contraction — can run first
+      // (einsum builder already emits this order, but this pass
+      //  verifies and enforces it after other transforms)
+      ENSURE ReduceSum precedes DotGeneral in topological order
 ```
 
 **Example:**
 
 ```
-Before: einsum("ijk,jl->il", A[2,3,4], B[3,5])
-  Graph: DotGeneral(A[2,3,4], B[3,5]) with contracting={j=1}
-         k is in A but not in B, not in output → reducible
+einsum("ijk,jl->il", A[2,3,4], B[3,5])
 
-After:  A_reduced = ReduceSum(A, axes=[2])  → A_reduced[2,3]
-        DotGeneral(A_reduced[2,3], B[3,5])  → [2,5]
+Einsum builder emits:
+  t0 = ReduceSum(A, axes=[2])          → t0[2,3]  (reduce k)
+  t1 = DotGeneral(t0[2,3], B[3,5])     → t1[2,5]  (contract j)
+
+ReductionSimplification verifies this order is preserved after
+other transforms (e.g., if a prior pass reordered instructions).
 ```
 
 **Why this covers v1's pre-reduction:** v1 calls `execute_reduce_with_plan`

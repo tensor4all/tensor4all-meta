@@ -23,35 +23,78 @@ For the AD trait design rationale, see
 
 ## PrimitiveOp trait (canonical signature)
 
-```rust
-trait PrimitiveOp: GraphOp {
-    /// Cotangent accumulation: construct an `Add` op for fan-out accumulation.
-    /// tidu's `transpose` calls this when a value has multiple consumers.
-    fn add() -> Self;
+Defined in `chainrules-rs/src/primitive_op.rs`. Extends `GraphOp` with
+the constraint `Self::InputKey: ADKey`.
 
-    /// Produce a linear approximation of this op at the given primal point.
+```rust
+pub trait PrimitiveOp: GraphOp
+where
+    Self::InputKey: ADKey,
+{
+    /// Returns the addition operation used for cotangent accumulation.
+    /// tidu's `transpose` emits `Op::add()` nodes when multiple cotangents
+    /// flow to the same value.
+    fn add() -> Self where Self: Sized;
+
+    /// Emit the linear (JVP) rule for this primitive.
     ///
-    /// Returns a `LinearFragment` whose outputs are linear functions of the
-    /// tangent inputs. The fragment may reference primal values via external
-    /// `GlobalValKey` references.
+    /// Must be linear in tangent inputs. May reference primal inputs/outputs
+    /// through `External(GlobalValKey)`. Must emit ops in `OpMode::Linear`.
     fn linearize(
         &self,
-        primals: &[GlobalValKey<Self>],
         builder: &mut FragmentBuilder<Self>,
-    ) -> LinearFragment<Self>;
+        primal_in: &[GlobalValKey<Self>],
+        primal_out: &[GlobalValKey<Self>],
+        tangent_in: &[Option<LocalValId>],
+    ) -> Vec<Option<LocalValId>>
+    where
+        Self: Sized;
 
-    /// Transpose a linear use of this op.
+    /// Emit the transpose rule for this linear primitive.
     ///
-    /// Given cotangent(s) for the output(s), produce cotangent(s) for the
-    /// input(s). Only active inputs (indicated by `active_mask`) receive
-    /// cotangents; inactive inputs are ignored.
+    /// Receives cotangent outputs and produces cotangent inputs.
+    /// Must only emit ops that themselves implement `PrimitiveOp`.
     fn transpose_rule(
         &self,
-        cotangents: &[ValRef<Self>],
-        primals: &[GlobalValKey<Self>],
-        active_mask: &[bool],
         builder: &mut FragmentBuilder<Self>,
-    ) -> Vec<Option<LocalValId>>;
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<Self>],
+        mode: &OpMode,
+    ) -> Vec<Option<LocalValId>>
+    where
+        Self: Sized;
+}
+```
+
+## ADKey trait (canonical signature)
+
+Defined in `chainrules-rs/src/ad_key.rs`. Required bound on
+`PrimitiveOp::InputKey`.
+
+```rust
+pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
+    /// Create a tangent input key derived from this key.
+    /// `pass` is a unique identifier for the `differentiate` call.
+    fn tangent_of(&self, pass: DiffPassId) -> Self;
+}
+```
+
+`DiffPassId` is `u64`.
+
+## LinearFragment (canonical definition)
+
+Defined in `tidu-rs/src/linear_fragment.rs`. Returned by
+`PrimitiveOp::linearize` (via `tidu::differentiate`).
+
+```rust
+pub struct LinearFragment<Op: GraphOp> {
+    /// The fragment containing linear ops.
+    pub fragment: Fragment<Op>,
+    /// (primal_input_key, tangent_local_val_id) pairs.
+    pub tangent_inputs: Vec<(Op::InputKey, LocalValId)>,
+    /// Tangent outputs, aligned with requested outputs.
+    /// None means the corresponding output is inactive.
+    pub tangent_outputs: Vec<Option<LocalValId>>,
 }
 ```
 
