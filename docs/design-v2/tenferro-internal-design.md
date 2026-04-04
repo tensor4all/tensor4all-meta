@@ -546,12 +546,40 @@ contiguous with arbitrary axis ordering; the engine inspects strides at
 dispatch time. Engine-produced intermediates and outputs are column-major
 contiguous. This IR is what the generic execution engine interprets.
 
+Note: the low-level IR uses the **same op vocabulary as the
+StableHLO-compatible IR**, with one substitution: `DotGeneral` is replaced
+by `BatchedGemm` (produced by DotDecomposer). All other ops pass through
+from StableHLO unchanged.
+
 ```rust
 enum LowLevelOp {
+    // Semiring contraction (from DotDecomposer)
     BatchedGemm { batch_dims: Vec<usize>, m: usize, n: usize, k: usize },
+
+    // Elementwise (pass-through from StableHLO)
+    Add, Mul, Neg, Conj,
+    Div, Abs, Sign, Maximum, Minimum,
+    Compare(CompareDir), Select, Clamp,
+    Exp, Log, Sin, Cos, Tanh, Sqrt, Rsqrt, Pow, Expm1, Log1p,
+
+    // Reductions
     ReduceSum { axes: Vec<usize> },
+    ReduceProd { axes: Vec<usize> },
+    ReduceMax { axes: Vec<usize> },
+    ReduceMin { axes: Vec<usize> },
+
+    // Structural
     Permute { perm: Vec<usize> },
     Reshape { shape: Vec<usize> },
+    BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
+
+    // Indexing
+    Gather(GatherConfig), Scatter(ScatterConfig),
+    Slice(SliceConfig), DynamicSlice,
+    Pad(PadConfig), Concatenate { axis: usize }, Reverse { axes: Vec<usize> },
+
+    // Linalg / extensibility
+    Cholesky,
     CustomCall { target: String, config: Vec<u8> },
 }
 
@@ -593,17 +621,55 @@ fn execute_lowlevel<Alg: Semiring, B: SemiringCore<Alg>>(
     // ... load inputs into slots ...
     for inst in &prog.instructions {
         match &inst.op {
+            // Semiring contraction — SemiringCore dispatch
             LowLevelOp::BatchedGemm { batch_dims, m, n, k } =>
                 // Engine inspects input strides, sets BLAS trans flags
                 backend.batched_gemm(batch_dims, *m, *n, *k, ...),
+            // Semiring reduction — SemiringCore dispatch
             LowLevelOp::ReduceSum { axes } =>
                 backend.reduce_sum(axes, ...),
+
+            // Elementwise — standard kernel dispatch
+            LowLevelOp::Add | LowLevelOp::Mul | LowLevelOp::Neg |
+            LowLevelOp::Div | LowLevelOp::Abs | ... =>
+                dispatch_elementwise(&inst.op, ...),
+
+            // Analytic — standard kernel dispatch (libm/faer)
+            LowLevelOp::Exp | LowLevelOp::Log | LowLevelOp::Sin |
+            LowLevelOp::Cos | LowLevelOp::Tanh | ... =>
+                dispatch_analytic(&inst.op, ...),
+
+            // Comparison & selection
+            LowLevelOp::Compare(_) | LowLevelOp::Select |
+            LowLevelOp::Clamp =>
+                dispatch_comparison(&inst.op, ...),
+
+            // Additional reductions
+            LowLevelOp::ReduceProd { axes } |
+            LowLevelOp::ReduceMax { axes } |
+            LowLevelOp::ReduceMin { axes } =>
+                dispatch_reduction(&inst.op, axes, ...),
+
+            // Indexing
+            LowLevelOp::Gather(_) | LowLevelOp::Scatter(_) |
+            LowLevelOp::Slice(_) | LowLevelOp::DynamicSlice |
+            LowLevelOp::Pad(_) | LowLevelOp::Concatenate { .. } |
+            LowLevelOp::Reverse { .. } =>
+                dispatch_indexing(&inst.op, ...),
+
+            // Structural — common infrastructure
             LowLevelOp::Permute { perm } =>
-                backend.permute(perm, ...),
+                permute(perm, ...),
             LowLevelOp::Reshape { shape } =>
-                backend.reshape(shape, ...),
+                reshape(shape, ...),
+            LowLevelOp::BroadcastInDim { shape, dims } =>
+                broadcast_in_dim(shape, dims, ...),
+
+            // Linalg / extensibility — kernel registry
+            LowLevelOp::Cholesky =>
+                dispatch_custom_call("cholesky", ...),
             LowLevelOp::CustomCall { target, config } =>
-                backend.dispatch_custom_call(target, config, ...),
+                dispatch_custom_call(target, config, ...),
         }
     }
     // ... collect outputs from slots ...

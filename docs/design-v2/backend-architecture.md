@@ -29,12 +29,15 @@ CompiledProgram (flat SSA of StableHLO-compatible IR)
         │ optimizing compiler (TransposeFolding, DotDecomposer,
         │                      LinalgCustomCallPassthrough)
         ▼
-      Low-level IR (BatchedGemm, ReduceSum, Permute, Reshape, CustomCall)
+      Low-level IR (StableHLO ops + BatchedGemm - DotGeneral)
         │               engine-produced data is column-major
         │
         │ generic execution engine
-        │   structural ops → common infrastructure
-        │   compute ops   → SemiringCore / SemiringFastPath trait
+        │   structural ops    → common infrastructure
+        │   elementwise ops   → standard kernels (faer/libm)
+        │   indexing ops      → standard kernels
+        │   semiring ops      → SemiringCore / SemiringFastPath trait
+        │   linalg/custom     → kernel registry
         │
         ├── faer/BLAS backend (CPU, default)
         ├── Custom GPU backend (GPU, op-by-op, dynamic shapes)
@@ -62,11 +65,12 @@ an IR transformation.
 The **low-level IR** is the output of the optimizing compiler. Input operands
 may be contiguous with arbitrary axis ordering; the engine inspects strides at
 dispatch time. Engine-produced intermediates and outputs are column-major
-contiguous. Its instruction set is small:
-`BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, and
-`CustomCall { target, config }` (for linalg ops like SVD/QR/Eigh/Solve that
-are passed through from the StableHLO IR and dispatched to a registered
-kernel registry -- LAPACK for CPU, cuSOLVER for GPU).
+contiguous. Its op vocabulary is the **same as StableHLO, with one
+substitution**: `DotGeneral` is replaced by `BatchedGemm` (produced by
+DotDecomposer). All other ops -- elementwise, reductions, indexing,
+structural, and `CustomCall` -- pass through from StableHLO unchanged.
+The key optimization is DotGeneral decomposition; everything else is
+executed as-is.
 
 ```
                   StableHLO-compatible IR
@@ -373,13 +377,16 @@ CompiledProgram<Op>  (StableHLO-compatible IR — the single cut point)
           │
           ▼
         Low-level IR (stride-aware engine dispatch)
-          │  BatchedGemm, ReduceSum, Permute, Reshape, CustomCall
+          │  StableHLO ops + BatchedGemm - DotGeneral
           │
           │  generic execution engine
-          │    1. structural ops → common infrastructure
-          │    2. CustomCall → kernel registry (LAPACK / cuSOLVER)
-          │    3. check SemiringFastPath (optional)
-          │    4. fall back to SemiringCore (required)
+          │    1. structural ops (Permute, Reshape, BroadcastInDim) → common infrastructure
+          │    2. elementwise (Add, Mul, Exp, Log, ...) → standard kernels (faer/libm)
+          │    3. comparison/selection (Compare, Select, Clamp) → standard kernels
+          │    4. indexing (Gather, Scatter, Slice, ...) → standard kernels
+          │    5. additional reductions (ReduceProd, ReduceMax, ReduceMin) → standard kernels
+          │    6. CustomCall, Cholesky → kernel registry (LAPACK / cuSOLVER)
+          │    7. BatchedGemm, ReduceSum → check SemiringFastPath, fall back to SemiringCore
           │
           ├── faer backend (Standard CPU, default)
           │     SemiringCore → faer::mat_mul / BLAS dgemm
@@ -428,19 +435,29 @@ trans flags for transposed inputs, v1-style fusability checks on dimension
 groups for BatchedGemm). Engine-produced intermediates and outputs are
 column-major contiguous.
 
-| Instruction | Signature | Definition |
-|-------------|-----------|------------|
-| `BatchedGemm` | `lhs: [b, m, k], rhs: [b, k, n] -> out: [b, m, n]` | Batched matrix multiply; the fundamental contraction instruction |
-| `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | Sum over the listed axes |
-| `Permute(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Axis permutation; output is a fresh contiguous allocation |
-| `Reshape(shape)` | `x -> y: shape` | Reinterpret contiguous storage with a new shape |
-| `CustomCall { target, config }` | `inputs -> outputs` | Dispatch to a registered kernel (e.g., LAPACK for SVD/QR/Eigh/Solve). Passed through from StableHLO IR by the optimizing compiler. |
+The low-level IR uses the **same op vocabulary as the StableHLO-compatible
+IR**, with one substitution: `DotGeneral` is replaced by `BatchedGemm`
+(produced by DotDecomposer). All other ops pass through from StableHLO
+unchanged. The key optimization is DotGeneral decomposition; everything
+else is executed as-is.
 
-Structural ops (`Permute`, `Reshape`) are handled by **common
-infrastructure** shared across all backends. They are not part of the custom
-backend contract. Note that `Copy` is not a low-level IR instruction;
-only truly non-contiguous input data (memory gaps) is physically copied at
-eval() pre-processing before IR entry.
+| Category | Ops | Engine dispatch |
+|----------|-----|----------------|
+| Semiring contraction | `BatchedGemm` | `SemiringCore::batched_gemm()` |
+| Semiring reduction | `ReduceSum` | `SemiringCore::reduce_sum()` |
+| Elementwise arithmetic | `Add`, `Mul`, `Neg`, `Conj`, `Div`, `Abs`, `Sign`, `Maximum`, `Minimum` | Standard kernel (faer) |
+| Elementwise analytic | `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Pow`, `Expm1`, `Log1p` | Standard kernel |
+| Comparison & selection | `Compare`, `Select`, `Clamp` | Standard kernel |
+| Additional reductions | `ReduceProd`, `ReduceMax`, `ReduceMin` | Standard kernel |
+| Indexing | `Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`, `Concatenate`, `Reverse` | Standard kernel |
+| Structural | `Permute`, `Reshape`, `BroadcastInDim` | Common infrastructure |
+| Linalg / extensibility | `Cholesky`, `CustomCall` | Kernel registry |
+
+Structural ops (`Permute`, `Reshape`, `BroadcastInDim`) are handled by
+**common infrastructure** shared across all backends. They are not part of
+the custom backend contract. Note that `Copy` is not a low-level IR
+instruction; only truly non-contiguous input data (memory gaps) is
+physically copied at eval() pre-processing before IR entry.
 
 ### Backend traits
 
@@ -474,17 +491,23 @@ and execute them as one fused operation.
 The generic execution engine is a simple interpreter that walks the low-level
 IR instruction sequence and dispatches each instruction:
 
-1. Structural ops (`Permute`, `Reshape`) are executed by common
-   infrastructure.
-2. `CustomCall` instructions are dispatched to a **registered kernel registry**.
-   The faer/CPU backend registers LAPACK routines; a GPU backend registers
-   cuSOLVER equivalents. Unrecognized targets are a runtime error.
-3. For compute ops, the engine's `prepare` step inspects input strides before
-   dispatching. For `BatchedGemm`, this uses v1's `prepare_one_operand`
-   approach: fusability check on dimension groups, BLAS trans flags for
-   transposed inputs.
-4. The engine first checks `SemiringFastPath` for an applicable pattern match.
-5. If no fast path fires, the engine falls back to `SemiringCore` methods.
+1. **Structural ops** (`Permute`, `Reshape`, `BroadcastInDim`) are executed by
+   common infrastructure.
+2. **Elementwise ops** (`Add`, `Mul`, `Neg`, `Div`, `Abs`, `Exp`, `Log`, etc.),
+   **comparison/selection** (`Compare`, `Select`, `Clamp`), **additional
+   reductions** (`ReduceProd`, `ReduceMax`, `ReduceMin`), and **indexing ops**
+   (`Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`, `Concatenate`,
+   `Reverse`) are dispatched to standard kernels (faer/libm).
+3. **Linalg / extensibility**: `CustomCall` and `Cholesky` instructions are
+   dispatched to a **registered kernel registry**. The faer/CPU backend
+   registers LAPACK routines; a GPU backend registers cuSOLVER equivalents.
+   Unrecognized targets are a runtime error.
+4. For **semiring ops** (`BatchedGemm`, `ReduceSum`), the engine's `prepare`
+   step inspects input strides before dispatching. For `BatchedGemm`, this
+   uses v1's `prepare_one_operand` approach: fusability check on dimension
+   groups, BLAS trans flags for transposed inputs.
+5. The engine first checks `SemiringFastPath` for an applicable pattern match.
+6. If no fast path fires, the engine falls back to `SemiringCore` methods.
 
 This design means a backend author can start with the minimum two-method
 contract and add fast paths incrementally as performance needs arise.
@@ -556,7 +579,13 @@ routines via a registered kernel registry. No XLA dependency.
 Low-level IR instruction  →   faer/BLAS dispatch
   BatchedGemm             →   faer::mat_mul / dgemm
   ReduceSum               →   elementwise sum
-  Permute/Reshape          →   common infrastructure (memory ops)
+  Add, Mul, Neg, ...      →   elementwise kernel
+  Exp, Log, Sin, ...      →   libm / faer analytic
+  Compare, Select, ...    →   elementwise kernel
+  ReduceProd, ReduceMax,  →   elementwise kernel
+    ReduceMin
+  Gather, Scatter, ...    →   indexing kernel
+  Permute/Reshape/...     →   common infrastructure (memory ops)
 
 CustomCall (low-level IR) →   LAPACK kernel registry dispatch
   Cholesky                →   dpotrf
@@ -717,7 +746,7 @@ tenferro/
   ├── prims/           PrimitiveOp implementations
   ├── ir/
   │   ├── stablehlo/   StableHLO-compatible IR types + lowering
-  │   ├── lowlevel/    Low-level IR types (BatchedGemm, ReduceSum, etc.)
+  │   ├── lowlevel/    Low-level IR types (StableHLO ops + BatchedGemm - DotGeneral)
   │   └── compiler/    Optimizing compiler passes
   │                      TransposeFolding, DotDecomposer, LinalgCustomCallPassthrough
   ├── engine/          Generic execution engine (walks low-level IR)
@@ -762,26 +791,56 @@ fn eval_low_level_ir<B: SemiringCore>(
 
         let result = match &inst.op {
             // Structural ops — common infrastructure
-            LowLevelOp::Permute(perm) => {
+            LowLevelOp::Permute { .. } | LowLevelOp::Reshape { .. } |
+            LowLevelOp::BroadcastInDim { .. } => {
                 let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                permute(input, perm, pool)
+                dispatch_structural(&inst.op, input, pool)
             }
-            // Compute ops — SemiringCore dispatch
+
+            // Semiring contraction — SemiringCore dispatch
             LowLevelOp::BatchedGemm { .. } => {
                 let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
                 let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
                 backend.batched_gemm(&lhs, &rhs, pool)
-                // lhs/rhs buffers returned to pool if consumed
             }
-            LowLevelOp::ReduceSum(axes) => {
+            // Semiring reduction — SemiringCore dispatch
+            LowLevelOp::ReduceSum { .. } => {
                 let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
                 backend.reduce_sum(&input, axes, pool)
             }
-            // Linalg — kernel registry
-            LowLevelOp::CustomCall { target, .. } => {
-                dispatch_custom_call(target, &inst, &mut slots, pool)
+
+            // Elementwise — standard kernel (faer)
+            LowLevelOp::Add | LowLevelOp::Mul | LowLevelOp::Neg |
+            LowLevelOp::Div | LowLevelOp::Abs | LowLevelOp::Sign |
+            LowLevelOp::Maximum | LowLevelOp::Minimum | ... =>
+                dispatch_elementwise(&inst.op, &inst, &mut slots, pool),
+
+            // Analytic — standard kernel (libm/faer)
+            LowLevelOp::Exp | LowLevelOp::Log | LowLevelOp::Sin |
+            LowLevelOp::Cos | LowLevelOp::Tanh | ... =>
+                dispatch_analytic(&inst.op, &inst, &mut slots, pool),
+
+            // Comparison & selection
+            LowLevelOp::Compare(_) | LowLevelOp::Select |
+            LowLevelOp::Clamp =>
+                dispatch_comparison(&inst.op, &inst, &mut slots, pool),
+
+            // Additional reductions
+            LowLevelOp::ReduceProd { .. } | LowLevelOp::ReduceMax { .. } |
+            LowLevelOp::ReduceMin { .. } =>
+                dispatch_reduction(&inst.op, &inst, &mut slots, pool),
+
+            // Indexing
+            LowLevelOp::Gather(_) | LowLevelOp::Scatter(_) |
+            LowLevelOp::Slice(_) | LowLevelOp::DynamicSlice |
+            LowLevelOp::Pad(_) | LowLevelOp::Concatenate { .. } |
+            LowLevelOp::Reverse { .. } =>
+                dispatch_indexing(&inst.op, &inst, &mut slots, pool),
+
+            // Linalg / extensibility — kernel registry
+            LowLevelOp::Cholesky | LowLevelOp::CustomCall { .. } => {
+                dispatch_custom_call(&inst.op, &inst, &mut slots, pool)
             }
-            _ => { /* Reshape: metadata-only, no copy */ todo!() }
         };
         slots[inst.outputs[0]] = Some(result);
     }

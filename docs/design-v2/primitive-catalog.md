@@ -26,7 +26,7 @@ different senses. For readability, this document separates them explicitly:
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
 | StableHLO-compatible IR (high-level) | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Fragment`; the single cut point between graph/AD and backends |
-| Low-level IR | `BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `CustomCall` | output of the optimizing compiler; input to faer / custom backends |
+| Low-level IR | StableHLO ops + `BatchedGemm` - `DotGeneral` | output of the optimizing compiler; input to faer / custom backends |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, IREE module, faer routine | how an instruction is executed |
 
 This document uses **three orthogonal classifications**:
@@ -204,19 +204,43 @@ trans flags for transposed inputs, v1-style `prepare_one_operand` fusability
 checks on dimension groups for BatchedGemm). Engine-produced intermediates
 and outputs are column-major contiguous.
 
-| Instruction | Signature | Definition |
-|-------------|-----------|------------|
-| `BatchedGemm` | `lhs: [b, m, k], rhs: [b, k, n] -> out: [b, m, n]` | Batched matrix multiply; the fundamental contraction instruction |
-| `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | Sum over the listed axes |
-| `Permute(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Axis permutation; output is a fresh contiguous allocation |
-| `Reshape(shape)` | `x -> y: shape` | Reinterpret contiguous storage with a new shape |
-| `CustomCall { target, config }` | `inputs -> outputs` | Dispatch to a registered kernel (e.g., LAPACK routine for SVD/QR/Eigh/Solve). The optimizing compiler passes linalg `custom_call` ops through to the low-level IR as-is. |
+The low-level IR uses the **same op vocabulary as the StableHLO-compatible
+IR**, with one substitution: `DotGeneral` is replaced by `BatchedGemm`
+(produced by DotDecomposer). All other ops -- elementwise (`Add`, `Mul`,
+`Neg`, `Exp`, `Log`, ...), reductions (`ReduceSum`, `ReduceMax`, ...),
+indexing (`Gather`, `Scatter`, `Slice`, ...), structural (`Permute`,
+`Reshape`, `BroadcastInDim`), and `CustomCall` -- pass through from
+StableHLO unchanged.
 
-Structural ops (`Permute`, `Reshape`) are handled by **common
-infrastructure** shared across all backends. They are not part of the custom
-backend contract. Note that `Copy` is not a low-level IR instruction;
-only truly non-contiguous input data (memory gaps) is physically copied at
-eval() pre-processing before IR entry.
+The key optimization is DotGeneral decomposition. The rest of the ops are
+executed as-is.
+
+**Dispatch categories:**
+
+| Category | Ops | Engine dispatch |
+|----------|-----|----------------|
+| Semiring contraction | `BatchedGemm` | `SemiringCore::batched_gemm()` |
+| Semiring reduction | `ReduceSum` | `SemiringCore::reduce_sum()` |
+| Elementwise arithmetic | `Add`, `Mul`, `Neg`, `Conj`, `Div`, `Abs`, `Sign`, `Maximum`, `Minimum` | Standard kernel (faer) |
+| Elementwise analytic | `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Pow`, `Expm1`, `Log1p` | Standard kernel |
+| Comparison & selection | `Compare`, `Select`, `Clamp` | Standard kernel |
+| Additional reductions | `ReduceProd`, `ReduceMax`, `ReduceMin` | Standard kernel |
+| Indexing | `Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`, `Concatenate`, `Reverse` | Standard kernel |
+| Structural | `Permute`, `Reshape`, `BroadcastInDim` | Common infrastructure |
+| Linalg / extensibility | `Cholesky`, `CustomCall` | Kernel registry |
+
+**Important note for custom algebra:** Custom algebra programs only contain
+semiring-compatible ops (`Add`=direct, `Mul`=direct, `BatchedGemm`, `ReduceSum`,
+structural ops). Elementwise analytic ops (`Exp`, `Log`, etc.) and
+standard-only ops do not appear in custom algebra programs because they are
+not part of the semiring vocabulary. The engine dispatches `Add`/`Mul` to the
+semiring operations when executing a custom algebra program.
+
+Structural ops (`Permute`, `Reshape`, `BroadcastInDim`) are handled by
+**common infrastructure** shared across all backends. They are not part of
+the custom backend contract. Note that `Copy` is not a low-level IR
+instruction; only truly non-contiguous input data (memory gaps) is
+physically copied at eval() pre-processing before IR entry.
 
 ### III.4 Backend traits
 
@@ -231,6 +255,12 @@ Backend traits follow the v1 pattern of required core + optional fast paths.
 
 This is the **minimum contract** for a custom algebra backend. Implementing
 only these two methods is sufficient to execute any einsum-derived program.
+
+For standard algebra programs, the engine also dispatches elementwise ops
+(`Add`, `Mul`, `Exp`, `Log`, etc.), comparison/selection ops, additional
+reductions, and indexing ops to standard kernels (e.g., faer routines).
+These are not part of the `SemiringCore` contract because they do not appear
+in custom algebra programs.
 
 **`SemiringFastPath`** (optional):
 
@@ -260,18 +290,25 @@ is provided by tenferro's common infrastructure.
 The generic execution engine is a simple interpreter that walks the low-level
 IR instruction sequence and dispatches each instruction:
 
-1. Structural ops (`Permute`, `Reshape`) are executed by common
-   infrastructure.
-2. `CustomCall` instructions are dispatched to a **registered kernel registry**.
-   The faer/CPU backend registers LAPACK routines (e.g., `dgesvd`, `dgeqrf` +
-   `dorgqr`, `dsyevd`); a GPU backend registers cuSOLVER equivalents. Unrecognized
-   targets are a runtime error.
-3. For compute ops, the engine's `prepare` step inspects input strides before
+1. **Structural ops** (`Permute`, `Reshape`, `BroadcastInDim`) are executed by
+   common infrastructure.
+2. **Linalg / extensibility**: `CustomCall` and `Cholesky` instructions are
+   dispatched to a **registered kernel registry**. The faer/CPU backend
+   registers LAPACK routines (e.g., `dgesvd`, `dgeqrf` + `dorgqr`, `dsyevd`);
+   a GPU backend registers cuSOLVER equivalents. Unrecognized targets are a
+   runtime error.
+3. **Elementwise ops** (`Add`, `Mul`, `Neg`, `Div`, `Abs`, `Exp`, `Log`, etc.),
+   **comparison/selection ops** (`Compare`, `Select`, `Clamp`), **additional
+   reductions** (`ReduceProd`, `ReduceMax`, `ReduceMin`), and **indexing ops**
+   (`Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`, `Concatenate`,
+   `Reverse`) are dispatched to standard kernels (faer/libm).
+4. For **semiring contraction** (`BatchedGemm`) and **semiring reduction**
+   (`ReduceSum`), the engine's `prepare` step inspects input strides before
    dispatching. For `BatchedGemm`, this uses v1's `prepare_one_operand`
    approach: fusability check on dimension groups, BLAS trans flags for
    transposed inputs.
-4. The engine first checks `SemiringFastPath` for an applicable pattern match.
-5. If no fast path fires, the engine falls back to `SemiringCore` methods.
+5. The engine first checks `SemiringFastPath` for an applicable pattern match.
+6. If no fast path fires, the engine falls back to `SemiringCore` methods.
 
 This design means a backend author can start with the minimum two-method
 contract and add fast paths incrementally as performance needs arise.

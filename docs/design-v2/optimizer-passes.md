@@ -363,10 +363,8 @@ StableHLO IR (input)
     │
     │  6. Lower to low-level IR
     │     DotGeneral (canonical) → BatchedGemm
-    │     ReduceSum → ReduceSum
-    │     Transpose → Permute (physical copy)
-    │     Reshape → Reshape (metadata or copy)
-    │     CustomCall → CustomCall
+    │     All other ops → pass through unchanged (same op, same parameters)
+    │     (Transpose → Permute is a rename; everything else is identity)
     ↓
 Low-level IR (output, stride-aware engine dispatch)
 ```
