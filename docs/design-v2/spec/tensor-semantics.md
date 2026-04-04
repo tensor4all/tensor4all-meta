@@ -51,6 +51,28 @@ enum Buffer<T> {
 }
 ```
 
+### TensorData trait (canonical signature)
+
+`TensorData` provides structural buffer access for the execution engine's
+common infrastructure (permute, reshape, copy). It is separate from `Operand`
+(which provides algebraic operations). Both `Tensor` and custom algebra
+types implement `TensorData`.
+
+```rust
+trait TensorData {
+    type Scalar: Scalar;
+    fn shape(&self) -> &[usize];
+    fn strides(&self) -> &[isize];
+    fn data(&self) -> &[Self::Scalar];
+    fn from_data(shape: Vec<usize>, data: Vec<Self::Scalar>) -> Self;
+}
+```
+
+Generic structural operations (`transpose`, `reshape`, `broadcast_in_dim`)
+are free functions over `TensorData`, not methods on `Operand`.
+
+### Arbitrary strides
+
 `Tensor` allows **arbitrary strides**, enabling zero-copy views for permute
 and slice operations. Strided views avoid data movement in the high-level
 graph layer.
