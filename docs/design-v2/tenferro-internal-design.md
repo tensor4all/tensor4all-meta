@@ -327,17 +327,17 @@ StableHloProgram (Rust struct, in-process)    ← CUT POINT
     │
     ├── XlaBackend:  StableHLO → XLA directly (unchanged)
     │
-    └── FaerBackend: StableHLO → optimizing compiler → LowLevelProgram
+    └── FaerBackend: StableHLO → optimizing compiler → ExecProgram
                          → generic execution engine → SemiringCore trait
 ```
 
 XLA consumes StableHLO directly (it already does its own optimization).
 All other backends go through the optimizing compiler to produce a
-`LowLevelProgram`, which a generic engine interprets by dispatching to
+`ExecProgram`, which a generic engine interprets by dispatching to
 backend traits.
 
 For custom algebras (`SemiringOp<T>`), the same 2-level structure applies:
-`SemiringOp<T>` lowers to StableHLO, then to `LowLevelProgram`.
+`SemiringOp<T>` lowers to StableHLO, then to `ExecProgram`.
 
 ### StableHLO IR representation
 
@@ -507,10 +507,10 @@ The `config: Vec<u8>` field in `StableHloOp::CustomCall` carries opaque
 per-call configuration (e.g., "full pivot" vs "partial pivot" for LU).
 Backends deserialize this when dispatching.
 
-### Optimizing compiler (StableHLO → Low-level IR)
+### Optimizing compiler (StableHLO IR → Execution IR)
 
 For non-XLA backends, an **optimizing compiler** transforms `StableHloProgram`
-into `LowLevelProgram`. This compiler is algebra-agnostic — it works
+into `ExecProgram`. This compiler is algebra-agnostic — it works
 identically for standard and custom algebras.
 
 Optimization passes:
@@ -519,11 +519,11 @@ Optimization passes:
 - **DotDecomposer**: decompose complex `DotGeneral` configurations into
   sequences of simpler operations (permute + batched GEMM)
 - **LinalgCustomCallPassthrough**: pass linalg `CustomCall` ops through to the
-  low-level IR as-is
+  Execution IR as-is
 
 Note: input contiguity checking is **not** a compiler pass. It happens at
 eval() time as a runtime pre-processing step handled by each backend path.
-For the low-level IR engine (faer, custom algebra): contiguous data
+For the Execution IR engine (faer, custom algebra): contiguous data
 (including permuted views) is passed as-is with zero copy; the engine is
 stride-aware and handles permuted inputs at dispatch time. For the XLA
 backend: inputs are always copied to column-major contiguous before upload
@@ -531,28 +531,28 @@ backend: inputs are always copied to column-major contiguous before upload
 for input normalization.
 
 ```rust
-fn compile_to_lowlevel(hlo: &StableHloProgram) -> LowLevelProgram {
+fn compile_to_exec(hlo: &StableHloProgram) -> ExecProgram {
     let hlo = transpose_folding(hlo);
     let hlo = dot_decomposer(&hlo);
-    let ll = lower_to_lowlevel(&hlo);      // StableHLO → LowLevelOp (including CustomCall passthrough)
+    let ll = lower_to_exec(&hlo);      // StableHLO → ExecOp (including CustomCall passthrough)
     ll
 }
 ```
 
-### Low-level IR
+### Execution IR
 
-`LowLevelProgram` is a flat instruction sequence. Input operands may be
+`ExecProgram` is a flat instruction sequence. Input operands may be
 contiguous with arbitrary axis ordering; the engine inspects strides at
 dispatch time. Engine-produced intermediates and outputs are column-major
 contiguous. This IR is what the generic execution engine interprets.
 
-Note: the low-level IR uses the **same op vocabulary as the
-StableHLO-compatible IR**, with one substitution: `DotGeneral` is replaced
+Note: the Execution IR uses the **same op vocabulary as the
+StableHLO IR**, with one substitution: `DotGeneral` is replaced
 by `BatchedGemm` (produced by DotDecomposer). All other ops pass through
 from StableHLO unchanged.
 
 ```rust
-enum LowLevelOp {
+enum ExecOp {
     // Semiring contraction (from DotDecomposer)
     BatchedGemm { batch_dims: Vec<usize>, m: usize, n: usize, k: usize },
 
@@ -583,16 +583,16 @@ enum LowLevelOp {
     CustomCall { target: String, config: Vec<u8> },
 }
 
-struct LowLevelInstruction {
-    op: LowLevelOp,
+struct ExecInstruction {
+    op: ExecOp,
     inputs: Vec<usize>,             // slot indices
     outputs: Vec<usize>,            // slot indices
     input_types: Vec<TensorType>,
     output_types: Vec<TensorType>,
 }
 
-struct LowLevelProgram {
-    instructions: Vec<LowLevelInstruction>,
+struct ExecProgram {
+    instructions: Vec<ExecInstruction>,
     input_slots: Vec<usize>,
     output_slots: Vec<usize>,
     n_slots: usize,
@@ -605,16 +605,16 @@ engine inspects strides at dispatch time.
 
 ### Generic execution engine
 
-The generic engine interprets `LowLevelProgram` by dispatching each
+The generic engine interprets `ExecProgram` by dispatching each
 instruction to the appropriate method on backend traits. Before dispatching
 compute ops like `BatchedGemm`, the engine inspects input strides and uses
 v1's `prepare_one_operand` approach: fusability check on dimension groups,
 BLAS trans flags for transposed inputs.
 
 ```rust
-fn execute_lowlevel<Alg: Semiring, B: SemiringCore<Alg>>(
+fn execute_exec<Alg: Semiring, B: SemiringCore<Alg>>(
     backend: &B,
-    prog: &LowLevelProgram,
+    prog: &ExecProgram,
     inputs: &[B::Buffer],
 ) -> Vec<B::Buffer> {
     let mut slots: Vec<Option<B::Buffer>> = vec![None; prog.n_slots];
@@ -622,53 +622,53 @@ fn execute_lowlevel<Alg: Semiring, B: SemiringCore<Alg>>(
     for inst in &prog.instructions {
         match &inst.op {
             // Semiring contraction — SemiringCore dispatch
-            LowLevelOp::BatchedGemm { batch_dims, m, n, k } =>
+            ExecOp::BatchedGemm { batch_dims, m, n, k } =>
                 // Engine inspects input strides, sets BLAS trans flags
                 backend.batched_gemm(batch_dims, *m, *n, *k, ...),
             // Semiring reduction — SemiringCore dispatch
-            LowLevelOp::ReduceSum { axes } =>
+            ExecOp::ReduceSum { axes } =>
                 backend.reduce_sum(axes, ...),
 
             // Elementwise — standard kernel dispatch
-            LowLevelOp::Add | LowLevelOp::Mul | LowLevelOp::Neg |
-            LowLevelOp::Div | LowLevelOp::Abs | ... =>
+            ExecOp::Add | ExecOp::Mul | ExecOp::Neg |
+            ExecOp::Div | ExecOp::Abs | ... =>
                 dispatch_elementwise(&inst.op, ...),
 
             // Analytic — standard kernel dispatch (libm/faer)
-            LowLevelOp::Exp | LowLevelOp::Log | LowLevelOp::Sin |
-            LowLevelOp::Cos | LowLevelOp::Tanh | ... =>
+            ExecOp::Exp | ExecOp::Log | ExecOp::Sin |
+            ExecOp::Cos | ExecOp::Tanh | ... =>
                 dispatch_analytic(&inst.op, ...),
 
             // Comparison & selection
-            LowLevelOp::Compare(_) | LowLevelOp::Select |
-            LowLevelOp::Clamp =>
+            ExecOp::Compare(_) | ExecOp::Select |
+            ExecOp::Clamp =>
                 dispatch_comparison(&inst.op, ...),
 
             // Additional reductions
-            LowLevelOp::ReduceProd { axes } |
-            LowLevelOp::ReduceMax { axes } |
-            LowLevelOp::ReduceMin { axes } =>
+            ExecOp::ReduceProd { axes } |
+            ExecOp::ReduceMax { axes } |
+            ExecOp::ReduceMin { axes } =>
                 dispatch_reduction(&inst.op, axes, ...),
 
             // Indexing
-            LowLevelOp::Gather(_) | LowLevelOp::Scatter(_) |
-            LowLevelOp::Slice(_) | LowLevelOp::DynamicSlice |
-            LowLevelOp::Pad(_) | LowLevelOp::Concatenate { .. } |
-            LowLevelOp::Reverse { .. } =>
+            ExecOp::Gather(_) | ExecOp::Scatter(_) |
+            ExecOp::Slice(_) | ExecOp::DynamicSlice |
+            ExecOp::Pad(_) | ExecOp::Concatenate { .. } |
+            ExecOp::Reverse { .. } =>
                 dispatch_indexing(&inst.op, ...),
 
             // Structural — common infrastructure
-            LowLevelOp::Permute { perm } =>
+            ExecOp::Permute { perm } =>
                 permute(perm, ...),
-            LowLevelOp::Reshape { shape } =>
+            ExecOp::Reshape { shape } =>
                 reshape(shape, ...),
-            LowLevelOp::BroadcastInDim { shape, dims } =>
+            ExecOp::BroadcastInDim { shape, dims } =>
                 broadcast_in_dim(shape, dims, ...),
 
             // Linalg / extensibility — kernel registry
-            LowLevelOp::Cholesky =>
+            ExecOp::Cholesky =>
                 dispatch_custom_call("cholesky", ...),
-            LowLevelOp::CustomCall { target, config } =>
+            ExecOp::CustomCall { target, config } =>
                 dispatch_custom_call(target, config, ...),
         }
     }
@@ -730,7 +730,7 @@ StableHloProgram
     ├── XlaBackend:  StableHLO → XLA directly
     │                (XLA does its own optimization)
     │
-    └── FaerBackend: StableHLO → optimizing compiler → LowLevelProgram
+    └── FaerBackend: StableHLO → optimizing compiler → ExecProgram
                          → generic execution engine
                          → SemiringCore<StandardAlgebra> impl (faer/BLAS/LAPACK)
 ```
@@ -754,8 +754,8 @@ impl SemiringCore<StandardAlgebra> for FaerBackend {
 impl Backend<StdTensorOp> for FaerBackend {
     fn eval_program(&mut self, prog, inputs) {
         let hlo = lower_to_stablehlo(prog);
-        let ll = compile_to_lowlevel(&hlo);
-        execute_lowlevel::<StandardAlgebra, _>(self, &ll, &inputs)
+        let ll = compile_to_exec(&hlo);
+        execute_exec::<StandardAlgebra, _>(self, &ll, &inputs)
     }
 }
 
@@ -824,11 +824,11 @@ CompiledProgram<SemiringOp<TropicalTensor>>
     ↓
 StableHloProgram
     │
-    │ compile_to_lowlevel()  (same optimizing compiler — algebra-agnostic)
+    │ compile_to_exec()  (same optimizing compiler — algebra-agnostic)
     ↓
-LowLevelProgram
+ExecProgram
     │
-    │ execute_lowlevel::<TropicalAlgebra, TropicalGpuBackend>(...)
+    │ execute_exec::<TropicalAlgebra, TropicalGpuBackend>(...)
     ↓
 Results
 ```
@@ -838,10 +838,10 @@ Results
 | | `GraphOp::eval` | `Backend<Op>` | `SemiringCore<Alg>` |
 |---|---|---|---|
 | Defined in | computegraph-rs | tenferro | tenferro |
-| Operates on | `CompiledProgram` | `CompiledProgram` | `LowLevelProgram` |
+| Operates on | `CompiledProgram` | `CompiledProgram` | `ExecProgram` |
 | Tensor type | fixed (`Op::Operand`) | `Tensor` / backend-internal | `Buffer` (backend-defined) |
-| Standard algebra | reference impl | StableHLO → XLA or lowlevel | faer/BLAS kernels |
-| Custom algebra | reference impl | StableHLO → lowlevel | user-defined kernels |
+| Standard algebra | reference impl | StableHLO → XLA or Execution IR | faer/BLAS kernels |
+| Custom algebra | reference impl | StableHLO → Execution IR | user-defined kernels |
 | Use case | unit tests, prototyping | top-level entry point | kernel implementation |
 
 `GraphOp::eval` remains useful for:
@@ -849,7 +849,7 @@ Results
 - Quick prototyping and debugging
 
 `Backend<Op>` is the top-level entry point that orchestrates
-lowering + compilation + execution. `SemiringCore<Alg>` is the low-level
+lowering + compilation + execution. `SemiringCore<Alg>` is the kernel-level
 trait that backend authors implement to provide kernels.
 
 ### Backend dispatch in Engine
@@ -1078,16 +1078,16 @@ Top-level facade:
   flat 1:1 mapping, some 1:N expansion for `Conj`, multi-output linalg, `Solve`)
 - `lower_semiring_to_stablehlo()` (`CompiledProgram<SemiringOp<T>>` →
   `StableHloProgram`)
-- Optimizing compiler: `compile_to_lowlevel()` (StableHLO → `LowLevelProgram`)
+- Optimizing compiler: `compile_to_exec()` (StableHLO → `ExecProgram`)
   - TransposeFolding, DotDecomposer, LinalgCustomCallPassthrough passes
   - Algebra-agnostic — same passes for standard and custom algebras
-- `LowLevelProgram`, `LowLevelOp`, `LowLevelInstruction`
-- Generic execution engine: `execute_lowlevel()` — interprets `LowLevelProgram`,
+- `ExecProgram`, `ExecOp`, `ExecInstruction`
+- Generic execution engine: `execute_exec()` — interprets `ExecProgram`,
   dispatches to `SemiringCore`/`SemiringFastPath` trait methods
 - `SemiringCore<Alg>` trait — minimum kernel interface (batched_gemm, reduce_sum, ...)
 - `SemiringFastPath<Alg>` trait — optional fast-path operations (contract, fused ops)
 - Standard backends:
-  - `FaerBackend` — StableHLO → optimizing compiler → LowLevelProgram →
+  - `FaerBackend` — StableHLO → optimizing compiler → ExecProgram →
     generic engine → `SemiringCore<StandardAlgebra>` (faer/BLAS/LAPACK)
   - `XlaBackend` — StableHLO → XLA directly (unchanged)
 - Custom algebra backends:

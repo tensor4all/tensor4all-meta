@@ -25,16 +25,42 @@ different senses. For readability, this document separates them explicitly:
 | Layer | Example | Meaning |
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
-| StableHLO-compatible IR (high-level) | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Fragment`; the single cut point between graph/AD and backends |
-| Low-level IR | StableHLO ops + `BatchedGemm` - `DotGeneral` | output of the optimizing compiler; input to faer / custom backends |
+| Tenferro IR | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` / `SemiringOp<T>` nodes in a `Fragment`; fragment construction, AD, einsum decomposition |
+| StableHLO IR | `StableHloOp` variants | serializable to StableHLO MLIR; the single cut point between graph/AD and backends. XLA backend takes this directly |
+| Execution IR | StableHLO ops + `BatchedGemm` - `DotGeneral` | output of the optimizing compiler; input to faer / custom backends |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, IREE module, faer routine | how an instruction is executed |
+
+### The 3 IR layers
+
+```
+┌─────────────────────────────────────────┐
+│ Tenferro IR                             │
+│ (StdTensorOp / SemiringOp<T>)           │
+│ Fragment construction, AD, einsum        │
+└──────────────┬──────────────────────────┘
+               │ lower_to_stablehlo()
+┌──────────────▼──────────────────────────┐
+│ StableHLO IR                            │
+│ (StableHloOp)                           │
+│ Serializable cut point                  │
+│ XLA backend takes this directly         │
+└──────────────┬──────────────────────────┘
+               │ optimizing compiler
+┌──────────────▼──────────────────────────┐
+│ Execution IR                            │
+│ (ExecOp)                                │
+│ faer / custom backends execute this     │
+│ stride-aware engine dispatch            │
+└─────────────────────────────────────────┘
+```
 
 This document uses **three orthogonal classifications**:
 
-1. **backend-facing execution architecture** (Section III): the 2-level IR,
-   optimizing compiler, backend traits, and execution engine
-2. **canonical graph primitive vocabulary** (Section IV): what the graph / AD
-   stack talks about at the StableHLO IR level
+1. **backend-facing execution architecture** (Section III): the 2-level IR
+   (StableHLO IR and Execution IR), optimizing compiler, backend traits,
+   and execution engine
+2. **Tenferro IR vocabulary** (Section IV): what the graph / AD
+   stack talks about at the Tenferro IR level
 3. **standard arithmetic extensions** (Section V): ops available only for
    ordinary dense numeric types
 
@@ -42,12 +68,12 @@ Important distinctions:
 
 - `differentiate`, `transpose`, `resolve`, and `compile` are **transforms**, not
   primitives.
-- `einsum` is **surface syntax**, not a final persistent graph primitive. It is
-  lowered into graph primitives such as `DotGeneral`, `Mul`, `Transpose`,
-  `BroadcastInDim`, and `ReduceSum`.
-- High-level linalg ops such as `SVD` and `Solve` may remain explicit graph
-  primitives because they are meaningful semantic units, even though their
-  derivative rules emit lower-level primitives.
+- `einsum` is **surface syntax**, not a final persistent Tenferro IR primitive.
+  It is lowered into Tenferro IR primitives such as `DotGeneral`, `Mul`,
+  `Transpose`, `BroadcastInDim`, and `ReduceSum`.
+- High-level linalg ops such as `SVD` and `Solve` may remain explicit
+  Tenferro IR primitives because they are meaningful semantic units, even
+  though their derivative rules emit lower-level primitives.
 - `StdTensorOp` is **flat** (no `SemiringOpKind` wrapping). Most variants
   map 1:1 to a StableHLO op. Documented exceptions include composite
   lowerings (e.g., `Conj` -> 4 ops: `real` + `imag` + `negate` + `complex`)
@@ -126,21 +152,21 @@ From this document's point of view, the implementation target is:
 
 ## III. Backend-Facing Execution Architecture
 
-This section defines the complete execution pipeline from graph-level
-StableHLO-compatible IR down to backend kernels. The architecture has two IR
-levels separated by an optimizing compiler.
+This section defines the complete execution pipeline from the StableHLO IR
+cut point down to backend kernels. The architecture has two IR levels
+(StableHLO IR and Execution IR) separated by an optimizing compiler.
 
-### III.1 StableHLO-compatible IR (high-level) -- the single cut point
+### III.1 StableHLO IR -- the single cut point
 
-The StableHLO-compatible IR is the **single cut point** between the graph / AD
+The StableHLO IR is the **single cut point** between the graph / AD
 stack and all backends.
 
 - An XLA/StableHLO backend can take this IR **directly** (serialize to
   StableHLO MLIR, hand to IREE or XLA).
 - All other backends (faer, custom semiring) receive this IR and pass it through
-  the optimizing compiler to produce low-level IR.
+  the optimizing compiler to produce Execution IR.
 
-The ops in this IR are exactly the canonical graph primitive vocabulary defined
+The ops in this IR are exactly the Tenferro IR vocabulary defined
 in Section IV. `StdTensorOp` is flat: most variants correspond 1:1 to a
 StableHLO op. Documented exceptions include composite lowerings (e.g., `Conj`
 -> 4 ops) and multi-output linalg ops (e.g., `Svd` -> `custom_call` +
@@ -152,7 +178,7 @@ and the compile cache needs no layout signature in its key.
 
 The input contract differs by backend:
 
-**Low-level IR engine (faer, custom algebra):**
+**Execution IR engine (faer, custom algebra):**
 
 1. **Contiguous data** (including permuted-contiguous views from
    `tensor.permute()` or `.t()`, and contiguous slices): passed as-is with
@@ -169,7 +195,7 @@ host→device transfer dominates.
 
 No StableHLO ops are inserted for input normalization in either path.
 
-The StableHLO-compatible IR is designed to be **actually serializable to
+The StableHLO IR is designed to be **actually serializable to
 StableHLO MLIR**. It is not merely "inspired by" StableHLO -- the IR uses
 the same op semantics, the same dimension numbering conventions, and the
 same layout model (dense, no strides). Standard dtypes (f32, f64, c32, c64)
@@ -177,14 +203,14 @@ can be round-tripped through StableHLO serialization.
 
 ### III.2 Optimizing compiler (algebra-agnostic passes)
 
-The optimizing compiler transforms StableHLO IR into low-level IR through a
+The optimizing compiler transforms StableHLO IR into Execution IR through a
 sequence of algebra-agnostic passes:
 
 | Pass | Purpose |
 |------|---------|
 | **TransposeFolding** | Fold chains of `Transpose` + `DotGeneral` into a single instruction with permuted dimension numbers |
 | **DotDecomposer** | Break multi-contracting-dim `DotGeneral` into sequences that map to `BatchedGemm` |
-| **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the low-level IR as-is |
+| **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the Execution IR as-is |
 
 Note: input contiguity checking is **not** a compiler pass. It happens at
 eval() time as a runtime pre-processing step (see Section III.1). Only truly
@@ -195,16 +221,16 @@ These passes are **algebra-agnostic**: they operate on shape metadata and
 instruction structure, not on element values. They are shared by all non-XLA
 backends.
 
-### III.3 Low-level IR
+### III.3 Execution IR
 
-The output of the optimizing compiler is a flat sequence of low-level
+The output of the optimizing compiler is a flat sequence of Execution IR
 instructions. Input operands may be contiguous with arbitrary axis ordering.
 The engine inspects strides and adjusts dispatch accordingly (e.g., BLAS
 trans flags for transposed inputs, v1-style `prepare_one_operand` fusability
 checks on dimension groups for BatchedGemm). Engine-produced intermediates
 and outputs are column-major contiguous.
 
-The low-level IR uses the **same op vocabulary as the StableHLO-compatible
+The Execution IR uses the **same op vocabulary as the StableHLO
 IR**, with one substitution: `DotGeneral` is replaced by `BatchedGemm`
 (produced by DotDecomposer). All other ops -- elementwise (`Add`, `Mul`,
 `Neg`, `Exp`, `Log`, ...), reductions (`ReduceSum`, `ReduceMax`, ...),
@@ -238,7 +264,7 @@ semiring operations when executing a custom algebra program.
 
 Structural ops (`Permute`, `Reshape`, `BroadcastInDim`) are handled by
 **common infrastructure** shared across all backends. They are not part of
-the custom backend contract. Note that `Copy` is not a low-level IR
+the custom backend contract. Note that `Copy` is not an Execution IR
 instruction; only truly non-contiguous input data (memory gaps) is
 physically copied at eval() pre-processing before IR entry.
 
@@ -248,8 +274,8 @@ Backend traits follow the v1 pattern of required core + optional fast paths.
 
 **`SemiringCore`** (required):
 
-| Method | Low-level instruction(s) covered |
-|--------|----------------------------------|
+| Method | Execution IR instruction(s) covered |
+|--------|--------------------------------------|
 | `batched_gemm` | `BatchedGemm` |
 | `reduce_sum` | `ReduceSum` |
 
@@ -270,10 +296,10 @@ in custom algebra programs.
 | `elementwise_mul` | Fast path for Hadamard products |
 | `elementwise_add` | Fast path for semiring accumulation / fused patterns |
 
-Fast-path methods can **absorb multiple low-level IR instructions** into a
-single kernel call. The low-level IR and backend trait methods need **not** be
-1:1; a fast-path method may pattern-match a subgraph of low-level instructions
-and execute them as one fused operation.
+Fast-path methods can **absorb multiple Execution IR instructions** into a
+single kernel call. The Execution IR and backend trait methods need **not** be
+1:1; a fast-path method may pattern-match a subgraph of Execution IR
+instructions and execute them as one fused operation.
 
 ### III.5 Custom algebra backend minimum
 
@@ -287,7 +313,7 @@ is provided by tenferro's common infrastructure.
 
 ### III.6 Generic execution engine
 
-The generic execution engine is a simple interpreter that walks the low-level
+The generic execution engine is a simple interpreter that walks the Execution
 IR instruction sequence and dispatches each instruction:
 
 1. **Structural ops** (`Permute`, `Reshape`, `BroadcastInDim`) are executed by
@@ -315,14 +341,15 @@ contract and add fast paths incrementally as performance needs arise.
 
 ---
 
-## IV. Canonical Graph Primitive Vocabulary
+## IV. Tenferro IR Vocabulary
 
 This section is about the graph-level vocabulary that `computegraph-rs`,
 `chainrules-rs`, `tidu-rs`, and tenferro's `StdTensorOp` layer talk about.
 
-These ops define the **StableHLO-compatible IR** (high-level). Each op maps
-to a StableHLO op. The XLA backend emits these directly; other backends
-lower them through the optimizing compiler.
+These ops define the **Tenferro IR**. Each op maps to a StableHLO op when
+lowered via `lower_to_stablehlo()`. The XLA backend takes the StableHLO IR
+directly; other backends lower the StableHLO IR through the optimizing
+compiler to produce Execution IR.
 
 ### AD-closed graph core
 
@@ -380,10 +407,11 @@ This matches StableHLO's `dot_general` dimension numbers.
 
 ### Trace, diagonal, and their AD helpers
 
-**Decision:** Trace/Diag/AntiTrace/AntiDiag are **not** dedicated graph
-primitives. They are lowered to existing StableHLO-compatible ops:
+**Decision:** Trace/Diag/AntiTrace/AntiDiag are **not** dedicated Tenferro IR
+primitives. They are lowered to existing Tenferro IR ops (which map to
+StableHLO):
 
-| Surface op | Canonical lowering |
+| Surface op | Tenferro IR lowering |
 |-----------|-------------------|
 | `trace(A)` | einsum `ii->` = diagonal extraction (`Gather` pattern) + `ReduceSum` |
 | `diag(A)` / `extract_diag(A)` | einsum `ii->i` = `Gather` pattern |
@@ -391,7 +419,7 @@ primitives. They are lowered to existing StableHLO-compatible ops:
 | AntiTrace (AD helper) | `Scatter` + `BroadcastInDim` in transpose rules |
 | AntiDiag (AD helper) | `Scatter` in transpose rules |
 
-This keeps the graph vocabulary aligned with StableHLO (which has no
+This keeps the Tenferro IR vocabulary aligned with StableHLO (which has no
 Trace/Diag ops) and avoids adding non-standard primitives. The einsum engine
 already handles repeated-index patterns (`ii->i`, `ii->`) internally via
 diagonal extraction in v1 (`dispatch.rs` diagonal plan).
@@ -405,7 +433,7 @@ These primitives are available only for the ordinary dense numeric setting
 semirings such as tropical algebra.
 
 This section should be kept as close as practical to the official StableHLO op
-set, so that tenferro's canonical graph primitives lower cleanly to StableHLO.
+set, so that tenferro's Tenferro IR primitives lower cleanly to StableHLO.
 See `stablehlo-primitives.md` for the StableHLO-facing reference and
 `jax-primitives.md` for the JAX-side reference point.
 
@@ -496,7 +524,7 @@ vertical slice.
 
 ## VI. StableHLO Alignment
 
-When there is a choice, the canonical graph vocabulary should prefer the
+When there is a choice, the Tenferro IR vocabulary should prefer the
 StableHLO-style name and semantics:
 
 | Prefer in v2 | Instead of |
@@ -507,8 +535,8 @@ StableHLO-style name and semantics:
 | `ReduceSum` / `ReduceMax` / ... | opaque reduction primitives whose combiner is not explicit |
 
 The goal is not to copy StableHLO mechanically. The goal is to ensure that the
-`Standard arithmetic only` part of tenferro's graph vocabulary has an obvious,
-low-friction lowering path to StableHLO, because the StableHLO-compatible IR
+`Standard arithmetic only` part of tenferro's Tenferro IR vocabulary has an
+obvious, low-friction lowering path to StableHLO, because the StableHLO IR
 is the single cut point for all backends.
 
 See also `stablehlo-primitives.md` and `jax-primitives.md`.
@@ -520,7 +548,7 @@ See also `stablehlo-primitives.md` and `jax-primitives.md`.
 Many familiar user-level ops are better treated as aliases or composites rather
 than as distinct graph primitives.
 
-| Surface op | Canonical graph form |
+| Surface op | Tenferro IR form |
 |------------|----------------------|
 | `einsum(...)` | contraction planning + `DotGeneral`/`Mul`/`Transpose`/`Reshape`/`BroadcastInDim`/`ReduceSum` |
 | `sum(x, axes)` | `ReduceSum(x, axes)` |
@@ -537,7 +565,7 @@ than as distinct graph primitives.
 
 This is useful for two reasons:
 
-1. the canonical graph vocabulary stays smaller and easier to reason about
+1. the Tenferro IR vocabulary stays smaller and easier to reason about
 2. AD closure becomes easier to verify because fewer primitive rules are truly
    fundamental
 
@@ -548,9 +576,11 @@ This is useful for two reasons:
 This catalog defines the **semantic vocabulary at all IR levels** that the v2
 graph, AD stack, and execution engine talk about.
 
-- The **StableHLO-compatible IR** (Section IV) is the single interface between
-  the graph/AD world and execution.
-- The **low-level IR** (Section III.3) is the interface between the optimizing
+- The **Tenferro IR** (Section IV) defines the graph-level vocabulary for
+  fragment construction, AD, and einsum decomposition.
+- The **StableHLO IR** (Section III.1) is the single cut point interface
+  between the graph/AD world and execution.
+- The **Execution IR** (Section III.3) is the interface between the optimizing
   compiler and backend kernels.
 - **Backend traits** (Section III.4) define what a custom backend must
   implement.

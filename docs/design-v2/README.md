@@ -15,6 +15,47 @@ graph infrastructure, AD traits, AD transforms, and concrete primitives.
 
 ---
 
+## 3-Layer IR Architecture
+
+The v2 design is organized around three intermediate representations:
+
+```
+┌─────────────────────────────────────────┐
+│ Tenferro IR                             │
+│ (StdTensorOp / SemiringOp<T>)           │
+│ Fragment construction, AD, einsum        │
+└──────────────┬──────────────────────────┘
+               │ lower_to_stablehlo()
+┌──────────────▼──────────────────────────┐
+│ StableHLO IR                            │
+│ (StableHloOp)                           │
+│ Serializable cut point                  │
+│ XLA backend takes this directly         │
+└──────────────┬──────────────────────────┘
+               │ optimizing compiler
+┌──────────────▼──────────────────────────┐
+│ Execution IR                            │
+│ (ExecOp)                                │
+│ faer / custom backends execute this     │
+│ stride-aware engine dispatch            │
+└─────────────────────────────────────────┘
+```
+
+**Tenferro IR** (`StdTensorOp` / `SemiringOp<T>`) — the graph-level vocabulary
+for fragment construction, AD, and einsum decomposition.
+
+**StableHLO IR** (`StableHloOp`) — the **single cut point** between graph/AD
+and execution. Serializable to StableHLO MLIR. XLA backend takes this directly.
+
+**Execution IR** (`ExecOp`) — output of the optimizing compiler. Same ops as
+StableHLO + `BatchedGemm` − `DotGeneral`. faer/custom backends execute this
+via stride-aware engine dispatch.
+
+See [`primitive-catalog.md`](primitive-catalog.md) for the full specification
+of each layer.
+
+---
+
 ## Crate Hierarchy
 
 ```text
@@ -30,7 +71,7 @@ tidu-rs            AD graph transforms
     ↓
 tenferro-rs        Concrete tensor primitives + backends
                    (Tensor, StableHLO lowering, optimizing compiler,
-                    low-level IR, CPU/GPU dispatch)
+                    Execution IR, CPU/GPU dispatch)
 ```
 
 Each layer depends only on the layers above it. No layer references specific
@@ -107,19 +148,6 @@ or `Mul`.
 The concrete tensor vocabulary that downstream tenferro supplies is documented
 in [`primitive-catalog.md`](primitive-catalog.md).
 
-### 2-level IR architecture
-
-StableHLO IR is the **single cut point** between the graph layer and execution.
-All compiled graphs are first lowered to StableHLO. From there:
-
-- **XLA backend**: executes StableHLO directly.
-- **faer/custom backends**: an optimizing compiler lowers StableHLO to a
-  **low-level IR** (fused kernels, memory planning) that faer or custom engines
-  evaluate.
-
-This 2-level design means the graph/AD layers never see backend details, and
-backend authors only need to consume StableHLO or the low-level IR.
-
 ### Closure is downstream responsibility
 
 The only rule for primitives is:
@@ -190,7 +218,7 @@ See `tensor-api-pseudocode.md` for full usage examples.
 build → resolve → differentiate → transpose → resolve → materialize_merge → compile
         ╰─ computegraph ─╯   ╰── tidu ──╯              ╰──── computegraph ────╯
 
-    → lower_to_stablehlo → [XLA: direct] or [optimizing compiler → low-level IR → eval]
+    → lower_to_stablehlo → [XLA: direct] or [optimizing compiler → Execution IR → eval]
       ╰──────────────────────── tenferro ──────────────────────────────────────────────╯
 ```
 

@@ -433,7 +433,7 @@ engine.eval_all(&mut [&mut y, &mut grad_x])
     → engine.cache.get_or_compile (cache lookup or compile to SSA)
     → lower_to_stablehlo (compile to StableHLO IR)
     → [XLA backend]: execute StableHLO directly via XLA
-      [faer/custom backend]: optimizing compiler → low-level IR → eval
+      [faer/custom backend]: optimizing compiler → Execution IR → eval
     → fills y.data = Some(result), grad_x.data = Some(result)
     → returns Vec<&Tensor>
 

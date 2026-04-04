@@ -10,7 +10,7 @@
 ## I. Purpose
 
 This document specifies the optimization passes in tenferro v2's optimizing
-compiler. The compiler transforms StableHLO IR into low-level IR for non-XLA
+compiler. The compiler transforms StableHLO IR into Execution IR for non-XLA
 backends.
 
 The pass design is based on two sources:
@@ -273,12 +273,12 @@ Step 4: Reshape → [32, 32, 1024]
 checks if dimension groups can collapse into single GEMM dimensions. DotDecomposer
 does the same via Reshape — multiple non-contracting dims are fused into M, multiple
 contracting dims are fused into K. If the underlying strides happen to be
-contiguous, Reshape is a no-op in the low-level IR.
+contiguous, Reshape is a no-op in the Execution IR.
 
 **Why this covers v1's partial materialization:** In v1,
 `prepare_one_operand` copies only the unfusable dimension group. In v2,
 DotDecomposer inserts a Transpose only for the axis group that needs
-reordering. TransposeFolding may absorb it; otherwise the low-level IR
+reordering. TransposeFolding may absorb it; otherwise the Execution IR
 emits a Permute (physical copy) only for that operand.
 
 ---
@@ -361,12 +361,12 @@ StableHLO IR (input)
     │  5. LinalgPassthrough
     │     CustomCall instructions pass through unchanged
     │
-    │  6. Lower to low-level IR
+    │  6. Lower to Execution IR
     │     DotGeneral (canonical) → BatchedGemm
     │     All other ops → pass through unchanged (same op, same parameters)
     │     (Transpose → Permute is a rename; everything else is identity)
     ↓
-Low-level IR (output, stride-aware engine dispatch)
+Execution IR (output, stride-aware engine dispatch)
 ```
 
 **Why this order matters:**
@@ -436,5 +436,5 @@ Each pass should preserve program semantics. Test strategy:
 The v1 profiling counters (`PREPARE_ZEROCOPY`, `PREPARE_FALLBACK`,
 `PREPARE_FALLBACK_ELEMS`, `GEMM_NS`, `PERMUTE_NS`) should have equivalents:
 - Count of Transpose instructions before/after TransposeFolding
-- Count of Permute instructions in final low-level IR
+- Count of Permute instructions in final Execution IR
 - Total elements physically copied by Permute instructions

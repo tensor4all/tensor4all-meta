@@ -16,7 +16,7 @@ MaterializedGraph (after resolve + materialize_merge)
   │
   │ compile
   ▼
-CompiledProgram (flat SSA of StableHLO-compatible IR)
+CompiledProgram (flat SSA of StableHLO IR)
   │
   │                     ┌─── single cut point ───┐
   │                     │                        │
@@ -29,7 +29,7 @@ CompiledProgram (flat SSA of StableHLO-compatible IR)
         │ optimizing compiler (TransposeFolding, DotDecomposer,
         │                      LinalgCustomCallPassthrough)
         ▼
-      Low-level IR (StableHLO ops + BatchedGemm - DotGeneral)
+      Execution IR (StableHLO ops + BatchedGemm - DotGeneral)
         │               engine-produced data is column-major
         │
         │ generic execution engine
@@ -54,15 +54,15 @@ materialized graph compiled and evaluated through this pipeline.
 
 ### 2-level IR architecture
 
-The **StableHLO-compatible IR** is the single cut point between graph/AD and
-all backends. It contains the full canonical graph primitive vocabulary
+The **StableHLO IR** is the single cut point between graph/AD and
+all backends. It contains the full Tenferro IR vocabulary
 (`StdTensorOp` variants, most mapping 1:1 to a StableHLO op; exceptions
 include composite lowerings like `Conj` and multi-output linalg ops like
 `Svd`). The StableHLO program is **layout-independent** -- input layout
 normalization is a pure runtime concern handled by the execution engine, not
 an IR transformation.
 
-The **low-level IR** is the output of the optimizing compiler. Input operands
+The **Execution IR** is the output of the optimizing compiler. Input operands
 may be contiguous with arbitrary axis ordering; the engine inspects strides at
 dispatch time. Engine-produced intermediates and outputs are column-major
 contiguous. Its op vocabulary is the **same as StableHLO, with one
@@ -73,7 +73,7 @@ The key optimization is DotGeneral decomposition; everything else is
 executed as-is.
 
 ```
-                  StableHLO-compatible IR
+                  StableHLO IR
                   (the single cut point)
                           │
             ┌─────────────┴──────────────┐
@@ -81,7 +81,7 @@ executed as-is.
        XLA backend                optimizing compiler
        (direct)                        │
                                        ▼
-                                 low-level IR
+                                 Execution IR
                                        │
                               generic execution engine
                               ┌────────┼────────┐
@@ -93,7 +93,7 @@ executed as-is.
 
 | | faer/CPU | Custom GPU | XLA | Custom algebra |
 |---|---|---|---|---|
-| Input IR | low-level | low-level | StableHLO (direct) | low-level |
+| Input IR | Execution IR | Execution IR | StableHLO (direct) | Execution IR |
 | Execution | op-by-op interpret | op-by-op interpret | JIT compile | op-by-op interpret |
 | Dynamic shapes | yes | yes | no (recompile) | yes |
 | Kernel fusion | none | none | yes | none |
@@ -101,7 +101,7 @@ executed as-is.
 | Dependencies | faer (Rust) | CUDA kernels | xla-rs (~200MB) | user kernels |
 
 **Custom GPU** is the key backend for tensor network computations where
-bond dimensions change dynamically. It interprets low-level IR op-by-op,
+bond dimensions change dynamically. It interprets Execution IR op-by-op,
 dispatching to CUDA kernels (reused from tenferro-rs v1). No JIT
 compilation, so no recompile on shape change. Individual ops (matmul, SVD)
 are large enough that fusion is not critical.
@@ -116,7 +116,7 @@ StableHLO IR directly (no optimizing compiler pass).
 |---------|-----|-----|
 | Tropical | SemiringCore → custom kernels | SemiringCore → optimized CUDA kernels |
 
-Custom algebras receive the same low-level IR as standard backends. They
+Custom algebras receive the same Execution IR as standard backends. They
 implement the `SemiringCore` trait (`batched_gemm` + `reduce_sum`).
 Structural ops (`Permute`, `Reshape`) are handled by common
 infrastructure. This means a new algebra backend needs only two method
@@ -146,12 +146,12 @@ Important distinction:
 - `einsum`, `sum`, `mean`, `where`, `greater`, and similar names are
   **surface-level APIs** or aliases
 - `DotGeneral`, `ReduceSum`, `Select`, `Compare`, and similar names are the
-  **canonical graph primitives**
+  **Tenferro IR primitives**
 
 `primitive-catalog.md` also separates:
 
 - backend-facing semiring execution subsets for einsum
-- canonical graph primitives for AD / StableHLO lowering
+- Tenferro IR primitives for AD / StableHLO lowering
 
 ### AD-closed graph core
 
@@ -274,9 +274,9 @@ compatibility guarantee. Also available as MLIR textual assembly (`.mlir`).
 | Text `.mlir` output → xla-rs | xla-rs only | Let XLA parse. Simplest for XLA backend |
 | Own Rust IR (no MLIR) | None | Map ~100 ops directly. Lightest. |
 
-**Our approach**: CompiledProgram is our own Rust IR (StableHLO-compatible).
+**Our approach**: CompiledProgram is our own Rust IR (StableHLO IR).
 For non-XLA backends (faer, custom GPU, custom algebra), the optimizing
-compiler lowers to low-level IR and the generic engine interprets it — no
+compiler lowers to Execution IR and the generic engine interprets it — no
 MLIR needed. For the XLA backend, we emit `.mlir` text or use the xla-rs
 builder API. Full MLIR dependency is avoided.
 
@@ -353,7 +353,7 @@ computation is fully compilable even though the primal may be a custom_call.
 ### Architecture: 2-level IR compilation
 
 All programs first compile to a **CompiledProgram** containing
-StableHLO-compatible IR. This is the single cut point between graph/AD
+StableHLO IR. This is the single cut point between graph/AD
 and all backends. From here, execution diverges:
 
 Terminology: **Tier 1** = AD-closed graph core (`primitive-catalog.md` IV),
@@ -363,7 +363,7 @@ Terminology: **Tier 1** = AD-closed graph core (`primitive-catalog.md` IV),
 Graph → differentiate / transpose → merge → compile
     │
     ▼
-CompiledProgram<Op>  (StableHLO-compatible IR — the single cut point)
+CompiledProgram<Op>  (StableHLO IR — the single cut point)
     │
     ├── XLA backend (takes StableHLO IR directly)
     │     serialize to MLIR → JIT compile → LLVM/PTX → fused kernels
@@ -376,7 +376,7 @@ CompiledProgram<Op>  (StableHLO-compatible IR — the single cut point)
           │    LinalgCustomCallPassthrough — pass linalg custom_call ops through
           │
           ▼
-        Low-level IR (stride-aware engine dispatch)
+        Execution IR (stride-aware engine dispatch)
           │  StableHLO ops + BatchedGemm - DotGeneral
           │
           │  generic execution engine
@@ -407,14 +407,14 @@ may be unavailable when the algebra does not define them.
 
 ### Optimizing compiler
 
-The optimizing compiler transforms StableHLO IR into low-level IR through
+The optimizing compiler transforms StableHLO IR into Execution IR through
 a sequence of algebra-agnostic passes:
 
 | Pass | Purpose |
 |------|---------|
 | **TransposeFolding** | Fold chains of `Transpose` + `DotGeneral` into a single instruction with permuted dimension numbers |
 | **DotDecomposer** | Break multi-contracting-dim `DotGeneral` into sequences that map to `BatchedGemm` |
-| **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the low-level IR as-is |
+| **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the Execution IR as-is |
 
 Note: input contiguity checking is **not** a compiler pass. It happens at
 eval() time as a runtime pre-processing step (see Memory layout section
@@ -426,16 +426,16 @@ These passes operate on shape metadata and instruction structure, not on
 element values. They are shared by all non-XLA backends (faer, custom GPU,
 custom algebra).
 
-### Low-level IR
+### Execution IR
 
-The output of the optimizing compiler is a flat sequence of low-level
+The output of the optimizing compiler is a flat sequence of Execution IR
 instructions. Input operands may be contiguous with arbitrary axis ordering.
 The engine inspects strides and adjusts dispatch accordingly (e.g., BLAS
 trans flags for transposed inputs, v1-style fusability checks on dimension
 groups for BatchedGemm). Engine-produced intermediates and outputs are
 column-major contiguous.
 
-The low-level IR uses the **same op vocabulary as the StableHLO-compatible
+The Execution IR uses the **same op vocabulary as the StableHLO
 IR**, with one substitution: `DotGeneral` is replaced by `BatchedGemm`
 (produced by DotDecomposer). All other ops pass through from StableHLO
 unchanged. The key optimization is DotGeneral decomposition; everything
@@ -455,7 +455,7 @@ else is executed as-is.
 
 Structural ops (`Permute`, `Reshape`, `BroadcastInDim`) are handled by
 **common infrastructure** shared across all backends. They are not part of
-the custom backend contract. Note that `Copy` is not a low-level IR
+the custom backend contract. Note that `Copy` is not an Execution IR
 instruction; only truly non-contiguous input data (memory gaps) is
 physically copied at eval() pre-processing before IR entry.
 
@@ -465,7 +465,7 @@ Backend traits follow the v1 pattern of required core + optional fast paths.
 
 **`SemiringCore`** (required):
 
-| Method | Low-level instruction(s) covered |
+| Method | Execution IR instruction(s) covered |
 |--------|----------------------------------|
 | `batched_gemm` | `BatchedGemm` |
 | `reduce_sum` | `ReduceSum` |
@@ -481,14 +481,14 @@ only these two methods is sufficient to execute any einsum-derived program.
 | `elementwise_mul` | Fast path for Hadamard products |
 | `elementwise_add` | Fast path for semiring accumulation / fused patterns |
 
-Fast-path methods can **absorb multiple low-level IR instructions** into a
-single kernel call. The low-level IR and backend trait methods need **not** be
-1:1; a fast-path method may pattern-match a subgraph of low-level instructions
+Fast-path methods can **absorb multiple Execution IR instructions** into a
+single kernel call. The Execution IR and backend trait methods need **not** be
+1:1; a fast-path method may pattern-match a subgraph of Execution IR instructions
 and execute them as one fused operation.
 
 ### Generic execution engine
 
-The generic execution engine is a simple interpreter that walks the low-level
+The generic execution engine is a simple interpreter that walks the Execution
 IR instruction sequence and dispatches each instruction:
 
 1. **Structural ops** (`Permute`, `Reshape`, `BroadcastInDim`) are executed by
@@ -514,14 +514,14 @@ contract and add fast paths incrementally as performance needs arise.
 
 ### Buffer lifecycle: liveness analysis + buffer pool
 
-The low-level IR is SSA (each slot is written once), but the execution engine
+The Execution IR is SSA (each slot is written once), but the execution engine
 must manage Rust buffer ownership efficiently. The key mechanism is
 **liveness analysis**: the compiler annotates each instruction input with
 whether it is the **last use** of that slot.
 
 ```rust
-struct LowLevelInstruction {
-    op: LowLevelOp,
+struct ExecInstruction {
+    op: ExecOp,
     inputs: Vec<usize>,     // input slot indices
     outputs: Vec<usize>,    // output slot indices
     last_use: Vec<bool>,    // last_use[i] = true if inputs[i] is consumed here
@@ -563,20 +563,20 @@ traits.
 |-------|--------------|-------------|
 | Graph + AD (tidu) | generic (via `Operand`) | generic (via `PrimitiveOp`) |
 | CompiledProgram (StableHLO IR) | generic (preserved) | generic (preserved) |
-| Low-level IR + custom backend | generic (preserved) | custom (preserved) |
+| Execution IR + custom backend | generic (preserved) | custom (preserved) |
 | XLA backend | erased to DType enum | Standard only |
 
 Type erasure happens **only at the XLA/StableHLO serialization boundary**.
 
 ### faer backend (default for Standard CPU)
 
-Interprets low-level IR instruction-by-instruction, dispatching each compute
+Interprets Execution IR instruction-by-instruction, dispatching each compute
 op through `SemiringCore` to the corresponding faer/BLAS routine. Linalg
-`CustomCall` instructions in the low-level IR are dispatched to LAPACK
+`CustomCall` instructions in the Execution IR are dispatched to LAPACK
 routines via a registered kernel registry. No XLA dependency.
 
 ```
-Low-level IR instruction  →   faer/BLAS dispatch
+Execution IR instruction  →   faer/BLAS dispatch
   BatchedGemm             →   faer::mat_mul / dgemm
   ReduceSum               →   elementwise sum
   Add, Mul, Neg, ...      →   elementwise kernel
@@ -587,7 +587,7 @@ Low-level IR instruction  →   faer/BLAS dispatch
   Gather, Scatter, ...    →   indexing kernel
   Permute/Reshape/...     →   common infrastructure (memory ops)
 
-CustomCall (low-level IR) →   LAPACK kernel registry dispatch
+CustomCall (Execution IR) →   LAPACK kernel registry dispatch
   Cholesky                →   dpotrf
   SVD                     →   dgesvd
   QR                      →   dgeqrf + dorgqr (or dungqr for complex)
@@ -645,7 +645,7 @@ User Tensor:      may have arbitrary strides
                           │
                    optimizing compiler (TransposeFolding, DotDecomposer, etc.)
                           │
-                   Low-level IR → stride-aware engine dispatch
+                   Execution IR → stride-aware engine dispatch
                           │
                    engine-produced intermediates/outputs: column-major
 ```
@@ -658,7 +658,7 @@ User Tensor:      may have arbitrary strides
 - Contiguous-but-permuted (e.g., from `.t()`) → copy to column-major, then upload
 - Non-contiguous → copy to column-major, then upload
 
-This is stricter than the low-level IR engine (which is stride-aware and
+This is stricter than the Execution IR engine (which is stride-aware and
 avoids copies for permuted views). The extra host-side reorder is negligible
 because XLA is primarily for GPU, where the host→device PCIe transfer
 dominates.
@@ -745,11 +745,11 @@ tenferro/
   ├── tensor/          Tensor, placement model, transfer helpers
   ├── prims/           PrimitiveOp implementations
   ├── ir/
-  │   ├── stablehlo/   StableHLO-compatible IR types + lowering
-  │   ├── lowlevel/    Low-level IR types (StableHLO ops + BatchedGemm - DotGeneral)
+  │   ├── stablehlo/   StableHLO IR types + lowering
+  │   ├── exec/        Execution IR types (StableHLO ops + BatchedGemm - DotGeneral)
   │   └── compiler/    Optimizing compiler passes
   │                      TransposeFolding, DotDecomposer, LinalgCustomCallPassthrough
-  ├── engine/          Generic execution engine (walks low-level IR)
+  ├── engine/          Generic execution engine (walks Execution IR)
   ├── backend_cpu/     faer backend (SemiringCore impl, LAPACK dispatch)
   ├── backend_gpu/     Custom GPU backend (SemiringCore impl, CUDA kernels)
   └── backend_xla/     XLA backend (takes StableHLO directly, optional feature flag)
@@ -757,7 +757,7 @@ tenferro/
 
 ### Custom algebra backend (Tropical / custom algebra)
 
-Custom algebra backends receive **low-level IR** (after the optimizing
+Custom algebra backends receive **Execution IR** (after the optimizing
 compiler), not StableHLO IR directly. They implement `SemiringCore`:
 
 ```rust
@@ -772,9 +772,9 @@ The generic execution engine handles the dispatch loop, using liveness
 annotations for buffer management (see "Buffer lifecycle" above):
 
 ```rust
-fn eval_low_level_ir<B: SemiringCore>(
+fn eval_exec_ir<B: SemiringCore>(
     backend: &B,
-    program: &LowLevelProgram,
+    program: &ExecProgram,
     inputs: Vec<B::Operand>,
     pool: &mut BufferPool,
 ) -> Vec<B::Operand> {
@@ -791,54 +791,54 @@ fn eval_low_level_ir<B: SemiringCore>(
 
         let result = match &inst.op {
             // Structural ops — common infrastructure
-            LowLevelOp::Permute { .. } | LowLevelOp::Reshape { .. } |
-            LowLevelOp::BroadcastInDim { .. } => {
+            ExecOp::Permute { .. } | ExecOp::Reshape { .. } |
+            ExecOp::BroadcastInDim { .. } => {
                 let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
                 dispatch_structural(&inst.op, input, pool)
             }
 
             // Semiring contraction — SemiringCore dispatch
-            LowLevelOp::BatchedGemm { .. } => {
+            ExecOp::BatchedGemm { .. } => {
                 let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
                 let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
                 backend.batched_gemm(&lhs, &rhs, pool)
             }
             // Semiring reduction — SemiringCore dispatch
-            LowLevelOp::ReduceSum { .. } => {
+            ExecOp::ReduceSum { .. } => {
                 let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
                 backend.reduce_sum(&input, axes, pool)
             }
 
             // Elementwise — standard kernel (faer)
-            LowLevelOp::Add | LowLevelOp::Mul | LowLevelOp::Neg |
-            LowLevelOp::Div | LowLevelOp::Abs | LowLevelOp::Sign |
-            LowLevelOp::Maximum | LowLevelOp::Minimum | ... =>
+            ExecOp::Add | ExecOp::Mul | ExecOp::Neg |
+            ExecOp::Div | ExecOp::Abs | ExecOp::Sign |
+            ExecOp::Maximum | ExecOp::Minimum | ... =>
                 dispatch_elementwise(&inst.op, &inst, &mut slots, pool),
 
             // Analytic — standard kernel (libm/faer)
-            LowLevelOp::Exp | LowLevelOp::Log | LowLevelOp::Sin |
-            LowLevelOp::Cos | LowLevelOp::Tanh | ... =>
+            ExecOp::Exp | ExecOp::Log | ExecOp::Sin |
+            ExecOp::Cos | ExecOp::Tanh | ... =>
                 dispatch_analytic(&inst.op, &inst, &mut slots, pool),
 
             // Comparison & selection
-            LowLevelOp::Compare(_) | LowLevelOp::Select |
-            LowLevelOp::Clamp =>
+            ExecOp::Compare(_) | ExecOp::Select |
+            ExecOp::Clamp =>
                 dispatch_comparison(&inst.op, &inst, &mut slots, pool),
 
             // Additional reductions
-            LowLevelOp::ReduceProd { .. } | LowLevelOp::ReduceMax { .. } |
-            LowLevelOp::ReduceMin { .. } =>
+            ExecOp::ReduceProd { .. } | ExecOp::ReduceMax { .. } |
+            ExecOp::ReduceMin { .. } =>
                 dispatch_reduction(&inst.op, &inst, &mut slots, pool),
 
             // Indexing
-            LowLevelOp::Gather(_) | LowLevelOp::Scatter(_) |
-            LowLevelOp::Slice(_) | LowLevelOp::DynamicSlice |
-            LowLevelOp::Pad(_) | LowLevelOp::Concatenate { .. } |
-            LowLevelOp::Reverse { .. } =>
+            ExecOp::Gather(_) | ExecOp::Scatter(_) |
+            ExecOp::Slice(_) | ExecOp::DynamicSlice |
+            ExecOp::Pad(_) | ExecOp::Concatenate { .. } |
+            ExecOp::Reverse { .. } =>
                 dispatch_indexing(&inst.op, &inst, &mut slots, pool),
 
             // Linalg / extensibility — kernel registry
-            LowLevelOp::Cholesky | LowLevelOp::CustomCall { .. } => {
+            ExecOp::Cholesky | ExecOp::CustomCall { .. } => {
                 dispatch_custom_call(&inst.op, &inst, &mut slots, pool)
             }
         };
@@ -957,7 +957,7 @@ XLA requires **fully static shapes** at compile time. Known issues:
   - Shape bucketing (compile a few canonical shapes)
   - Drop to eager mode (lose XLA optimization)
 
-This is why the Custom GPU backend exists: op-by-op execution on low-level
+This is why the Custom GPU backend exists: op-by-op execution on Execution
 IR with no compilation step handles dynamic shapes natively, at the cost of
 no fusion.
 
@@ -1095,7 +1095,7 @@ needs to know about algebra.
 
 - `DotGeneral`, `Add`, `Mul`, `Neg`, `ReduceSum` (Tier 1 core)
 - `SVD` primal (custom_call, LAPACK)
-- 2-level IR: StableHLO IR + optimizing compiler + low-level IR
+- 2-level IR: StableHLO IR + optimizing compiler + Execution IR
 - `SemiringCore` trait: `batched_gemm` + `reduce_sum`
 - faer backend (CPU, implements `SemiringCore`)
 - Tropical: implement `SemiringCore` with existing CPU + CUDA kernels
@@ -1113,7 +1113,7 @@ needs to know about algebra.
 ### Phase 3: GPU backends
 
 - Custom GPU backend: `SemiringCore` impl with CUDA kernels (reused from v1)
-  - Op-by-op execution on low-level IR, no fusion, dynamic shapes
+  - Op-by-op execution on Execution IR, no fusion, dynamic shapes
   - **Milestone**: tensor network on GPU with dynamic bond dimensions
 - XLA backend: takes StableHLO IR directly (no optimizing compiler)
   - JIT compile, kernel fusion, static shapes

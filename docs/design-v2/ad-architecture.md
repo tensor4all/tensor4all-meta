@@ -710,7 +710,7 @@ trait Operand: Clone + Send + Sync + 'static {
 `one` is required for seeding reverse-mode AD (`ct_y = one`).
 
 `Operand` is defined in computegraph, not AD-specific. This keeps the
-computation graph close to StableHLO-compatible tensor semantics.
+computation graph close to StableHLO tensor semantics.
 
 ### PrimitiveOp
 
