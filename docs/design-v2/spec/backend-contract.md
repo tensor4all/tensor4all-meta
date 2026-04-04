@@ -611,8 +611,8 @@ tenferro/
 ### Custom algebra backend (Tropical / custom algebra)
 
 Custom algebra backends receive **Execution IR** (after the optimizing
-compiler), not StableHLO IR directly. They implement `SemiringCore` (canonical
-signature in [`primitive-catalog.md` Section III.4](primitive-catalog.md)).
+compiler), not StableHLO IR directly. They implement `SemiringCore`
+(canonical signature in Section V above).
 
 The generic execution engine handles the dispatch loop, using liveness
 annotations for buffer management (see "Buffer lifecycle" above):
