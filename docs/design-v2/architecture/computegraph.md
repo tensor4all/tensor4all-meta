@@ -24,25 +24,46 @@ The graph infrastructure is equally usable for:
 
 ## II. Core Traits
 
-### Operand
+### Operand (removed)
 
-`Operand` is the runtime value type (scalars are rank-0 tensors). It provides
-both algebraic operations (`zero`, `one`, `add`, `multiply`, `reduce_sum`,
-`dot_general`, `conj`) and structural operations (`reshape`,
-`broadcast_in_dim`). computegraph-rs is designed as a **tensor computation
-graph engine**, so `Operand` is intentionally tensor-specific.
-
-Canonical trait signature: [`../spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV).
-`TensorData` trait: [`../spec/tensor-semantics.md`](../spec/tensor-semantics.md).
+The `Operand` trait has been removed. The associated type `GraphOp::Operand`
+is now bounded by `Clone + Send + Sync + 'static` only — no trait of its own.
+Downstream consumers supply whatever runtime value type they need; computegraph
+imposes no algebraic or structural interface on it.
 
 ### GraphOp
 
-`GraphOp` is the operation node trait. It defines evaluation and arity.
-`computegraph` is fully generic over this trait and never references specific
-primitives. Associated types: `Operand` (runtime value), `Context` (backend
-execution state), `InputKey` (downstream-chosen key representation).
+`GraphOp` is the operation node trait for **metadata only**: input/output
+counts and associated types. `computegraph` is fully generic over this trait
+and never references specific primitives. Associated types: `Operand` (runtime
+value, no trait bound beyond `Clone + Send + Sync + 'static`), `Context`
+(backend execution state), `InputKey` (downstream-chosen key representation).
 
-Canonical trait signature: [`../spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV).
+Evaluation is **not** part of `GraphOp`. See `EvalGraphOp` below.
+
+```rust
+pub trait GraphOp: Clone + Debug + Hash + Eq + Send + Sync + 'static {
+    type Operand: Clone + Send + Sync + 'static;
+    type Context;
+    type InputKey: Clone + Debug + Hash + Eq + Send + Sync + 'static;
+
+    fn n_inputs(&self) -> usize;
+    fn n_outputs(&self) -> usize;
+}
+```
+
+### EvalGraphOp
+
+`EvalGraphOp` is an **opt-in** extension trait that adds evaluation capability
+to a `GraphOp`. Not every graph operation needs to be directly evaluable —
+some operations exist only as logical nodes for analysis or transformation.
+When evaluation is required, implement this trait.
+
+```rust
+pub trait EvalGraphOp: GraphOp {
+    fn eval(&self, ctx: &mut Self::Context, inputs: &[&Self::Operand]) -> Vec<Self::Operand>;
+}
+```
 
 ---
 
@@ -224,12 +245,14 @@ struct Instruction<Op> {
 ### `eval`
 
 ```rust
-impl<Op: GraphOp> CompiledProgram<Op> {
+impl<Op: EvalGraphOp> CompiledProgram<Op> {
     fn eval(&self, ctx: &mut Op::Context, inputs: &[&Op::Operand]) -> Vec<Op::Operand>;
 }
 ```
 
-Compile once, eval many times.
+Compile once, eval many times. Evaluation is **opt-in**: only operations that
+implement `EvalGraphOp` can be evaluated. `CompiledProgram` itself is generic
+over `GraphOp`; the `eval` method is available only when `Op: EvalGraphOp`.
 
 ---
 
@@ -271,9 +294,9 @@ Topological traversal is logical, not physical:
 
 ```text
 computegraph owns:
-  - GraphOp, Operand traits
+  - GraphOp, EvalGraphOp traits
   - Fragment, ResolvedView, MaterializedGraph
-  - resolve, materialize_merge, compile, eval
+  - resolve, materialize_merge, compile, eval (opt-in via EvalGraphOp)
   - compilation cache
 
 computegraph does NOT own:

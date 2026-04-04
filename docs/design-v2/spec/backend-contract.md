@@ -30,19 +30,18 @@ CompiledProgram (flat SSA of StableHLO IR)
         │                      LinalgCustomCallPassthrough)
         ▼
       Execution IR (StableHLO ops + BatchedGemm - DotGeneral)
-        │               engine-produced data is column-major
+        │               all tensors are contiguous column-major
         │
         │ generic execution engine
-        │   structural ops    → common infrastructure
-        │   elementwise ops   → standard kernels (faer/libm)
-        │   indexing ops      → standard kernels
-        │   semiring ops      → SemiringCore / SemiringFastPath trait
-        │   linalg/custom     → kernel registry
+        │   ALL ops dispatched through TensorBackend trait
         │
-        ├── faer/BLAS backend (CPU, default)
-        ├── Custom GPU backend (GPU, op-by-op, dynamic shapes)
+        ├── CpuBackend (CPU, default; lives in tenferro-tensor)
+        │     implements TensorBackend
+        │     (faer GEMM is an internal optimization within CpuBackend)
+        ├── CudaBackend (GPU, op-by-op, dynamic shapes; lives in tenferro-tensor)
+        │     implements TensorBackend
         └── Custom algebra backends (Tropical, etc.)
-              implement SemiringCore (batched_gemm + reduce_sum)
+              implement TensorBackend
 ```
 
 AD is a graph transformation (differentiate, transpose), not a separate
@@ -66,10 +65,9 @@ compiler → Execution IR path. The StableHLO program is
 **layout-independent** -- input layout normalization is a pure runtime
 concern handled by the execution engine, not an IR transformation.
 
-The **Execution IR** is the output of the optimizing compiler. Input operands
-may be contiguous with arbitrary axis ordering; the engine inspects strides at
-dispatch time. Engine-produced intermediates and outputs are column-major
-contiguous. Its op vocabulary is the **same as StableHLO, with one
+The **Execution IR** is the output of the optimizing compiler. **All tensors
+are contiguous column-major** — there is no stride-aware dispatch needed.
+Its op vocabulary is the **same as StableHLO, with one
 substitution**: `DotGeneral` is replaced by `BatchedGemm` (produced by
 DotDecomposer). All other ops -- elementwise, reductions, indexing,
 structural, and `CustomCall` -- pass through from StableHLO unchanged.
@@ -90,12 +88,12 @@ executed as-is.
                               generic execution engine
                               ┌────────┼────────┐
                               ▼        ▼        ▼
-                           faer   custom GPU  custom algebra
+                        CpuBackend CudaBackend custom algebra
 ```
 
 ### Backend comparison
 
-| | faer/CPU | Custom GPU | XLA | Custom algebra |
+| | CpuBackend | CudaBackend | XLA | Custom algebra |
 |---|---|---|---|---|
 | Input IR | Execution IR | Execution IR | StableHLO (direct) | Execution IR |
 | Execution | op-by-op interpret | op-by-op interpret | JIT compile | op-by-op interpret |
@@ -104,7 +102,7 @@ executed as-is.
 | Tensor networks | yes | **primary target** | needs padding | yes |
 | Dependencies | faer (Rust) | CUDA kernels | xla-rs (~200MB) | user kernels |
 
-**Custom GPU** is the key backend for tensor network computations where
+**CudaBackend** is the key backend for tensor network computations where
 bond dimensions change dynamically. It interprets Execution IR op-by-op,
 dispatching to CUDA kernels (reused from tenferro-rs v1). No JIT
 compilation, so no recompile on shape change. Individual ops (matmul, SVD)
@@ -118,13 +116,11 @@ StableHLO IR directly (no optimizing compiler pass).
 
 | Algebra | CPU | GPU |
 |---------|-----|-----|
-| Tropical | SemiringCore → custom kernels | SemiringCore → optimized CUDA kernels |
+| Tropical | TensorBackend → custom kernels | TensorBackend → optimized CUDA kernels |
 
 Custom algebras receive the same Execution IR as standard backends. They
-implement the `SemiringCore` trait (`batched_gemm` + `reduce_sum`).
-Structural ops (`Permute`, `Reshape`) are handled by common
-infrastructure. This means a new algebra backend needs only two method
-implementations to support any einsum-derived program.
+implement the `TensorBackend` trait. This means a new algebra backend
+needs only one trait implementation to support any einsum-derived program.
 
 ---
 
@@ -133,9 +129,9 @@ implementations to support any einsum-derived program.
 The Tenferro IR op vocabulary, per-op semantics, StableHLO lowering rules,
 and frontend sugar are owned by [`primitive-catalog.md`](primitive-catalog.md).
 
-Execution IR dispatch categories, backend trait signatures (`SemiringCore`,
-`SemiringFastPath`), and the generic execution engine are owned by **this
-document** (Sections V–VI below).
+Execution IR dispatch categories, the `TensorBackend` trait signature,
+and the generic execution engine are owned by **this document**
+(Sections V--VI below).
 
 ---
 
@@ -162,7 +158,7 @@ MLIR needed. For the XLA backend, we emit `.mlir` text or use the xla-rs
 builder API. Full MLIR dependency is avoided.
 
 StableHLO's reference interpreter (~8.7k LOC) is a useful reference for
-implementing our faer backend.
+implementing our CpuBackend.
 
 ---
 
@@ -226,28 +222,21 @@ CompiledProgram<Op>  (StableHLO IR — the single cut point)
           │    LinalgCustomCallPassthrough — pass linalg custom_call ops through
           │
           ▼
-        Execution IR (stride-aware engine dispatch)
+        Execution IR (all tensors contiguous column-major)
           │  StableHLO ops + BatchedGemm - DotGeneral
           │
-          │  generic execution engine
-          │    1. structural ops (Permute, Reshape, BroadcastInDim) → common infrastructure
-          │    2. semiring elementwise (Add, Mul) → algebra-dependent: standard kernel OR Operand::add()/multiply()
-          │    3. semiring ops (BatchedGemm, ReduceSum) → check SemiringFastPath, fall back to SemiringCore
-          │    4. elementwise (Neg, Div, Exp, Log, ...) → standard kernels (faer/libm)
-          │    5. comparison/selection (Compare, Select, Clamp) → standard kernels
-          │    6. indexing (Gather, Scatter, Slice, ...) → standard kernels
-          │    7. additional reductions (ReduceProd, ReduceMax, ReduceMin) → standard kernels
-          │    8. CustomCall, Cholesky → kernel registry (LAPACK / cuSOLVER)
+          │  Engine<B: TensorBackend>
+          │    ALL ops dispatched through TensorBackend trait
           │
-          ├── faer backend (Standard CPU, default)
-          │     SemiringCore → faer::mat_mul / BLAS dgemm
+          ├── CpuBackend (Standard CPU, default; lives in tenferro-tensor)
+          │     TensorBackend impl (faer GEMM is internal optimization)
           │     Linalg custom_call → LAPACK routines
           │
-          ├── Custom GPU backend (Standard GPU, dynamic shapes)
-          │     SemiringCore → CUDA kernels (reused from v1)
+          ├── CudaBackend (Standard GPU, dynamic shapes; lives in tenferro-tensor)
+          │     TensorBackend impl → CUDA kernels (reused from v1)
           │
           └── Custom algebra backends (Tropical, p-adic, etc.)
-                SemiringCore → user-provided kernels
+                TensorBackend impl → user-provided kernels
                 (semiring-compatible subset of Tier 1 only)
 ```
 
@@ -269,9 +258,8 @@ a sequence of algebra-agnostic passes:
 
 Note: input contiguity checking is **not** a compiler pass. It happens at
 eval() time as a runtime pre-processing step (see Memory layout section
-below). Only truly non-contiguous data (memory gaps) is physically copied.
-Contiguous data with arbitrary axis ordering is passed through as-is; the
-engine handles stride differences at dispatch time.
+below). All tensors are ensured to be contiguous column-major before
+entering the Execution IR engine. No stride-aware dispatch is needed.
 
 These passes operate on shape metadata and instruction structure, not on
 element values. They are shared by all non-XLA backends (faer, custom GPU,
@@ -280,11 +268,9 @@ custom algebra).
 ### Execution IR
 
 The output of the optimizing compiler is a flat sequence of Execution IR
-instructions. Input operands may be contiguous with arbitrary axis ordering.
-The engine inspects strides and adjusts dispatch accordingly (e.g., BLAS
-trans flags for transposed inputs, v1-style fusability checks on dimension
-groups for BatchedGemm). Engine-produced intermediates and outputs are
-column-major contiguous.
+instructions. **All tensors are contiguous column-major.** There is no
+stride-aware dispatch -- the engine does not need to inspect strides or
+set BLAS trans flags. This simplifies backend implementations significantly.
 
 The Execution IR uses the **same op vocabulary as the StableHLO
 IR**, with one substitution: `DotGeneral` is replaced by `BatchedGemm`
@@ -294,76 +280,63 @@ else is executed as-is.
 
 | Category | Ops | Engine dispatch |
 |----------|-----|----------------|
-| Semiring contraction | `BatchedGemm` | `SemiringCore::batched_gemm()` |
-| Semiring reduction | `ReduceSum` | `SemiringCore::reduce_sum()` |
-| Semiring elementwise | `Add`, `Mul` | Algebra-dependent: standard kernel for standard algebra, `Operand::add()`/`multiply()` for custom algebra |
-| Elementwise arithmetic | `Neg`, `Conj`, `Div`, `Abs`, `Sign`, `Maximum`, `Minimum` | Standard kernel (faer) |
-| Elementwise analytic | `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Pow`, `Expm1`, `Log1p` | Standard kernel |
-| Comparison & selection | `Compare`, `Select`, `Clamp` | Standard kernel |
-| Additional reductions | `ReduceProd`, `ReduceMax`, `ReduceMin` | Standard kernel |
-| Indexing | `Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`, `Concatenate`, `Reverse` | Standard kernel |
-| Structural | `Permute`, `Reshape`, `BroadcastInDim` | Common infrastructure |
+| Contraction | `BatchedGemm` | `TensorBackend::dot_general()` |
+| Reduction | `ReduceSum` | `TensorBackend::reduce_sum()` |
+| Elementwise arithmetic | `Add`, `Mul`, `Neg`, `Conj` | `TensorBackend::add()`, `mul()`, `neg()`, `conj()` |
+| Structural | `Reshape`, `Transpose`, `BroadcastInDim` | `TensorBackend::reshape()`, `transpose()`, `broadcast_in_dim()` |
+| Diagonal | `ExtractDiagonal`, `EmbedDiagonal` | `TensorBackend::extract_diagonal()`, `embed_diagonal()` |
+| Elementwise analytic | `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Pow`, `Expm1`, `Log1p` | TensorBackend (future methods) |
+| Comparison & selection | `Compare`, `Select`, `Clamp` | TensorBackend (future methods) |
+| Additional reductions | `ReduceProd`, `ReduceMax`, `ReduceMin` | TensorBackend (future methods) |
+| Indexing | `Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`, `Concatenate`, `Reverse` | TensorBackend (future methods) |
 | Linalg / extensibility | `Cholesky`, `CustomCall` | Kernel registry |
 
-Structural ops (`Permute`, `Reshape`, `BroadcastInDim`) are handled by
-**common infrastructure** shared across all backends. They are not part of
-the custom backend contract. Note that `Copy` is not an Execution IR
-instruction; only truly non-contiguous input data (memory gaps) is
-physically copied at eval() pre-processing before IR entry.
+**All ops are dispatched through the single `TensorBackend` trait.** There
+is no separate structural/standard/indexing dispatch -- everything goes
+through the backend. Note that `Copy` is not an Execution IR instruction;
+inputs are ensured to be contiguous column-major at eval() pre-processing
+before IR entry.
 
-### Backend traits
+### Backend trait
 
-Backend traits follow the v1 pattern of required core + optional fast paths.
+The backend contract is a single trait, `TensorBackend`, defined in
+`tenferro-tensor` (the tensor runtime crate). It covers **all** ops, not
+just semiring ops.
 
-**`SemiringCore`** (required):
+**`TensorBackend`** (required):
 
 | Method | Execution IR instruction(s) covered |
 |--------|----------------------------------|
-| `batched_gemm` | `BatchedGemm` |
+| `add` | `Add` |
+| `mul` | `Mul` |
+| `neg` | `Neg` |
+| `conj` | `Conj` |
 | `reduce_sum` | `ReduceSum` |
+| `dot_general` | `BatchedGemm` (lowered from `DotGeneral`) |
+| `broadcast_in_dim` | `BroadcastInDim` |
+| `reshape` | `Reshape` |
+| `transpose` | `Transpose` / `Permute` |
+| `extract_diagonal` | `ExtractDiagonal` |
+| `embed_diagonal` | `EmbedDiagonal` |
 
-This is the **minimum contract** for a custom algebra backend. Implementing
-only these two methods is sufficient to execute any einsum-derived program.
-
-**`SemiringFastPath`** (optional):
-
-| Method | Purpose |
-|--------|---------|
-| `contract` | Direct binary contraction; avoids decomposition to `BatchedGemm` + `ReduceSum` |
-| `elementwise_mul` | Fast path for Hadamard products |
-| `elementwise_add` | Fast path for semiring accumulation / fused patterns |
-
-Fast-path methods can **absorb multiple Execution IR instructions** into a
-single kernel call. The Execution IR and backend trait methods need **not** be
-1:1; a fast-path method may pattern-match a subgraph of Execution IR instructions
-and execute them as one fused operation.
+This is the **single backend contract**. There is no separate
+`SemiringFastPath` trait. Optional optimized paths (e.g., faer GEMM for
+contraction) are internal to `CpuBackend`'s `TensorBackend` implementation
+-- they are not exposed as a separate trait that backend authors implement.
 
 ### Generic execution engine
 
-The generic execution engine is a simple interpreter that walks the Execution
-IR instruction sequence and dispatches each instruction:
+The generic execution engine (`Engine<B: TensorBackend>`) is a simple
+interpreter that walks the Execution IR instruction sequence and dispatches
+**every** instruction through the `TensorBackend` trait. There is no
+separate dispatch for structural vs elementwise vs semiring ops --
+everything goes through the single backend trait.
 
-1. **Structural ops** (`Permute`, `Reshape`, `BroadcastInDim`) → common
-   infrastructure.
-2. **Semiring elementwise** (`Add`, `Mul`) → algebra-dependent: standard
-   kernel for standard algebra, `Operand::add()`/`multiply()` for custom.
-3. **Semiring contraction/reduction** (`BatchedGemm`, `ReduceSum`) →
-   engine's `prepare` step inspects input strides, then dispatches via
-   `SemiringFastPath` (if available) or `SemiringCore`.
-4. **Standard elementwise** (`Neg`, `Div`, `Abs`, `Exp`, `Log`, etc.),
-   **comparison/selection** (`Compare`, `Select`, `Clamp`), **additional
-   reductions** (`ReduceProd`, `ReduceMax`, `ReduceMin`), and **indexing**
-   (`Gather`, `Scatter`, `Slice`, etc.) → standard kernels (faer/libm).
-5. **Linalg / extensibility** (`CustomCall`, `Cholesky`) → registered
-   kernel registry (LAPACK/cuSOLVER).
+All tensors are contiguous column-major, so the engine does not need to
+inspect strides or handle layout variations.
 
-For the full dispatch table, see
+For the full dispatch table, see the table above and
 [`primitive-catalog.md`](primitive-catalog.md#iii3-execution-ir).
-5. The engine first checks `SemiringFastPath` for an applicable pattern match.
-6. If no fast path fires, the engine falls back to `SemiringCore` methods.
-
-This design means a backend author can start with the minimum two-method
-contract and add fast paths incrementally as performance needs arise.
 
 ### Buffer lifecycle: liveness analysis + buffer pool
 
@@ -421,24 +394,30 @@ traits.
 
 Type erasure happens **only at the XLA/StableHLO serialization boundary**.
 
-### faer backend (default for Standard CPU)
+### CpuBackend (default for Standard CPU)
 
-Interprets Execution IR instruction-by-instruction, dispatching each compute
-op through `SemiringCore` to the corresponding faer/BLAS routine. Linalg
-`CustomCall` instructions in the Execution IR are dispatched to LAPACK
-routines via a registered kernel registry. No XLA dependency.
+`CpuBackend` lives in `tenferro-tensor` and implements `TensorBackend`.
+It interprets Execution IR instruction-by-instruction, dispatching each op
+through its `TensorBackend` implementation. Internally, `CpuBackend` uses
+faer GEMM as an optimization for `dot_general`, but this is an internal
+detail -- not a separate trait. Linalg `CustomCall` instructions are
+dispatched to LAPACK routines via a registered kernel registry. No XLA
+dependency.
 
 ```
-Execution IR instruction  →   faer/BLAS dispatch
-  BatchedGemm             →   faer::mat_mul / dgemm
-  ReduceSum               →   elementwise sum
-  Add, Mul, Neg, ...      →   elementwise kernel
-  Exp, Log, Sin, ...      →   libm / faer analytic
-  Compare, Select, ...    →   elementwise kernel
-  ReduceProd, ReduceMax,  →   elementwise kernel
+Execution IR instruction  →   CpuBackend TensorBackend dispatch
+  BatchedGemm             →   dot_general() → faer::mat_mul / dgemm
+  ReduceSum               →   reduce_sum()
+  Add, Mul, Neg, Conj     →   add(), mul(), neg(), conj()
+  Reshape, Transpose,     →   reshape(), transpose(), broadcast_in_dim()
+    BroadcastInDim
+  ExtractDiagonal,        →   extract_diagonal(), embed_diagonal()
+    EmbedDiagonal
+  Exp, Log, Sin, ...      →   TensorBackend methods (libm / faer analytic)
+  Compare, Select, ...    →   TensorBackend methods
+  ReduceProd, ReduceMax,  →   TensorBackend methods
     ReduceMin
-  Gather, Scatter, ...    →   indexing kernel
-  Permute/Reshape/...     →   common infrastructure (memory ops)
+  Gather, Scatter, ...    →   TensorBackend methods
 
 CustomCall (Execution IR) →   LAPACK kernel registry dispatch
   Cholesky                →   dpotrf
@@ -450,7 +429,7 @@ CustomCall (Execution IR) →   LAPACK kernel registry dispatch
 
 No fusion, no JIT. Op-by-op execution. Sufficient for most CPU workloads.
 
-**Why faer is the default, not XLA CPU**: XLA's CPU backend (via
+**Why CpuBackend (faer) is the default, not XLA CPU**: XLA's CPU backend (via
 elixir-nx/xla) uses oneDNN only on x86_64 Linux. All other platforms
 fall back to Eigen (unoptimized). faer has optimized kernels everywhere:
 
@@ -464,33 +443,19 @@ fall back to Eigen (unoptimized). faer has optimized kernels everywhere:
 XLA is optional, primarily for GPU. Its CPU path is useful only for
 fusion optimization, not raw kernel performance.
 
-### Memory layout: stride-aware execution
+### Memory layout: contiguous column-major
 
-`Tensor` allows **arbitrary strides** at the user level (zero-copy views for
-permute, slice, reshape). At eval() time, input pre-processing checks memory
-contiguity:
-
-1. **Contiguous data** (including permuted-contiguous views from
-   `tensor.permute()` or `.t()`, and contiguous slices): passed as-is with
-   zero copy. The strides are preserved.
-2. **Non-contiguous data** (memory gaps from slicing): physically copied to
-   a contiguous buffer before execution.
-
-No StableHLO ops are inserted for input normalization. The StableHLO program
-is layout-independent -- the same compiled program is used regardless of input
-strides. The compile cache needs no layout signature in its key.
-
-The engine is stride-aware. Contiguous-but-permuted inputs are handled via
-BLAS trans flags and v1-style fusability checks (see `prepare_one_operand`).
-Only non-contiguous data (memory gaps) is physically copied.
+**All tensors are contiguous column-major.** This is a fundamental
+simplification over v1. At eval() time, input pre-processing ensures all
+inputs are contiguous column-major before entering the Execution IR engine.
+No stride-aware dispatch is needed -- the engine and all `TensorBackend`
+implementations can assume contiguous column-major layout.
 
 ```
-User Tensor:      may have arbitrary strides
+User Tensor:      always contiguous column-major
                           │
                eval() pre-processing:
-                 contiguity check:
-                   contiguous (any axis order) → pass directly, zero copy
-                   non-contiguous (gaps)       → physical copy
+                 ensure contiguous column-major
                           │
                    program execution
                           │
@@ -498,27 +463,18 @@ User Tensor:      may have arbitrary strides
                           │
                    optimizing compiler (TransposeFolding, DotDecomposer, etc.)
                           │
-                   Execution IR → stride-aware engine dispatch
+                   Execution IR → Engine<B: TensorBackend> dispatch
                           │
-                   engine-produced intermediates/outputs: column-major
+                   all intermediates/outputs: contiguous column-major
 ```
 
 **XLA backend input contract**: XLA accepts only dense contiguous buffers
-(no stride concept). The XLA backend's eval() pre-processing therefore
-**always copies to column-major contiguous** before uploading:
+(no stride concept). Since all tensors are already contiguous column-major,
+the XLA backend can upload directly with zero host-side copy.
 
-- Column-major contiguous → upload directly (zero host-side copy)
-- Contiguous-but-permuted (e.g., from `.t()`) → copy to column-major, then upload
-- Non-contiguous → copy to column-major, then upload
-
-This is stricter than the Execution IR engine (which is stride-aware and
-avoids copies for permuted views). The extra host-side reorder is negligible
-because XLA is primarily for GPU, where the host→device PCIe transfer
-dominates.
-
-**Contract**: the final output of any backend is always a dense `Tensor` with
-some runtime `Placement`. Internal intermediates may use backend-specific
-layout, but this is invisible to the caller.
+**Contract**: the final output of any backend is always a dense contiguous
+column-major `Tensor` with some runtime `Placement`. Internal intermediates
+may use backend-specific layout, but this is invisible to the caller.
 
 ### Device management
 
@@ -587,38 +543,43 @@ and the splitting during StableHLO lowering.
 
 tidu never knows about placement. It is purely symbolic.
 
-### Backends live inside tenferro
+### Backends live inside tenferro-tensor
 
-All backends use tenferro's placement and transfer infrastructure
+`CpuBackend` and `CudaBackend` live in `tenferro-tensor`, the tensor
+runtime crate. The `TensorBackend` trait is also defined there. All
+backends use tenferro-tensor's placement and transfer infrastructure
 (allocation, placement-aware transfer, kernel dispatch). They cannot be
 separated into standalone crates without duplicating that runtime layer:
 
 ```
-tenferro/
-  ├── tensor/          Tensor, placement model, transfer helpers
-  ├── prims/           PrimitiveOp implementations
+tenferro-tensor/       Tensor, TensorBackend trait, placement model, transfer helpers
+  ├── backend_cpu/     CpuBackend (TensorBackend impl, faer GEMM internal, LAPACK dispatch)
+  ├── backend_gpu/     CudaBackend (TensorBackend impl, CUDA kernels)
+  └── ...
+
+tenferro-prims/        PrimitiveOp implementations
+tenferro-einsum/       High-level einsum, IR, compiler, engine
   ├── ir/
   │   ├── stablehlo/   StableHLO IR types + lowering
   │   ├── exec/        Execution IR types (StableHLO ops + BatchedGemm - DotGeneral)
   │   └── compiler/    Optimizing compiler passes
   │                      TransposeFolding, DotDecomposer, LinalgCustomCallPassthrough
-  ├── engine/          Generic execution engine (walks Execution IR)
-  ├── backend_cpu/     faer backend (SemiringCore impl, LAPACK dispatch)
-  ├── backend_gpu/     Custom GPU backend (SemiringCore impl, CUDA kernels)
-  └── backend_xla/     XLA backend (takes StableHLO directly, optional feature flag)
+  └── engine/          Engine<B: TensorBackend> (walks Execution IR)
+
+backend_xla/           XLA backend (takes StableHLO directly, optional feature flag)
 ```
 
 ### Custom algebra backend (Tropical / custom algebra)
 
 Custom algebra backends receive **Execution IR** (after the optimizing
-compiler), not StableHLO IR directly. They implement `SemiringCore`
+compiler), not StableHLO IR directly. They implement `TensorBackend`
 (canonical signature in Section V above).
 
 The generic execution engine handles the dispatch loop, using liveness
 annotations for buffer management (see "Buffer lifecycle" above):
 
 ```rust
-fn eval_exec_ir<B: SemiringCore>(
+fn eval_exec_ir<B: TensorBackend>(
     backend: &B,
     program: &ExecProgram,
     inputs: Vec<B::Operand>,
@@ -635,62 +596,68 @@ fn eval_exec_ir<B: SemiringCore>(
             else    { slots[idx].as_ref().unwrap().clone() }
         };
 
+        // ALL ops dispatched through TensorBackend — no separate
+        // structural/standard/indexing dispatch categories.
         let result = match &inst.op {
-            // Structural ops — common infrastructure
-            ExecOp::Permute { .. } | ExecOp::Reshape { .. } |
-            ExecOp::BroadcastInDim { .. } => {
+            ExecOp::Add => {
+                let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
+                backend.add(&lhs, &rhs)
+            }
+            ExecOp::Mul => {
+                let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
+                backend.mul(&lhs, &rhs)
+            }
+            ExecOp::Neg => {
                 let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                dispatch_structural(&inst.op, input, pool)
+                backend.neg(&input)
+            }
+            ExecOp::Conj => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                backend.conj(&input)
             }
 
-            // Semiring contraction — SemiringCore dispatch
             ExecOp::BatchedGemm { .. } => {
                 let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
                 let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
-                backend.batched_gemm(&lhs, &rhs, pool)
+                backend.dot_general(&lhs, &rhs, /* dim_numbers */)
             }
-            // Semiring reduction — SemiringCore dispatch
-            ExecOp::ReduceSum { .. } => {
+            ExecOp::ReduceSum { axes, .. } => {
                 let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.reduce_sum(&input, axes, pool)
+                backend.reduce_sum(&input, axes)
             }
 
-            // Semiring elementwise — algebra-dependent dispatch
-            ExecOp::Add => dispatch_semiring_add(backend, &inst, &mut slots, pool),
-            ExecOp::Mul => dispatch_semiring_mul(backend, &inst, &mut slots, pool),
-            // (standard algebra → faer kernel; custom algebra → Operand::add()/multiply())
+            ExecOp::Reshape { shape, .. } => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                backend.reshape(&input, shape)
+            }
+            ExecOp::Transpose { perm, .. } => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                backend.transpose(&input, perm)
+            }
+            ExecOp::BroadcastInDim { .. } => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                backend.broadcast_in_dim(&input, /* dims */)
+            }
 
-            // Elementwise — standard kernel (faer); standard algebra only
-            ExecOp::Neg | ExecOp::Div | ExecOp::Abs | ExecOp::Sign |
-            ExecOp::Maximum | ExecOp::Minimum | ... =>
-                dispatch_elementwise(&inst.op, &inst, &mut slots, pool),
-
-            // Analytic — standard kernel (libm/faer)
-            ExecOp::Exp | ExecOp::Log | ExecOp::Sin |
-            ExecOp::Cos | ExecOp::Tanh | ... =>
-                dispatch_analytic(&inst.op, &inst, &mut slots, pool),
-
-            // Comparison & selection
-            ExecOp::Compare(_) | ExecOp::Select |
-            ExecOp::Clamp =>
-                dispatch_comparison(&inst.op, &inst, &mut slots, pool),
-
-            // Additional reductions
-            ExecOp::ReduceProd { .. } | ExecOp::ReduceMax { .. } |
-            ExecOp::ReduceMin { .. } =>
-                dispatch_reduction(&inst.op, &inst, &mut slots, pool),
-
-            // Indexing
-            ExecOp::Gather(_) | ExecOp::Scatter(_) |
-            ExecOp::Slice(_) | ExecOp::DynamicSlice |
-            ExecOp::Pad(_) | ExecOp::Concatenate { .. } |
-            ExecOp::Reverse { .. } =>
-                dispatch_indexing(&inst.op, &inst, &mut slots, pool),
+            ExecOp::ExtractDiagonal { .. } => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                backend.extract_diagonal(&input)
+            }
+            ExecOp::EmbedDiagonal { .. } => {
+                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
+                backend.embed_diagonal(&input)
+            }
 
             // Linalg / extensibility — kernel registry
             ExecOp::Cholesky | ExecOp::CustomCall { .. } => {
                 dispatch_custom_call(&inst.op, &inst, &mut slots, pool)
             }
+
+            // Future ops (analytic, comparison, indexing, etc.)
+            // will also dispatch through TensorBackend methods.
+            _ => unimplemented!("op not yet in TensorBackend"),
         };
         slots[inst.outputs[0]] = Some(result);
     }
@@ -698,8 +665,9 @@ fn eval_exec_ir<B: SemiringCore>(
 }
 ```
 
-A custom algebra backend needs only `batched_gemm` + `reduce_sum`.
-Everything else is provided by tenferro's common infrastructure.
+A custom algebra backend implements `TensorBackend`. All ops go through
+the same trait -- there is no separate common infrastructure for structural
+ops.
 
 ---
 
@@ -807,7 +775,7 @@ XLA requires **fully static shapes** at compile time. Known issues:
   - Shape bucketing (compile a few canonical shapes)
   - Drop to eager mode (lose XLA optimization)
 
-This is why the Custom GPU backend exists: op-by-op execution on Execution
+This is why CudaBackend exists: op-by-op execution on Execution
 IR with no compilation step handles dynamic shapes natively, at the cost of
 no fusion.
 
@@ -839,11 +807,8 @@ describes only the canonical public memory kind names.
 ### Tensor (concrete data type)
 
 `Tensor` is the user-facing type-erased tensor. Internally it is an enum
-over concrete typed storage for each supported scalar type. `Tensor` allows
-**arbitrary strides** — at eval() time, input pre-processing checks memory
-contiguity: contiguous data (including permuted views) is passed as-is with
-zero copy; only truly non-contiguous data (memory gaps) is physically copied.
-No StableHLO ops are inserted for input normalization.
+over concrete typed storage for each supported scalar type. **All tensors
+are contiguous column-major.** No stride-aware dispatch is needed.
 
 ```rust
 struct Placement {
@@ -861,7 +826,7 @@ enum MemoryKind {
 struct TypedTensor<T: Scalar> {
     buffer: Buffer<T>,
     shape: Vec<usize>,
-    strides: Vec<isize>,       // arbitrary strides allowed
+    // contiguous column-major: strides are implicit from shape
     placement: Placement,
     preferred_compute_device: Option<ComputeDevice>,
 }
@@ -920,9 +885,9 @@ infrastructure never needs to know about algebra.
 - `DotGeneral`, `Add`, `Mul`, `Neg`, `ReduceSum` (Tier 1 core)
 - `SVD` primal (custom_call, LAPACK)
 - 2-level IR: StableHLO IR + optimizing compiler + Execution IR
-- `SemiringCore` trait: `batched_gemm` + `reduce_sum`
-- faer backend (CPU, implements `SemiringCore`)
-- Tropical: implement `SemiringCore` with existing CPU + CUDA kernels
+- `TensorBackend` trait in `tenferro-tensor`
+- `CpuBackend` (implements `TensorBackend`, faer GEMM internal)
+- Tropical: implement `TensorBackend` with existing CPU + CUDA kernels
 - **Milestone**: einsum works for Standard + Tropical, SVD works
 
 ### Phase 2: Expand primitives
@@ -930,13 +895,12 @@ infrastructure never needs to know about algebra.
 - Add Tier 2 ops: `Exp`, `Log`, `Sin`, `Sqrt`, `Reshape`, `Transpose`,
   `BroadcastInDim`, `Pad`, `Gather`, `Scatter`, `Slice`
 - Linalg JVP rules in traced primitives (SVD, QR, Cholesky, Eigh)
-- faer backend for all new ops (CPU)
-- `SemiringFastPath` for hot patterns
+- `CpuBackend` expanded for all new ops
 - **Milestone**: full AD for linalg works (JVP + auto-transpose VJP)
 
 ### Phase 3: GPU backends
 
-- Custom GPU backend: `SemiringCore` impl with CUDA kernels (reused from v1)
+- `CudaBackend`: `TensorBackend` impl with CUDA kernels (reused from v1)
   - Op-by-op execution on Execution IR, no fusion, dynamic shapes
   - **Milestone**: tensor network on GPU with dynamic bond dimensions
 - XLA backend: takes StableHLO IR directly (no optimizing compiler)
@@ -948,7 +912,7 @@ infrastructure never needs to know about algebra.
 - Optimizing compiler improvements (better transpose folding, memory reuse)
 - Memory optimization in custom GPU engine
 - IREE as future alternative to XLA (same StableHLO input)
-- Tropical GPU: `SemiringCore` with hand-optimized CUDA kernels
+- Tropical GPU: `TensorBackend` with hand-optimized CUDA kernels
 
 ---
 

@@ -30,7 +30,6 @@ enum MemoryKind {
 struct TensorData<T: Scalar> {
     buffer: Buffer<T>,
     shape: Vec<usize>,
-    strides: Vec<isize>,
     placement: Placement,
     preferred_compute_device: Option<ComputeDevice>,
 }
@@ -56,18 +55,10 @@ enum Buffer<T> {
 `TensorData` provides structural buffer access for the execution engine's
 common infrastructure. Both `Tensor` and custom algebra types implement it.
 
-Note: `Operand` (see [`primitive-catalog.md`](primitive-catalog.md)) also
-includes `reshape` and `broadcast_in_dim` as methods, because
-computegraph-rs's graph evaluation (`GraphOp::eval`) needs them. `TensorData`
-complements `Operand` with lower-level buffer access (`shape`, `strides`,
-`as_slice`) that the execution engine uses for stride-aware dispatch and
-physical copies.
-
 ```rust
 trait TensorData {
     type Scalar: Scalar;
     fn shape(&self) -> &[usize];
-    fn strides(&self) -> &[isize];
     fn as_slice(&self) -> &[Self::Scalar];
     fn from_dense(shape: Vec<usize>, data: Vec<Self::Scalar>) -> Self;
 }
@@ -78,31 +69,31 @@ views, and placement metadata may require additional methods or a different
 structure (e.g., `AsSlice` + `ViewAs` traits). See issue discussion for
 context.
 
-### Arbitrary strides
+### Contiguous Memory Design
 
-`Tensor` allows **arbitrary strides**, enabling zero-copy views for permute
-and slice operations. Strided views avoid data movement in the high-level
-graph layer.
+All tensors are **contiguous column-major** (Fortran order). There is no
+`strides` field — the shape alone determines the layout.
 
-**Note on Reshape:** In the Tenferro IR and StableHLO IR, `Reshape` operates
-on logically dense column-major tensors — there is no stride ambiguity at the
-IR level. Strides are a `Tensor` runtime concern, resolved at eval() time by
-the input pre-processing and the stride-aware execution engine.
+**Why v1 used arbitrary strides:** In v1's eager execution model, lazy
+transpose was implemented via zero-copy stride permutation. This avoided
+data movement for operations like `.t()` and `.permute()` by simply
+reinterpreting the strides without copying memory.
 
-At eval() time, input pre-processing checks memory contiguity:
+**Why v2 removes strides:** v2 compiles operations as a group (Fragment /
+IR) and optimizes at the IR level. For example, `TransposeFolding` absorbs
+`Transpose` nodes into `DotGeneral` contracting/batch dimensions, eliminating
+the transpose entirely. With compiled mode, stride tricks at the tensor level
+are unnecessary — the compiler handles layout optimization.
 
-1. **Contiguous data** (including permuted-contiguous views from
-   `tensor.permute()` or `.t()`, and contiguous slices): passed as-is with
-   zero copy. The strides are preserved.
-2. **Non-contiguous data** (memory gaps from slicing): physically copied to
-   a contiguous buffer before execution.
+**Benefits of contiguous-only tensors:**
 
-No StableHLO ops are inserted for input normalization -- the StableHLO
-program is layout-independent. The execution engine is stride-aware: it
-inspects strides at dispatch time and uses BLAS trans flags for transposed
-inputs, v1-style fusability checks on dimension groups for BatchedGemm, etc.
-Engine-produced intermediates and outputs use **column-major (Fortran)
-layout** as the standard convention.
+- **Simplified kernels**: no stride arithmetic in inner loops.
+- **GPU-friendly**: contiguous memory maps directly to GPU global memory
+  without padding or indirection.
+- **Full-program optimization**: the compiler can optimize across an entire
+  computation (e.g., a full DMRG sweep), not just individual operations.
+- **No ambiguity**: `Reshape` always operates on contiguous data — there is
+  no stride ambiguity at any level (IR, runtime, or tensor).
 
 `TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
 and AD (see `../examples/tensor-api-pseudocode.md`).
@@ -112,6 +103,13 @@ backends. Methods such as `placement()`, `resident_device()`, `to_cpu()`, and
 `to_gpu_on(...)` are part of the tensor boundary; backend-specific handles
 remain internal implementation details. Compute preference stays separate via
 `preferred_compute_device()`.
+
+### No compute methods on Tensor
+
+`Tensor` and `TensorData` have **metadata-only inherent methods**: `shape()`,
+`dtype()`, `get()`, `n_elements()`. All compute operations are free functions
+(e.g., `host_ops::typed_*`) or go through `TensorBackend`. This keeps the
+tensor type thin and decouples data representation from execution strategy.
 
 **Why dense only**: structural variants (diagonal, band, triangular, ...)
 cause combinatorial explosion in op implementations. Every op must handle

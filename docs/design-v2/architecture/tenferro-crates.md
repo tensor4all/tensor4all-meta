@@ -63,7 +63,7 @@ tenferro-device
     |
 tenferro-algebra
     |
-tenferro-tensor ──── computegraph-rs (Operand)
+tenferro-tensor ──── tensor runtime crate (data types, kernels, TensorBackend, backends)
     |
 tenferro-ops ─────── computegraph-rs (GraphOp, Fragment)
     |                 chainrules-rs   (PrimitiveOp)
@@ -87,8 +87,9 @@ different `Operand` types, tenferro provides two Op types:
 
 `StdTensorOp` is a **flat** enum whose variants mostly mirror StableHLO ops
 1:1 (documented exceptions: composite lowerings like `Conj`, multi-output
-linalg ops like `Svd`). It implements `GraphOp`, `PrimitiveOp`, and
-`SemiringOps`.
+linalg ops like `Svd`). It implements `GraphOp` (only — not `EvalGraphOp`),
+`PrimitiveOp`, and `SemiringOps`. There is no `GraphOp::eval`; all execution
+flows through the backend pipeline.
 
 Canonical definition: [`spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV -- Tenferro IR Vocabulary).
 AD trait (`PrimitiveOp`): [`spec/ad-contract.md`](../spec/ad-contract.md).
@@ -96,18 +97,18 @@ AD trait (`PrimitiveOp`): [`spec/ad-contract.md`](../spec/ad-contract.md).
 ### SemiringOp\<T\> — custom algebra, semiring subset, no AD
 
 `SemiringOp<T>` is a generic wrapper around `SemiringOpKind` that implements
-`GraphOp` for any `T: Operand`. It delegates algebraic ops to `Operand` trait
-methods and structural ops to generic `TensorData` functions. `PrimitiveOp` is
-**not** implemented -- no AD for custom algebras.
+`GraphOp` only (not `EvalGraphOp`). It delegates algebraic ops to free
+functions in `host_ops` (dispatched through `TensorBackend`) and structural
+ops to generic `TensorData` functions. `PrimitiveOp` is **not** implemented
+-- no AD for custom algebras.
 
 Canonical definition: [`spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV).
 
-Users extend tenferro by implementing `Operand` (algebraic ops) and
-`TensorData` (buffer access) for their tensor type, then use
-`SemiringOp<MyTensor>` as the op type. Structural ops (`transpose`,
+Users extend tenferro by implementing `TensorBackend` (algebraic ops +
+kernel dispatch) and `TensorData` (buffer access) for their tensor type,
+then use `SemiringOp<MyTensor>` as the op type. Structural ops (`transpose`,
 `reshape`, `broadcast_in_dim`) are provided automatically.
 
-Canonical `Operand` definition: [`spec/primitive-catalog.md`](../spec/primitive-catalog.md).
 Canonical `TensorData` definition: [`spec/tensor-semantics.md`](../spec/tensor-semantics.md).
 
 ---
@@ -208,7 +209,7 @@ StableHloProgram (Rust struct, in-process)    ← CUT POINT
     ├── XlaBackend:  StableHLO → XLA directly (unchanged)
     │
     └── CpuBackend: StableHLO → optimizing compiler → ExecProgram
-                         → generic execution engine → SemiringCore trait
+                         → generic execution engine → TensorBackend trait
 ```
 
 XLA consumes StableHLO directly (it already does its own optimization).
@@ -258,16 +259,18 @@ Pass algorithms: [`spec/optimizer-passes.md`](../spec/optimizer-passes.md).
 ### Generic execution engine
 
 The generic engine interprets `ExecProgram` by dispatching each instruction
-to `SemiringCore`/`SemiringFastPath` methods, standard kernels, or common
-infrastructure, depending on the dispatch category.
+to `TensorBackend` methods, standard kernels, or common infrastructure,
+depending on the dispatch category.
 
 *(illustrative, non-normative -- see [`spec/backend-contract.md`](../spec/backend-contract.md) for canonical definition)*
 
-### Backend traits
+### Backend trait
 
-`SemiringCore` (required: `batched_gemm` + `reduce_sum`) and
-`SemiringFastPath` (optional: `contract`, `elementwise_mul`,
-`elementwise_add`) define what a backend must implement.
+`TensorBackend` (defined in tenferro-tensor) is the single backend trait
+that encapsulates kernel dispatch. It provides required methods
+(`batched_gemm`, `reduce_sum`) and optional fast-path methods (`contract`,
+`elementwise_mul`, `elementwise_add`). `CpuBackend` and `CudaBackend` both
+live in tenferro-tensor and implement `TensorBackend`.
 
 Canonical trait signatures: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
@@ -276,25 +279,19 @@ Canonical trait signatures: [`spec/backend-contract.md`](../spec/backend-contrac
 Two standard backends are provided: `CpuBackend` (StableHLO -> optimizing
 compiler -> ExecProgram -> generic engine -> faer/BLAS/LAPACK) and
 `XlaBackend` (StableHLO -> XLA directly). Custom algebra backends implement
-`SemiringCore<Alg>` with a minimum of `batched_gemm` + `reduce_sum`.
-
-The relationship between `GraphOp::eval` (computegraph-rs, for unit tests),
-`Backend<Op>` (tenferro, top-level entry point), and `SemiringCore<Alg>`
-(tenferro, kernel implementation) is documented in
-[`spec/backend-contract.md`](../spec/backend-contract.md).
-
-`GraphOp::eval` remains useful for:
-- computegraph-rs unit tests (no backend dependency)
-- Quick prototyping and debugging
+`TensorBackend` with a minimum of `batched_gemm` + `reduce_sum`.
 
 `Backend<Op>` is the top-level entry point that orchestrates
-lowering + compilation + execution. `SemiringCore<Alg>` is the kernel-level
-trait that backend authors implement to provide kernels.
+lowering + compilation + execution. `TensorBackend` (in tenferro-tensor)
+is the kernel-level trait that backend authors implement to provide kernels.
+
+See [`spec/backend-contract.md`](../spec/backend-contract.md) for the
+canonical relationship between `Backend<Op>` and `TensorBackend`.
 
 ### Backend dispatch in Engine
 
 ```rust
-struct Engine<B: Backend<StdTensorOp>> {
+struct Engine<B: TensorBackend> {
     backend: B,
     compile_cache: CompileCache,
     einsum_cache: EinsumCache,
@@ -370,45 +367,49 @@ without `TracedTensor`.
 
 | Goal | What to implement |
 |---|---|
-| New scalar algebra for einsum (CPU) | `impl Operand for MyTensor` |
-| Custom GPU backend for custom algebra | `impl Backend<SemiringOp<MyTensor>> for MyGpuBackend` |
-| Custom CPU backend with optimized kernels | `impl Backend<SemiringOp<MyTensor>> for MyOptCpuBackend` |
+| New scalar algebra for einsum (CPU) | `impl TensorBackend for MyBackend` |
+| Custom GPU backend for custom algebra | `impl TensorBackend for MyGpuBackend` |
+| Custom CPU backend with optimized kernels | `impl TensorBackend for MyOptCpuBackend` |
 | Custom linalg kernel (standard algebra) | `engine.register_custom_call("name", kernel)` |
 | AD for custom algebra | Define own Op enum, impl `PrimitiveOp` (advanced) |
 
 The minimal extension path (CPU only):
 
-1. `impl Operand for MyTensor` — define semiring operations
+1. `impl TensorBackend for MyBackend` — define semiring operations and kernels
 2. Use `SemiringOp<MyTensor>` as the Op type
-3. Use `CpuSemiringBackend` — einsum + compile + eval work immediately
+3. Use your `MyBackend` — einsum + compile + eval work immediately
 
 Adding a GPU backend:
 
 1. Define `GpuMyTensor` — GPU-resident tensor type
-2. `impl Backend<SemiringOp<MyTensor>> for MyGpuBackend` — map each
-   `SemiringOpKind` to GPU kernels
+2. `impl TensorBackend for MyGpuBackend` — map each `SemiringOpKind` to GPU
+   kernels
 3. Use the same `CompiledProgram<SemiringOp<MyTensor>>` — graph construction
    and compilation are backend-agnostic
 
 ---
 
-## XI. Operand and TensorData Traits
+## XI. TensorBackend and TensorData Traits
 
-The previous single `Operand` trait is split into two concerns:
+The `Operand` trait has been **removed** from computegraph-rs entirely.
+Algebraic operations are now provided as free functions (`host_ops::typed_*`)
+and dispatched through `TensorBackend`.
 
-### Operand -- pure algebra
+### TensorBackend -- algebra + kernel dispatch
 
-`Operand` (defined in computegraph-rs) provides the algebraic operations
-needed for semiring evaluation (`zero`, `one`, `add`, `multiply`,
-`dot_general`, `reduce_sum`). These change meaning across different algebras.
+`TensorBackend` (defined in tenferro-tensor) is the unified trait for
+backend kernel dispatch. It provides algebraic operations (`batched_gemm`,
+`reduce_sum`, `elementwise_add`, `elementwise_mul`) and optional fast-path
+methods. Both `CpuBackend` and `CudaBackend` implement this trait in
+tenferro-tensor.
 
-Canonical definition: [`spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV).
+Canonical definition: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
 ### TensorData -- buffer access
 
-`TensorData` extends `Operand` with structural buffer access (`shape`,
-`strides`, `data`, `from_data`). Needed by backends and the execution engine
-but not part of the algebra.
+`TensorData` provides structural buffer access (`shape`, `data`,
+`from_data`). Needed by backends and the execution engine but not part of
+the algebra.
 
 Canonical definition: [`spec/tensor-semantics.md`](../spec/tensor-semantics.md).
 
@@ -416,8 +417,8 @@ Canonical definition: [`spec/tensor-semantics.md`](../spec/tensor-semantics.md).
 
 `transpose`, `reshape`, `broadcast_in_dim` are generic functions over
 `TensorData`. They are the same for all algebras and are provided by the
-framework. Custom algebra implementors only define algebraic operations plus
-buffer access.
+framework. Custom algebra implementors only define `TensorBackend` (kernel
+dispatch) plus `TensorData` (buffer access).
 
 ---
 
@@ -437,12 +438,17 @@ constraints.
 
 ### tenferro-tensor
 
-Simplified from v1. No AD-related code.
+Tensor runtime crate. No AD-related code.
 
-- `TensorData<T: Scalar>` — generic typed tensor (buffer, shape, strides)
-- `Tensor` — type-erased enum over `TensorData<f32/f64/c32/c64>`
+- `TypedTensor<T: Scalar>` — generic typed tensor (contiguous-only, no strides
+  field; the v2 compiler handles transpose optimization at IR level)
+- `Tensor` — type-erased enum over `TypedTensor<f32/f64/c32/c64>`
 - `DType` — scalar type discriminator
-- `impl Operand for Tensor`
+- `host_ops` — naive CPU kernels (free functions: `typed_add`, `typed_mul`, etc.)
+- `gpu_ops` — GPU kernels (feature-gated)
+- `TensorBackend` trait — unified backend kernel dispatch interface
+- `CpuBackend` — CPU backend (faer/BLAS/LAPACK)
+- `CudaBackend` — CUDA backend (feature-gated)
 
 ### tenferro-ops
 
@@ -450,9 +456,11 @@ The core crate:
 
 - `SemiringOpKind` enum (shared vocabulary, used only in `SemiringOp<T>`)
 - `SemiringOps` trait
-- `SemiringOp<T>` generic wrapper + `GraphOp` impl
-- `StdTensorOp` enum — **flat**, most variants mirror a StableHLO op 1:1 (documented exceptions: `Conj`, multi-output linalg)
-- `impl GraphOp for StdTensorOp`
+- `SemiringOp<T>` generic wrapper + `impl GraphOp` (graph construction only,
+  no eval — execution is dispatched through `TensorBackend`)
+- `StdTensorOp` enum — **flat**, most variants mirror a StableHLO op 1:1
+  (documented exceptions: `Conj`, multi-output linalg)
+- `impl GraphOp for StdTensorOp` (graph construction only, no eval)
 - `impl PrimitiveOp for StdTensorOp` (linearize + transpose_rule)
 - `impl SemiringOps for StdTensorOp` — maps to flat variants directly
 - `TensorInputKey` + `impl ADKey`
@@ -474,8 +482,8 @@ Depends on: computegraph-rs, tenferro-ops.
 Top-level facade:
 
 - `TracedTensor` (lazy graph-aware wrapper)
-- `Engine` (compilation cache, backend dispatch, einsum cache, custom_call
-  registry)
+- `Engine` (compilation cache, backend dispatch via `TensorBackend` from
+  tenferro-tensor, einsum cache, custom_call registry)
 - Public API: `einsum()`, `grad()`, `jvp()`, `eval()`, `eval_all()`
 - `Backend<Op>` trait
 - `StableHloProgram`, `StableHloOp`, `StableHloInstruction` (Rust IR)
@@ -488,16 +496,11 @@ Top-level facade:
   - Algebra-agnostic — same passes for standard and custom algebras
 - `ExecProgram`, `ExecOp`, `ExecInstruction`
 - Generic execution engine: `execute_exec()` — interprets `ExecProgram`,
-  dispatches to `SemiringCore`/`SemiringFastPath` trait methods
-- `SemiringCore<Alg>` trait — minimum kernel interface (batched_gemm, reduce_sum, ...)
-- `SemiringFastPath<Alg>` trait — optional fast-path operations (contract, fused ops)
+  dispatches to `TensorBackend` methods (from tenferro-tensor)
 - Standard backends:
-  - `CpuBackend` — StableHLO → optimizing compiler → ExecProgram →
-    generic engine → `SemiringCore<StandardAlgebra>` (faer/BLAS/LAPACK)
+  - `CpuBackend` (in tenferro-tensor) — StableHLO → optimizing compiler →
+    ExecProgram → generic engine → faer/BLAS/LAPACK
   - `XlaBackend` — StableHLO → XLA directly (unchanged)
-- Custom algebra backends:
-  - `CpuSemiringBackend<T>` — generic, implements `SemiringCore` via
-    `Operand` trait methods
 
 Depends on: all of the above + tidu-rs.
 
@@ -518,7 +521,7 @@ Depends on: all of the above + tidu-rs.
 
 - tenferro-ops: full StdTensorOp (DotGeneral, ReduceSum, BroadcastInDim, ...)
 - tenferro-ops: SemiringOp\<T\>, SemiringOps trait
-- tenferro-tensor: Tensor, DType, impl Operand
+- tenferro-tensor: Tensor, DType, TensorBackend, CpuBackend
 - tenferro-einsum: contraction path + Fragment construction
 - Tests: vector AD examples, einsum correctness
 
