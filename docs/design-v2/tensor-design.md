@@ -54,9 +54,11 @@ enum Buffer<T> {
 `Tensor` allows **arbitrary strides**, enabling zero-copy views for permute,
 slice, and reshape operations. Strided views avoid data movement in the
 high-level graph layer. Contiguous materialization happens at the **StableHLO IR
-entry point**: when the graph is lowered to StableHLO, all inputs are
-materialized into contiguous buffers. **Column-major (Fortran) layout** is the
-standard throughout the low-level IR and backend execution.
+entry point**: the lowering to StableHLO inserts explicit permute/copy ops at
+the program head for non-contiguous inputs, ensuring all tensor values within
+the StableHLO IR are dense and contiguous. Row-major input layout is a runtime
+error (future support possible). **Column-major (Fortran) layout** is the
+standard throughout the StableHLO IR, low-level IR, and backend execution.
 
 `TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
 and AD (see `tensor-api-pseudocode.md`).

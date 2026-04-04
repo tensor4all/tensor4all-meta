@@ -26,7 +26,7 @@ different senses. For readability, this document separates them explicitly:
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
 | StableHLO-compatible IR (high-level) | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Fragment`; the single cut point between graph/AD and backends |
-| Low-level IR (contiguous, column-major) | `BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `Copy` | output of the optimizing compiler; input to faer / custom backends |
+| Low-level IR (contiguous, column-major) | `BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `Copy`, `CustomCall` | output of the optimizing compiler; input to faer / custom backends |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, IREE module, faer routine | how an instruction is executed |
 
 This document uses **three orthogonal classifications**:
@@ -48,10 +48,15 @@ Important distinctions:
 - High-level linalg ops such as `SVD` and `Solve` may remain explicit graph
   primitives because they are meaningful semantic units, even though their
   derivative rules emit lower-level primitives.
-- `StdTensorOp` is **flat** (no `SemiringOpKind` wrapping). Every variant
-  mirrors a StableHLO op 1:1.
-- `Tensor` allows **arbitrary strides**. Contiguous materialization happens at
-  the boundary between StableHLO IR and low-level IR.
+- `StdTensorOp` is **flat** (no `SemiringOpKind` wrapping). Most variants
+  map 1:1 to a StableHLO op. Documented exceptions include composite
+  lowerings (e.g., `Conj` -> 4 ops: `real` + `imag` + `negate` + `complex`)
+  and multi-output linalg ops (e.g., `Svd` -> `custom_call` +
+  `get_tuple_element` x N).
+- `Tensor` allows **arbitrary strides** at the user level. Contiguous
+  materialization happens at the **entry point of the StableHLO IR**: the
+  lowering inserts explicit permute/copy ops at the program head for
+  non-contiguous inputs.
 
 Responsibility boundary:
 
@@ -129,11 +134,32 @@ stack and all backends.
   the optimizing compiler to produce low-level IR.
 
 The ops in this IR are exactly the canonical graph primitive vocabulary defined
-in Section IV. `StdTensorOp` is flat: every variant corresponds 1:1 to a
-StableHLO op.
+in Section IV. `StdTensorOp` is flat: most variants correspond 1:1 to a
+StableHLO op. Documented exceptions include composite lowerings (e.g., `Conj`
+-> 4 ops) and multi-output linalg ops (e.g., `Svd` -> `custom_call` +
+`get_tuple_element` x N).
 
-`Tensor` values at this level may have **arbitrary strides**. Stride
-normalization is the optimizing compiler's job, not the graph builder's.
+All tensor values within the StableHLO IR are contiguous and column-major.
+When a user `Tensor` with non-contiguous strides enters as a program input,
+the lowering inserts an explicit permute/copy at the head of the StableHLO
+program to materialize contiguous column-major layout. Row-major input layout
+is a runtime error (future support possible).
+
+When lowering from `CompiledProgram` to StableHLO IR, each program input
+that is not already contiguous column-major receives an explicit
+`stablehlo.transpose` or `stablehlo.reshape` + `stablehlo.copy` at the
+head of the program. This ensures that all tensor values within the
+StableHLO IR are dense and contiguous, matching real StableHLO semantics
+(which has no concept of strides). Row-major input layout is treated as
+a runtime error in the current design; future versions may support layout
+negotiation.
+
+The StableHLO-compatible IR is designed to be **actually serializable to
+StableHLO MLIR**. It is not merely "inspired by" StableHLO -- the IR uses
+the same op semantics, the same dimension numbering conventions, and the
+same layout model (dense, no strides). Standard dtypes (f32, f64, c32, c64)
+can be round-tripped through StableHLO serialization. Row-major layout is
+a runtime error; only column-major is supported.
 
 ### III.2 Optimizing compiler (algebra-agnostic passes)
 
@@ -144,7 +170,11 @@ sequence of algebra-agnostic passes:
 |------|---------|
 | **TransposeFolding** | Fold chains of `Transpose` + `DotGeneral` into a single instruction with permuted dimension numbers |
 | **DotDecomposer** | Break multi-contracting-dim `DotGeneral` into sequences that map to `BatchedGemm` |
-| **Contiguous materialization** | Insert explicit `Copy` instructions so that every operand entering a compute instruction is contiguous and column-major |
+| **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the low-level IR as-is |
+
+Note: contiguous materialization is **not** a compiler pass. It happens at the
+StableHLO IR entry point (see Section III.1), before the optimizing compiler
+runs. All tensors entering the compiler are already contiguous and column-major.
 
 These passes are **algebra-agnostic**: they operate on shape metadata and
 instruction structure, not on element values. They are shared by all non-XLA
@@ -163,6 +193,7 @@ column-major**.
 | `Permute(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Axis permutation; output is a fresh contiguous allocation |
 | `Reshape(shape)` | `x -> y: shape` | Reinterpret contiguous storage with a new shape |
 | `Copy` | `x -> y` | Materialize a contiguous column-major copy; identity on already-contiguous data |
+| `CustomCall { target, config }` | `inputs -> outputs` | Dispatch to a registered kernel (e.g., LAPACK routine for SVD/QR/Eigh/Solve). The optimizing compiler passes linalg `custom_call` ops through to the low-level IR as-is. |
 
 Structural ops (`Permute`, `Reshape`, `Copy`) are handled by **common
 infrastructure** shared across all backends. They are not part of the custom
@@ -212,9 +243,13 @@ IR instruction sequence and dispatches each instruction:
 
 1. Structural ops (`Permute`, `Reshape`, `Copy`) are executed by common
    infrastructure.
-2. For compute ops, the engine first checks `SemiringFastPath` for an
+2. `CustomCall` instructions are dispatched to a **registered kernel registry**.
+   The faer/CPU backend registers LAPACK routines (e.g., `dgesvd`, `dgeqrf` +
+   `dorgqr`, `dsyevd`); a GPU backend registers cuSOLVER equivalents. Unrecognized
+   targets are a runtime error.
+3. For compute ops, the engine first checks `SemiringFastPath` for an
    applicable pattern match.
-3. If no fast path fires, the engine falls back to `SemiringCore` methods.
+4. If no fast path fires, the engine falls back to `SemiringCore` methods.
 
 This design means a backend author can start with the minimum two-method
 contract and add fast paths incrementally as performance needs arise.

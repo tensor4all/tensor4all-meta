@@ -27,9 +27,9 @@ CompiledProgram (flat SSA of StableHLO-compatible IR)
   └── All other backends
         │
         │ optimizing compiler (TransposeFolding, DotDecomposer,
-        │                      contiguous materialization)
+        │                      LinalgCustomCallPassthrough)
         ▼
-      Low-level IR (BatchedGemm, ReduceSum, Permute, Reshape, Copy)
+      Low-level IR (BatchedGemm, ReduceSum, Permute, Reshape, Copy, CustomCall)
         │               all contiguous, column-major
         │
         │ generic execution engine
@@ -53,12 +53,17 @@ materialized graph compiled and evaluated through this pipeline.
 
 The **StableHLO-compatible IR** is the single cut point between graph/AD and
 all backends. It contains the full canonical graph primitive vocabulary
-(`StdTensorOp` variants, each mapping 1:1 to a StableHLO op). `Tensor`
-values at this level may have **arbitrary strides**.
+(`StdTensorOp` variants, most mapping 1:1 to a StableHLO op; exceptions
+include composite lowerings like `Conj` and multi-output linalg ops like
+`Svd`). All tensor values at this level are **contiguous and column-major**
+(contiguification happens at the StableHLO IR entry point).
 
 The **low-level IR** is the output of the optimizing compiler. All operands
 are contiguous and column-major. Its instruction set is small:
-`BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `Copy`.
+`BatchedGemm`, `ReduceSum`, `Permute`, `Reshape`, `Copy`, and
+`CustomCall { target, config }` (for linalg ops like SVD/QR/Eigh/Solve that
+are passed through from the StableHLO IR and dispatched to a registered
+kernel registry -- LAPACK for CPU, cuSOLVER for GPU).
 
 ```
                   StableHLO-compatible IR
@@ -222,7 +227,7 @@ ops needed for general-purpose dense differentiable programming.
 |-----------|-------------------|-------------|
 | `Cholesky` | Direct StableHLO op (`stablehlo.cholesky`) | LAPACK/cuSOLVER `potrf` |
 | `SVD` | `stablehlo.custom_call` | LAPACK/cuSOLVER `gesvd` |
-| `QR` | `stablehlo.custom_call` | LAPACK/cuSOLVER `geqrf` |
+| `QR` | `stablehlo.custom_call` | LAPACK/cuSOLVER `geqrf` + `orgqr` (or `ungqr` for complex) |
 | `Eigh` | `stablehlo.custom_call` | LAPACK/cuSOLVER `syevd` |
 | `Solve` | `stablehlo.custom_call` | LAPACK/cuSOLVER `getrf` + `getrs` |
 
@@ -275,12 +280,13 @@ implementing our faer backend.
 
 ## IV. StableHLO Lowering
 
-### Principle: 1:1 mapping
+### Principle: mostly 1:1 mapping
 
-Each `Instruction<Op>` in `CompiledProgram` maps to exactly one StableHLO op.
-No multi-op lowering, no pattern matching. `StdTensorOp` is flat — every
-variant maps directly to a StableHLO op with no `Semiring(SemiringOpKind::...)`
-wrapping. This keeps lowering trivial.
+Most `Instruction<Op>` variants in `CompiledProgram` map to exactly one
+StableHLO op. `StdTensorOp` is flat — no `Semiring(SemiringOpKind::...)`
+wrapping — which keeps lowering trivial. Documented exceptions include
+composite lowerings (e.g., `Conj` -> 4 ops) and multi-output linalg ops
+(e.g., `Svd` -> `custom_call` + `get_tuple_element` x N).
 
 ```rust
 fn lower_instruction(inst: &Instruction<StdTensorOp>) -> StableHloOp {
@@ -297,7 +303,7 @@ fn lower_instruction(inst: &Instruction<StdTensorOp>) -> StableHloOp {
         StdTensorOp::Exp => stablehlo::exponential(inst.inputs, inst.outputs),
         StdTensorOp::Cholesky => stablehlo::cholesky(inst.inputs, inst.outputs),
         StdTensorOp::Svd => stablehlo::custom_call("lapack_gesvd", inst.inputs, inst.outputs),
-        StdTensorOp::Qr => stablehlo::custom_call("lapack_geqrf", inst.inputs, inst.outputs),
+        StdTensorOp::Qr => stablehlo::custom_call("lapack_geqrf_orgqr", inst.inputs, inst.outputs),
         StdTensorOp::Eigh => stablehlo::custom_call("lapack_syevd", inst.inputs, inst.outputs),
         StdTensorOp::Solve => stablehlo::custom_call("lapack_getrf_getrs", inst.inputs, inst.outputs),
         // ...
@@ -321,7 +327,7 @@ fn lower_instruction(inst: &Instruction<StdTensorOp>) -> StableHloOp {
 |-----------|-------------------|
 | `Cholesky` | Direct StableHLO op (`stablehlo.cholesky`) |
 | `SVD` | `stablehlo.custom_call` (`"lapack_gesvd"` / `"cusolver_gesvd"`) |
-| `QR` | `stablehlo.custom_call` (`"lapack_geqrf"` / `"cusolver_geqrf"`) |
+| `QR` | `stablehlo.custom_call` (`"lapack_geqrf_orgqr"` / `"cusolver_geqrf_orgqr"`) |
 | `Eigh` | `stablehlo.custom_call` (`"lapack_syevd"` / `"cusolver_syevd"`) |
 | `Solve` | `stablehlo.custom_call` (`"lapack_getrf_getrs"` / `"cusolver_getrf_getrs"`) |
 
@@ -360,16 +366,17 @@ CompiledProgram<Op>  (StableHLO-compatible IR — the single cut point)
           │  optimizing compiler (algebra-agnostic passes)
           │    TransposeFolding  — fold Transpose into DotGeneral dim numbers
           │    DotDecomposer     — break multi-dim DotGeneral → BatchedGemm
-          │    Contiguous materialization — insert Copy for stride normalization
+          │    LinalgCustomCallPassthrough — pass linalg custom_call ops through
           │
           ▼
         Low-level IR (contiguous, column-major)
-          │  BatchedGemm, ReduceSum, Permute, Reshape, Copy
+          │  BatchedGemm, ReduceSum, Permute, Reshape, Copy, CustomCall
           │
           │  generic execution engine
           │    1. structural ops → common infrastructure
-          │    2. check SemiringFastPath (optional)
-          │    3. fall back to SemiringCore (required)
+          │    2. CustomCall → kernel registry (LAPACK / cuSOLVER)
+          │    3. check SemiringFastPath (optional)
+          │    4. fall back to SemiringCore (required)
           │
           ├── faer backend (Standard CPU, default)
           │     SemiringCore → faer::mat_mul / BLAS dgemm
@@ -397,7 +404,12 @@ a sequence of algebra-agnostic passes:
 |------|---------|
 | **TransposeFolding** | Fold chains of `Transpose` + `DotGeneral` into a single instruction with permuted dimension numbers |
 | **DotDecomposer** | Break multi-contracting-dim `DotGeneral` into sequences that map to `BatchedGemm` |
-| **Contiguous materialization** | Insert explicit `Copy` instructions so that every operand entering a compute instruction is contiguous and column-major |
+| **LinalgCustomCallPassthrough** | Pass linalg `CustomCall` ops through to the low-level IR as-is |
+
+Note: contiguous materialization is **not** a compiler pass. It happens at the
+StableHLO IR entry point: the lowering inserts explicit permute/copy ops at
+the program head for non-contiguous inputs. All tensors entering the compiler
+are already contiguous and column-major.
 
 These passes operate on shape metadata and instruction structure, not on
 element values. They are shared by all non-XLA backends (faer, custom GPU,
@@ -416,6 +428,7 @@ column-major**.
 | `Permute(perm)` | `x: [d0, ..., dn-1] -> y: [d_perm[0], ..., d_perm[n-1]]` | Axis permutation; output is a fresh contiguous allocation |
 | `Reshape(shape)` | `x -> y: shape` | Reinterpret contiguous storage with a new shape |
 | `Copy` | `x -> y` | Materialize a contiguous column-major copy; identity on already-contiguous data |
+| `CustomCall { target, config }` | `inputs -> outputs` | Dispatch to a registered kernel (e.g., LAPACK for SVD/QR/Eigh/Solve). Passed through from StableHLO IR by the optimizing compiler. |
 
 Structural ops (`Permute`, `Reshape`, `Copy`) are handled by **common
 infrastructure** shared across all backends. They are not part of the custom
@@ -455,9 +468,12 @@ IR instruction sequence and dispatches each instruction:
 
 1. Structural ops (`Permute`, `Reshape`, `Copy`) are executed by common
    infrastructure.
-2. For compute ops, the engine first checks `SemiringFastPath` for an
+2. `CustomCall` instructions are dispatched to a **registered kernel registry**.
+   The faer/CPU backend registers LAPACK routines; a GPU backend registers
+   cuSOLVER equivalents. Unrecognized targets are a runtime error.
+3. For compute ops, the engine first checks `SemiringFastPath` for an
    applicable pattern match.
-3. If no fast path fires, the engine falls back to `SemiringCore` methods.
+4. If no fast path fires, the engine falls back to `SemiringCore` methods.
 
 This design means a backend author can start with the minimum two-method
 contract and add fast paths incrementally as performance needs arise.
@@ -477,7 +493,8 @@ Type erasure happens **only at the XLA/StableHLO serialization boundary**.
 
 Interprets low-level IR instruction-by-instruction, dispatching each compute
 op through `SemiringCore` to the corresponding faer/BLAS routine. Linalg
-`custom_call` ops are dispatched to LAPACK routines. No XLA dependency.
+`CustomCall` instructions in the low-level IR are dispatched to LAPACK
+routines via a registered kernel registry. No XLA dependency.
 
 ```
 Low-level IR instruction  →   faer/BLAS dispatch
@@ -485,10 +502,10 @@ Low-level IR instruction  →   faer/BLAS dispatch
   ReduceSum               →   elementwise sum
   Permute/Reshape/Copy    →   common infrastructure (memory ops)
 
-Linalg custom_call        →   LAPACK dispatch
+CustomCall (low-level IR) →   LAPACK kernel registry dispatch
   Cholesky                →   dpotrf
   SVD                     →   dgesvd
-  QR                      →   dgeqrf
+  QR                      →   dgeqrf + dorgqr (or dungqr for complex)
   Eigh                    →   dsyevd
   Solve                   →   dgetrf + dgetrs
 ```
@@ -511,19 +528,24 @@ fusion optimization, not raw kernel performance.
 
 ### Memory layout: column-major throughout
 
-`Tensor` allows **arbitrary strides** at the StableHLO IR level. Operations
-like `Transpose`, `Slice`, `BroadcastInDim` are logical transformations, not
-memory operations. Strides are purely a `Tensor` runtime concern.
-
-The optimizing compiler's **contiguous materialization** pass inserts `Copy`
-instructions at the boundary between StableHLO IR and low-level IR, ensuring
-that every operand entering a compute instruction is contiguous and
-column-major. This is the stride normalization boundary.
+`Tensor` allows **arbitrary strides** at the user level (zero-copy views for
+permute, slice, reshape). However, contiguous materialization happens at the
+**StableHLO IR entry point**, not at the compiler boundary. When the graph is
+lowered to StableHLO IR, each program input that is not already contiguous
+column-major receives an explicit `stablehlo.transpose` or
+`stablehlo.reshape` + `stablehlo.copy` at the head of the program. This
+ensures that all tensor values within the StableHLO IR are dense and
+contiguous, matching real StableHLO semantics (which has no concept of
+strides). Row-major input layout is a runtime error (future support possible).
 
 ```
-StableHLO IR:     Tensor may have arbitrary strides
+User Tensor:      may have arbitrary strides
                           │
-                   contiguous materialization (optimizing compiler)
+               contiguous materialization (at StableHLO IR entry)
+                          │
+StableHLO IR:     all tensors contiguous, column-major
+                          │
+                   optimizing compiler (TransposeFolding, DotDecomposer, etc.)
                           │
 Low-level IR:     all operands contiguous, column-major
 ```
@@ -616,7 +638,7 @@ tenferro/
   │   ├── stablehlo/   StableHLO-compatible IR types + lowering
   │   ├── lowlevel/    Low-level IR types (BatchedGemm, ReduceSum, etc.)
   │   └── compiler/    Optimizing compiler passes
-  │                      TransposeFolding, DotDecomposer, contiguous materialization
+  │                      TransposeFolding, DotDecomposer, LinalgCustomCallPassthrough
   ├── engine/          Generic execution engine (walks low-level IR)
   ├── backend_cpu/     faer backend (SemiringCore impl, LAPACK dispatch)
   ├── backend_gpu/     Custom GPU backend (SemiringCore impl, CUDA kernels)
@@ -811,7 +833,8 @@ describes only the canonical public memory kind names.
 
 `Tensor` is the user-facing type-erased tensor. Internally it is an enum
 over concrete typed storage for each supported scalar type. `Tensor` allows
-**arbitrary strides** — contiguous materialization happens at the IR boundary,
+**arbitrary strides** — contiguous materialization happens at the StableHLO IR
+entry point (the lowering inserts explicit permute/copy at the program head),
 not at the tensor level.
 
 ```rust

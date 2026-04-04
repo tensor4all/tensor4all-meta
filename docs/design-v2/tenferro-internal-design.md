@@ -85,14 +85,15 @@ different `Operand` types, tenferro provides two Op types:
 
 ### StdTensorOp — standard algebra, full vocabulary, AD-capable
 
-StdTensorOp is **flat** — every variant maps 1:1 to a StableHLO op. There is
-no `Semiring(SemiringOpKind)` wrapper; the semiring-compatible operations
-(`Add`, `Mul`, `DotGeneral`, etc.) are top-level variants, making the
-StdTensorOp → StableHLO lowering a trivial match.
+StdTensorOp is **flat** — most variants map 1:1 to a StableHLO op (documented
+exceptions include composite lowerings like `Conj` -> 4 ops and multi-output
+linalg ops like `Svd`). There is no `Semiring(SemiringOpKind)` wrapper; the
+semiring-compatible operations (`Add`, `Mul`, `DotGeneral`, etc.) are top-level
+variants, making the StdTensorOp -> StableHLO lowering a trivial match.
 
 ```rust
 enum StdTensorOp {
-    // Tier 1: semiring-compatible core (flat, mirrors StableHLO 1:1)
+    // Tier 1: semiring-compatible core (flat, mostly mirrors StableHLO 1:1)
     Add, Mul, Neg, Conj,
     DotGeneral(DotGeneralConfig),
     Transpose { perm: Vec<usize> },
@@ -216,7 +217,8 @@ type TropicalOp = SemiringOp<TropicalTensor>;
 `SemiringOpKind` is the set of operations that all algebras must support.
 It is used **only** inside `SemiringOp<T>` — the generic custom-algebra op
 type. `StdTensorOp` does **not** wrap `SemiringOpKind`; it has its own flat
-variants that mirror StableHLO 1:1.
+variants that mostly mirror StableHLO 1:1 (with documented exceptions for
+composite lowerings and multi-output linalg ops).
 
 ```rust
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -415,7 +417,7 @@ Because `StdTensorOp` is flat (no `Semiring(...)` wrapper), most variants map
 | `ReduceSum { axes }` | `reduce { axes, combiner: add_region }` | 1:1 but combiner is a sub-computation in StableHLO |
 | `Conj` | `real` + `imag` + `negate` + `complex` | 1:4 composite |
 | `Svd` | `custom_call("gesvd")` + `get_tuple_element` x 3 | 1:4 |
-| `Qr` | `custom_call("geqrf")` + `get_tuple_element` x 2 | 1:3 |
+| `Qr` | `custom_call("geqrf_orgqr")` + `get_tuple_element` x 2 | 1:3 |
 | `Solve` | `custom_call("getrf")` + `custom_call("getrs")` | 1:2+ |
 
 ```rust
@@ -484,7 +486,7 @@ Operations that have no direct StableHLO op lower to `CustomCall`:
 | StdTensorOp | StableHLO | custom_call target |
 |---|---|---|
 | `Svd` | `CustomCall` | `"lapack_gesvd"` / `"cusolver_gesvd"` |
-| `Qr` | `CustomCall` | `"lapack_geqrf"` / `"cusolver_geqrf"` |
+| `Qr` | `CustomCall` | `"lapack_geqrf_orgqr"` / `"cusolver_geqrf_orgqr"` |
 | `Cholesky` | `stablehlo.cholesky` | (direct op, not custom_call) |
 | `Eigh` | `CustomCall` | `"lapack_syevd"` / `"cusolver_syevd"` |
 | `Solve` | `CustomCall` | `"lapack_getrf"` + `"lapack_getrs"` |
@@ -516,15 +518,19 @@ Optimization passes:
 - **TransposeFolding**: eliminate or fuse adjacent `Transpose` instructions
 - **DotDecomposer**: decompose complex `DotGeneral` configurations into
   sequences of simpler operations (permute + batched GEMM)
-- **Contiguous materialization**: insert `Copy` instructions where needed to
-  ensure all operands satisfy column-major contiguity requirements
+- **LinalgCustomCallPassthrough**: pass linalg `CustomCall` ops through to the
+  low-level IR as-is
+
+Note: contiguous materialization is **not** a compiler pass. It happens at the
+StableHLO IR entry point: the lowering inserts explicit permute/copy ops at
+the program head for non-contiguous inputs. All tensors entering the compiler
+are already contiguous and column-major.
 
 ```rust
 fn compile_to_lowlevel(hlo: &StableHloProgram) -> LowLevelProgram {
     let hlo = transpose_folding(hlo);
     let hlo = dot_decomposer(&hlo);
-    let ll = lower_to_lowlevel(&hlo);      // StableHLO → LowLevelOp
-    let ll = contiguous_materialization(ll); // insert Copy where needed
+    let ll = lower_to_lowlevel(&hlo);      // StableHLO → LowLevelOp (including CustomCall passthrough)
     ll
 }
 ```
@@ -544,6 +550,7 @@ enum LowLevelOp {
     Copy,
     ElementwiseMul,
     ElementwiseAdd,
+    CustomCall { target: String, config: Vec<u8> },
 }
 
 struct LowLevelInstruction {
@@ -594,6 +601,8 @@ fn execute_lowlevel<Alg: Semiring, B: SemiringCore<Alg>>(
                 backend.reshape(shape, ...),
             LowLevelOp::Copy =>
                 backend.copy(...),
+            LowLevelOp::CustomCall { target, config } =>
+                backend.dispatch_custom_call(target, config, ...),
         }
     }
     // ... collect outputs from slots ...
@@ -969,7 +978,7 @@ The core crate:
 - `SemiringOpKind` enum (shared vocabulary, used only in `SemiringOp<T>`)
 - `SemiringOps` trait
 - `SemiringOp<T>` generic wrapper + `GraphOp` impl
-- `StdTensorOp` enum — **flat**, every variant mirrors a StableHLO op 1:1
+- `StdTensorOp` enum — **flat**, most variants mirror a StableHLO op 1:1 (documented exceptions: `Conj`, multi-output linalg)
 - `impl GraphOp for StdTensorOp`
 - `impl PrimitiveOp for StdTensorOp` (linearize + transpose_rule)
 - `impl SemiringOps for StdTensorOp` — maps to flat variants directly
@@ -1002,7 +1011,7 @@ Top-level facade:
 - `lower_semiring_to_stablehlo()` (`CompiledProgram<SemiringOp<T>>` →
   `StableHloProgram`)
 - Optimizing compiler: `compile_to_lowlevel()` (StableHLO → `LowLevelProgram`)
-  - TransposeFolding, DotDecomposer, contiguous materialization passes
+  - TransposeFolding, DotDecomposer, LinalgCustomCallPassthrough passes
   - Algebra-agnostic — same passes for standard and custom algebras
 - `LowLevelProgram`, `LowLevelOp`, `LowLevelInstruction`
 - Generic execution engine: `execute_lowlevel()` — interprets `LowLevelProgram`,
