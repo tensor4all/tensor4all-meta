@@ -522,11 +522,13 @@ Optimization passes:
   low-level IR as-is
 
 Note: input contiguity checking is **not** a compiler pass. It happens at
-eval() time as a runtime pre-processing step: contiguous data (including
-permuted views) is passed as-is with zero copy; only truly non-contiguous
-data (memory gaps) is physically copied. No StableHLO ops are inserted for
-input normalization. The execution engine is stride-aware and handles
-permuted inputs at dispatch time.
+eval() time as a runtime pre-processing step handled by each backend path.
+For the low-level IR engine (faer, custom algebra): contiguous data
+(including permuted views) is passed as-is with zero copy; the engine is
+stride-aware and handles permuted inputs at dispatch time. For the XLA
+backend: inputs are always copied to column-major contiguous before upload
+(XLA has no stride concept). In both paths, no StableHLO ops are inserted
+for input normalization.
 
 ```rust
 fn compile_to_lowlevel(hlo: &StableHloProgram) -> LowLevelProgram {

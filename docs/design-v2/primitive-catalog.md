@@ -146,9 +146,9 @@ StableHLO op. Documented exceptions include composite lowerings (e.g., `Conj`
 -> 4 ops) and multi-output linalg ops (e.g., `Svd` -> `custom_call` +
 `get_tuple_element` x N).
 
-Input layout normalization is a pure runtime concern handled by the execution
-engine, not an IR transformation. The StableHLO program is layout-independent.
-The compile cache needs no layout signature in its key.
+Input layout normalization is not embedded in the IR. It is handled at
+runtime by each backend path. The StableHLO program is layout-independent,
+and the compile cache needs no layout signature in its key.
 
 The input contract differs by backend:
 
