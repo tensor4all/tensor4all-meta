@@ -134,4 +134,4 @@ Higher-order AD requires `resolve` (logical), not `materialize_merge`
 - **1 fact, 1 owner**: each normative fact lives in exactly one spec/ document
 - **Link, don't re-state**: architecture/ and examples/ reference spec/ tables, never duplicate them
 - **Pseudocode is illustrative**: code examples in architecture/ are non-normative unless explicitly marked as spec
-- **Normative trait signatures**: live only in spec/primitive-catalog.md (for IR ops and backend traits) and spec/ad-contract.md (for AD traits)
+- **Normative trait signatures**: spec/primitive-catalog.md (Tenferro IR ops, `Operand`, `GraphOp`), spec/backend-contract.md (backend traits: `SemiringCore`, `SemiringFastPath`), spec/ad-contract.md (AD traits: `PrimitiveOp`)

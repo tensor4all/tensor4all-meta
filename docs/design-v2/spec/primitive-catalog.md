@@ -169,7 +169,46 @@ Key relationships:
 
 ---
 
-## IV. Tenferro IR Vocabulary
+## IV. Core Traits (canonical signatures)
+
+### GraphOp
+
+`GraphOp` is the operation node trait. computegraph-rs is fully generic over
+it and never references specific primitives.
+
+```rust
+trait GraphOp: Clone + Debug + Hash + Eq + Send + Sync + 'static {
+    type Operand: Operand;
+    type Context;
+    type InputKey: Clone + Debug + Hash + Eq + Send + Sync + 'static;
+
+    fn n_inputs(&self) -> usize;
+    fn n_outputs(&self) -> usize;
+    fn eval(&self, ctx: &mut Self::Context, inputs: &[&Self::Operand]) -> Vec<Self::Operand>;
+}
+```
+
+### Operand
+
+`Operand` is the runtime value type. Algebraic methods only — structural
+operations (`transpose`, `reshape`, `broadcast_in_dim`) live in `TensorData`
+(see [`tensor-semantics.md`](tensor-semantics.md)).
+
+```rust
+trait Operand: Clone + Send + Sync + 'static {
+    fn zero(shape: &[usize]) -> Self;
+    fn one(shape: &[usize]) -> Self;
+    fn add(&self, other: &Self) -> Self;
+    fn multiply(&self, other: &Self) -> Self;
+    fn dot_general(&self, other: &Self, config: &DotGeneralConfig) -> Self;
+    fn reduce_sum(&self, axes: &[usize]) -> Self;
+    fn conj(&self) -> Self;
+}
+```
+
+---
+
+## V. Tenferro IR Vocabulary
 
 This section is about the graph-level vocabulary that `computegraph-rs`,
 `chainrules-rs`, `tidu-rs`, and tenferro's `StdTensorOp` layer talk about.

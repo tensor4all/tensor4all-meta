@@ -902,40 +902,14 @@ See `../examples/tensor-api-pseudocode.md` for full usage examples.
 
 ### Operand and TensorData traits
 
-The `Operand` trait and `TensorData` trait are **separate concerns**:
+`Operand` (pure algebra) and `TensorData` (buffer access) are separate
+concerns. Canonical signatures:
+- `Operand`: [`primitive-catalog.md` Section IV](primitive-catalog.md)
+- `TensorData`: [`tensor-semantics.md`](tensor-semantics.md)
 
-- **`Operand`** — pure algebra: the methods a tensor type needs for
-  semiring-compatible computation (add, multiply, dot_general, reduce_sum).
-  This is what the graph/AD stack and einsum are generic over.
-- **`TensorData`** — buffer access: shape, strides, raw data access,
-  construction from data. This is what the backend infrastructure uses
-  for structural ops (permute, reshape, copy).
-
-```rust
-/// Pure algebra — what einsum and AD are generic over
-trait Operand {
-    fn zero(shape: &[usize]) -> Self;
-    fn one(shape: &[usize]) -> Self;
-    fn add(&self, other: &Self) -> Self;
-    fn multiply(&self, other: &Self) -> Self;
-    fn dot_general(&self, other: &Self, config: &DotGeneralConfig) -> Self;
-    fn reduce_sum(&self, axes: &[usize]) -> Self;
-}
-
-/// Buffer access — what backends use for structural ops
-trait TensorData {
-    type Scalar;
-    fn shape(&self) -> &[usize];
-    fn strides(&self) -> &[isize];
-    fn data(&self) -> &[Self::Scalar];
-    fn from_data(shape: Vec<usize>, data: Vec<Self::Scalar>) -> Self;
-}
-```
-
-`Tensor` implements both. Custom algebra types (e.g., `TropicalTensor`)
-implement both. The split means the graph/AD stack never needs to know
-about buffer layout, and the backend structural-op infrastructure never
-needs to know about algebra.
+`Tensor` and custom algebra types implement both. The split means the
+graph/AD stack never needs to know about buffer layout, and the backend
+infrastructure never needs to know about algebra.
 
 ---
 
