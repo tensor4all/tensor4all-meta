@@ -337,7 +337,11 @@ All other backends go through the optimizing compiler to produce a
 backend traits.
 
 For custom algebras (`SemiringOp<T>`), the same 2-level structure applies:
-`SemiringOp<T>` lowers to StableHLO, then to `ExecProgram`.
+`SemiringOp<T>` lowers to the same `StableHloOp` types, then to `ExecProgram`.
+**Note:** for custom algebra, the ops have semiring-specific semantics (Add=⊕,
+Mul=⊗). This IR is **not** serializable to StableHLO MLIR — the XLA path is
+not available. Custom algebra always goes through the optimizing compiler →
+Execution IR → stride-aware engine path.
 
 ### StableHLO IR representation
 
@@ -451,8 +455,9 @@ fn lower_instruction(inst: &Instruction<StdTensorOp>) -> Vec<StableHloInstructio
 
 #### SemiringOp\<T\> lowering
 
-`SemiringOp<T>` also lowers to StableHLO. The mapping is through
-`SemiringOpKind`:
+`SemiringOp<T>` lowers to the same `StableHloOp` types (same IR structure,
+but ops have semiring-specific semantics — not MLIR-serializable). The
+mapping is through `SemiringOpKind`:
 
 ```rust
 fn lower_semiring_instruction<T: Operand>(
@@ -629,9 +634,13 @@ fn execute_exec<Alg: Semiring, B: SemiringCore<Alg>>(
             ExecOp::ReduceSum { axes } =>
                 backend.reduce_sum(axes, ...),
 
-            // Elementwise — standard kernel dispatch
-            ExecOp::Add | ExecOp::Mul | ExecOp::Neg |
-            ExecOp::Div | ExecOp::Abs | ... =>
+            // Semiring elementwise — algebra-dependent dispatch
+            ExecOp::Add => dispatch_semiring_add(backend, ...),
+            ExecOp::Mul => dispatch_semiring_mul(backend, ...),
+            // (standard → faer kernel; custom → Operand::add()/multiply())
+
+            // Elementwise — standard kernel; standard algebra only
+            ExecOp::Neg | ExecOp::Div | ExecOp::Abs | ... =>
                 dispatch_elementwise(&inst.op, ...),
 
             // Analytic — standard kernel dispatch (libm/faer)

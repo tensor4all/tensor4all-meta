@@ -55,12 +55,16 @@ materialized graph compiled and evaluated through this pipeline.
 ### 2-level IR architecture
 
 The **StableHLO IR** is the single cut point between graph/AD and
-all backends. It contains the full Tenferro IR vocabulary
-(`StdTensorOp` variants, most mapping 1:1 to a StableHLO op; exceptions
-include composite lowerings like `Conj` and multi-output linalg ops like
-`Svd`). The StableHLO program is **layout-independent** -- input layout
-normalization is a pure runtime concern handled by the execution engine, not
-an IR transformation.
+all backends. For **standard algebra**, it contains the full Tenferro IR
+vocabulary (`StdTensorOp` variants, most mapping 1:1 to a StableHLO op;
+exceptions include composite lowerings like `Conj` and multi-output linalg
+ops like `Svd`). This IR is serializable to StableHLO MLIR; XLA takes it
+directly. For **custom algebra**, the same `StableHloOp` types are used but
+ops have semiring-specific semantics (Add=⊕, Mul=⊗) — this IR is **not**
+serializable to StableHLO MLIR and always goes through the optimizing
+compiler → Execution IR path. The StableHLO program is
+**layout-independent** -- input layout normalization is a pure runtime
+concern handled by the execution engine, not an IR transformation.
 
 The **Execution IR** is the output of the optimizing compiler. Input operands
 may be contiguous with arbitrary axis ordering; the engine inspects strides at
@@ -381,12 +385,13 @@ CompiledProgram<Op>  (StableHLO IR — the single cut point)
           │
           │  generic execution engine
           │    1. structural ops (Permute, Reshape, BroadcastInDim) → common infrastructure
-          │    2. elementwise (Add, Mul, Exp, Log, ...) → standard kernels (faer/libm)
-          │    3. comparison/selection (Compare, Select, Clamp) → standard kernels
-          │    4. indexing (Gather, Scatter, Slice, ...) → standard kernels
-          │    5. additional reductions (ReduceProd, ReduceMax, ReduceMin) → standard kernels
-          │    6. CustomCall, Cholesky → kernel registry (LAPACK / cuSOLVER)
-          │    7. BatchedGemm, ReduceSum → check SemiringFastPath, fall back to SemiringCore
+          │    2. semiring elementwise (Add, Mul) → algebra-dependent: standard kernel OR Operand::add()/multiply()
+          │    3. semiring ops (BatchedGemm, ReduceSum) → check SemiringFastPath, fall back to SemiringCore
+          │    4. elementwise (Neg, Div, Exp, Log, ...) → standard kernels (faer/libm)
+          │    5. comparison/selection (Compare, Select, Clamp) → standard kernels
+          │    6. indexing (Gather, Scatter, Slice, ...) → standard kernels
+          │    7. additional reductions (ReduceProd, ReduceMax, ReduceMin) → standard kernels
+          │    8. CustomCall, Cholesky → kernel registry (LAPACK / cuSOLVER)
           │
           ├── faer backend (Standard CPU, default)
           │     SemiringCore → faer::mat_mul / BLAS dgemm
@@ -445,7 +450,8 @@ else is executed as-is.
 |----------|-----|----------------|
 | Semiring contraction | `BatchedGemm` | `SemiringCore::batched_gemm()` |
 | Semiring reduction | `ReduceSum` | `SemiringCore::reduce_sum()` |
-| Elementwise arithmetic | `Add`, `Mul`, `Neg`, `Conj`, `Div`, `Abs`, `Sign`, `Maximum`, `Minimum` | Standard kernel (faer) |
+| Semiring elementwise | `Add`, `Mul` | Algebra-dependent: standard kernel for standard algebra, `Operand::add()`/`multiply()` for custom algebra |
+| Elementwise arithmetic | `Neg`, `Conj`, `Div`, `Abs`, `Sign`, `Maximum`, `Minimum` | Standard kernel (faer) |
 | Elementwise analytic | `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Pow`, `Expm1`, `Log1p` | Standard kernel |
 | Comparison & selection | `Compare`, `Select`, `Clamp` | Standard kernel |
 | Additional reductions | `ReduceProd`, `ReduceMax`, `ReduceMin` | Standard kernel |
@@ -761,12 +767,17 @@ Custom algebra backends receive **Execution IR** (after the optimizing
 compiler), not StableHLO IR directly. They implement `SemiringCore`:
 
 ```rust
-trait SemiringCore {
-    type Operand;
-    fn batched_gemm(&self, lhs: &Self::Operand, rhs: &Self::Operand) -> Self::Operand;
-    fn reduce_sum(&self, x: &Self::Operand, axes: &[usize]) -> Self::Operand;
+trait SemiringCore<Alg: Semiring> {
+    type Buffer;
+    fn batched_gemm(
+        &self, batch_dims: &[usize], m: usize, n: usize, k: usize,
+        a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer,
+    );
+    fn reduce_sum(&self, axes: &[usize], input: &Self::Buffer, out: &mut Self::Buffer);
 }
 ```
+
+This is the canonical signature (see also `tenferro-internal-design.md`).
 
 The generic execution engine handles the dispatch loop, using liveness
 annotations for buffer management (see "Buffer lifecycle" above):
@@ -809,9 +820,13 @@ fn eval_exec_ir<B: SemiringCore>(
                 backend.reduce_sum(&input, axes, pool)
             }
 
-            // Elementwise — standard kernel (faer)
-            ExecOp::Add | ExecOp::Mul | ExecOp::Neg |
-            ExecOp::Div | ExecOp::Abs | ExecOp::Sign |
+            // Semiring elementwise — algebra-dependent dispatch
+            ExecOp::Add => dispatch_semiring_add(backend, &inst, &mut slots, pool),
+            ExecOp::Mul => dispatch_semiring_mul(backend, &inst, &mut slots, pool),
+            // (standard algebra → faer kernel; custom algebra → Operand::add()/multiply())
+
+            // Elementwise — standard kernel (faer); standard algebra only
+            ExecOp::Neg | ExecOp::Div | ExecOp::Abs | ExecOp::Sign |
             ExecOp::Maximum | ExecOp::Minimum | ... =>
                 dispatch_elementwise(&inst.op, &inst, &mut slots, pool),
 
