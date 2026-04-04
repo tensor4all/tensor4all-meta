@@ -130,135 +130,16 @@ implementations to support any einsum-derived program.
 
 ## II. Primitive Vocabulary
 
-This section summarizes the concrete `StdTensorOp` vocabulary that tenferro is
-expected to lower and execute.
+**Owner:** [`primitive-catalog.md`](primitive-catalog.md) is the sole source
+of truth for the Tenferro IR vocabulary, StableHLO lowering rules, Execution
+IR dispatch categories, and backend trait contracts.
 
-For exact per-op definitions, shape contracts, and frontend aliases, see
-[`primitive-catalog.md`](primitive-catalog.md).
-
-`primitive-catalog.md` is the source of truth for what tenferro v2 is expected
-to implement.
-
-For StableHLO-side naming and the full current StableHLO op inventory, see
-[`stablehlo-primitives.md`](../reference/stablehlo-primitives.md).
-
-For a reference point on how JAX organizes tensor, control-flow, linalg, and
-AD helper primitives, see [`jax-primitives.md`](../reference/jax-primitives.md).
-
-Important distinction:
-
-- `einsum`, `sum`, `mean`, `where`, `greater`, and similar names are
-  **surface-level APIs** or aliases
-- `DotGeneral`, `ReduceSum`, `Select`, `Compare`, and similar names are the
-  **Tenferro IR primitives**
-
-`primitive-catalog.md` also separates:
-
-- backend-facing semiring execution subsets for einsum
-- Tenferro IR primitives for AD / StableHLO lowering
-
-### AD-closed graph core
-
-This is the smallest graph-level primitive set needed for explicit tensor
-linearization, transpose rules, and StableHLO-aligned contraction-based
-execution.
-
-| Primitive | Inputs | StableHLO equivalent |
-|-----------|--------|---------------------|
-| `Add` | 2 | `stablehlo.add` |
-| `Mul` | 2 | `stablehlo.multiply` |
-| `Neg` | 1 | `stablehlo.negate` |
-| `Conj` | 1 | custom/simple elementwise lowering |
-| `DotGeneral` | 2 | `stablehlo.dot_general` |
-| `ReduceSum` | 1 | `stablehlo.reduce` (sum) |
-| `Transpose` | 1 | `stablehlo.transpose` |
-| `Reshape` | 1 | `stablehlo.reshape` |
-| `BroadcastInDim` | 1 | `stablehlo.broadcast_in_dim` |
-
-`einsum` is intentionally not listed as a primitive here. The user-facing
-einsum API is lowered into `DotGeneral` plus shape and reduction primitives.
-
-### Standard arithmetic only
-
-This extends the AD-closed graph core with the standard arithmetic and indexing
-ops needed for general-purpose dense differentiable programming.
-
-**Arithmetic & comparison:**
-
-| Primitive | StableHLO |
-|-----------|-----------|
-| `Div` | `stablehlo.divide` |
-| `Abs` | `stablehlo.abs` |
-| `Sign` | `stablehlo.sign` |
-| `Maximum` | `stablehlo.maximum` |
-| `Minimum` | `stablehlo.minimum` |
-| `Compare(dir)` | `stablehlo.compare` |
-| `Select` | `stablehlo.select` |
-| `Clamp` | `stablehlo.clamp` |
-
-**Transcendental:**
-
-| Primitive | StableHLO |
-|-----------|-----------|
-| `Exp` | `stablehlo.exponential` |
-| `Log` | `stablehlo.log` |
-| `Sin` | `stablehlo.sine` |
-| `Cos` | `stablehlo.cosine` |
-| `Tanh` | `stablehlo.tanh` |
-| `Sqrt` | `stablehlo.sqrt` |
-| `Rsqrt` | `stablehlo.rsqrt` |
-| `Pow` | `stablehlo.power` |
-| `Expm1` | `stablehlo.exponential_minus_one` |
-| `Log1p` | `stablehlo.log_plus_one` |
-
-**Indexing & Structure:**
-
-| Primitive | StableHLO |
-|-----------|-----------|
-| `Gather` | `stablehlo.gather` |
-| `Scatter` | `stablehlo.scatter` |
-| `Slice` | `stablehlo.slice` |
-| `DynamicSlice` | `stablehlo.dynamic_slice` |
-| `Pad` | `stablehlo.pad` |
-| `Concatenate` | `stablehlo.concatenate` |
-| `Reverse` | `stablehlo.reverse` |
-
-**Reduction:**
-
-| Primitive | StableHLO |
-|-----------|-----------|
-| `ReduceSum` | `stablehlo.reduce` (add) |
-| `ReduceProd` | `stablehlo.reduce` (multiply) |
-| `ReduceMax` | `stablehlo.reduce` (max) |
-| `ReduceMin` | `stablehlo.reduce` (min) |
-
-**Linalg:**
-
-| Primitive | StableHLO lowering | Backend call |
-|-----------|-------------------|-------------|
-| `Cholesky` | Direct StableHLO op (`stablehlo.cholesky`) | LAPACK/cuSOLVER `potrf` |
-| `SVD` | `stablehlo.custom_call` | LAPACK/cuSOLVER `gesvd` |
-| `QR` | `stablehlo.custom_call` | LAPACK/cuSOLVER `geqrf` + `orgqr` (or `ungqr` for complex) |
-| `Eigh` | `stablehlo.custom_call` | LAPACK/cuSOLVER `syevd` |
-| `Solve` | `stablehlo.custom_call` | LAPACK/cuSOLVER `getrf` + `getrs` |
-
-Cholesky has a direct StableHLO op. All other linalg ops map to
-`stablehlo.custom_call` with a target name. The backend dispatches to
-the appropriate LAPACK/cuSOLVER routine.
-
-**Control flow (future):**
-
-| Primitive | StableHLO |
-|-----------|-----------|
-| `Cond` | `stablehlo.if` |
-| `Scan` | `stablehlo.while` (unrolled or looped) |
-| `While` | `stablehlo.while` |
-
-### Implementation target
-
-The primitive implementation target itself is not redefined here. Use
-[`primitive-catalog.md`](primitive-catalog.md) as the canonical list, and treat
-this document as the backend/lowering view of that same inventory.
+This document does not re-state op tables. See primitive-catalog.md for:
+- Tenferro IR vocabulary (Section IV)
+- StableHLO lowering rules (Section VI)
+- Execution IR dispatch categories (Section III.3)
+- Backend trait contracts: `SemiringCore`, `SemiringFastPath` (Section III.4)
+- Frontend sugar and canonical lowering (Section VII)
 
 ---
 
@@ -334,21 +215,10 @@ fn lower_instruction(inst: &Instruction<StdTensorOp>) -> StableHloOp {
 
 ### Linalg lowering
 
-| Linalg op | StableHLO lowering |
-|-----------|-------------------|
-| `Cholesky` | Direct StableHLO op (`stablehlo.cholesky`) |
-| `SVD` | `stablehlo.custom_call` (`"lapack_gesvd"` / `"cusolver_gesvd"`) |
-| `QR` | `stablehlo.custom_call` (`"lapack_geqrf_orgqr"` / `"cusolver_geqrf_orgqr"`) |
-| `Eigh` | `stablehlo.custom_call` (`"lapack_syevd"` / `"cusolver_syevd"`) |
-| `Solve` | `stablehlo.custom_call` (`"lapack_getrf_getrs"` / `"cusolver_getrf_getrs"`) |
-
-Cholesky has a direct StableHLO op. All other linalg ops map to
-`stablehlo.custom_call` with target names matching JAX/XLA conventions
-for LAPACK/cuSOLVER dispatch.
-
-JVP rules for linalg ops are expressed in Tier 1 + Tier 2 primitives
-(matmul, add, div, etc.) — these DO map to StableHLO. So the JVP
-computation is fully compilable even though the primal may be a custom_call.
+See [`primitive-catalog.md` Section V](primitive-catalog.md) for the linalg
+primitive table and StableHLO lowering rules. Key point: `Cholesky` is a
+direct StableHLO op; all others (`SVD`, `QR`, `Eigh`, `Solve`) lower to
+`stablehlo.custom_call`.
 
 ---
 
@@ -497,21 +367,22 @@ and execute them as one fused operation.
 The generic execution engine is a simple interpreter that walks the Execution
 IR instruction sequence and dispatches each instruction:
 
-1. **Structural ops** (`Permute`, `Reshape`, `BroadcastInDim`) are executed by
-   common infrastructure.
-2. **Elementwise ops** (`Add`, `Mul`, `Neg`, `Div`, `Abs`, `Exp`, `Log`, etc.),
+1. **Structural ops** (`Permute`, `Reshape`, `BroadcastInDim`) → common
+   infrastructure.
+2. **Semiring elementwise** (`Add`, `Mul`) → algebra-dependent: standard
+   kernel for standard algebra, `Operand::add()`/`multiply()` for custom.
+3. **Semiring contraction/reduction** (`BatchedGemm`, `ReduceSum`) →
+   engine's `prepare` step inspects input strides, then dispatches via
+   `SemiringFastPath` (if available) or `SemiringCore`.
+4. **Standard elementwise** (`Neg`, `Div`, `Abs`, `Exp`, `Log`, etc.),
    **comparison/selection** (`Compare`, `Select`, `Clamp`), **additional
-   reductions** (`ReduceProd`, `ReduceMax`, `ReduceMin`), and **indexing ops**
-   (`Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`, `Concatenate`,
-   `Reverse`) are dispatched to standard kernels (faer/libm).
-3. **Linalg / extensibility**: `CustomCall` and `Cholesky` instructions are
-   dispatched to a **registered kernel registry**. The faer/CPU backend
-   registers LAPACK routines; a GPU backend registers cuSOLVER equivalents.
-   Unrecognized targets are a runtime error.
-4. For **semiring ops** (`BatchedGemm`, `ReduceSum`), the engine's `prepare`
-   step inspects input strides before dispatching. For `BatchedGemm`, this
-   uses v1's `prepare_one_operand` approach: fusability check on dimension
-   groups, BLAS trans flags for transposed inputs.
+   reductions** (`ReduceProd`, `ReduceMax`, `ReduceMin`), and **indexing**
+   (`Gather`, `Scatter`, `Slice`, etc.) → standard kernels (faer/libm).
+5. **Linalg / extensibility** (`CustomCall`, `Cholesky`) → registered
+   kernel registry (LAPACK/cuSOLVER).
+
+For the full dispatch table, see
+[`primitive-catalog.md`](primitive-catalog.md#iii3-execution-ir).
 5. The engine first checks `SemiringFastPath` for an applicable pattern match.
 6. If no fast path fires, the engine falls back to `SemiringCore` methods.
 
@@ -764,20 +635,8 @@ tenferro/
 ### Custom algebra backend (Tropical / custom algebra)
 
 Custom algebra backends receive **Execution IR** (after the optimizing
-compiler), not StableHLO IR directly. They implement `SemiringCore`:
-
-```rust
-trait SemiringCore<Alg: Semiring> {
-    type Buffer;
-    fn batched_gemm(
-        &self, batch_dims: &[usize], m: usize, n: usize, k: usize,
-        a: &Self::Buffer, b: &Self::Buffer, out: &mut Self::Buffer,
-    );
-    fn reduce_sum(&self, axes: &[usize], input: &Self::Buffer, out: &mut Self::Buffer);
-}
-```
-
-This is the canonical signature (see also `../architecture/tenferro-crates.md`).
+compiler), not StableHLO IR directly. They implement `SemiringCore` (canonical
+signature in [`primitive-catalog.md` Section III.4](primitive-catalog.md)).
 
 The generic execution engine handles the dispatch loop, using liveness
 annotations for buffer management (see "Buffer lifecycle" above):
