@@ -146,20 +146,28 @@ StableHLO op. Documented exceptions include composite lowerings (e.g., `Conj`
 -> 4 ops) and multi-output linalg ops (e.g., `Svd` -> `custom_call` +
 `get_tuple_element` x N).
 
-All tensor inputs are passed to the StableHLO program as-is. Input layout
-normalization is a pure runtime concern handled by the execution engine,
-not an IR transformation. The StableHLO program is layout-independent.
-At eval() time, input pre-processing checks memory contiguity:
+Input layout normalization is a pure runtime concern handled by the execution
+engine, not an IR transformation. The StableHLO program is layout-independent.
+The compile cache needs no layout signature in its key.
+
+The input contract differs by backend:
+
+**Low-level IR engine (faer, custom algebra):**
 
 1. **Contiguous data** (including permuted-contiguous views from
    `tensor.permute()` or `.t()`, and contiguous slices): passed as-is with
-   zero copy. The strides are preserved.
+   zero copy. The engine is stride-aware (BLAS trans flags, fusability checks).
 2. **Non-contiguous data** (memory gaps from slicing): physically copied to
    a contiguous buffer before execution.
 
-No StableHLO ops are inserted for input normalization. The compile cache is
-layout-independent -- the same StableHLO program is used regardless of input
-strides.
+**XLA backend:**
+
+XLA accepts only dense contiguous buffers (no stride concept). The XLA
+backend always copies to column-major contiguous before uploading. The extra
+host-side reorder is negligible because XLA is primarily for GPU, where
+host→device transfer dominates.
+
+No StableHLO ops are inserted for input normalization in either path.
 
 The StableHLO-compatible IR is designed to be **actually serializable to
 StableHLO MLIR**. It is not merely "inspired by" StableHLO -- the IR uses

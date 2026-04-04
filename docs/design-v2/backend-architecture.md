@@ -621,8 +621,18 @@ User Tensor:      may have arbitrary strides
                    engine-produced intermediates/outputs: column-major
 ```
 
-The XLA backend handles its own memory layout internally (XLA assigns layouts
-during compilation). It never sees low-level IR.
+**XLA backend input contract**: XLA accepts only dense contiguous buffers
+(no stride concept). The XLA backend's eval() pre-processing therefore
+**always copies to column-major contiguous** before uploading:
+
+- Column-major contiguous → upload directly (zero host-side copy)
+- Contiguous-but-permuted (e.g., from `.t()`) → copy to column-major, then upload
+- Non-contiguous → copy to column-major, then upload
+
+This is stricter than the low-level IR engine (which is stride-aware and
+avoids copies for permuted views). The extra host-side reorder is negligible
+because XLA is primarily for GPU, where the host→device PCIe transfer
+dominates.
 
 **Contract**: the final output of any backend is always a dense `Tensor` with
 some runtime `Placement`. Internal intermediates may use backend-specific
@@ -857,6 +867,7 @@ Level 2 — XLA executable (tenferro-xla-backend):
   Expensive:  CompiledProgram → StableHLO → XLA compile → executable
   Cheap:      cache executable, call execute() many times
   Cache key:  (program hash, input shapes, dtypes)
+  Note: no layout info in key — inputs are always column-major contiguous
 ```
 
 ```rust
