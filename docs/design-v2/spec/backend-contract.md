@@ -130,16 +130,12 @@ implementations to support any einsum-derived program.
 
 ## II. Primitive Vocabulary
 
-**Owner:** [`primitive-catalog.md`](primitive-catalog.md) is the sole source
-of truth for the Tenferro IR vocabulary, StableHLO lowering rules, Execution
-IR dispatch categories, and backend trait contracts.
+The Tenferro IR op vocabulary, per-op semantics, StableHLO lowering rules,
+and frontend sugar are owned by [`primitive-catalog.md`](primitive-catalog.md).
 
-This document does not re-state op tables. See primitive-catalog.md for:
-- Tenferro IR vocabulary (Section IV)
-- StableHLO lowering rules (Section VI)
-- Execution IR dispatch categories (Section III.3)
-- Backend trait contracts: `SemiringCore`, `SemiringFastPath` (Section III.4)
-- Frontend sugar and canonical lowering (Section VII)
+Execution IR dispatch categories, backend trait signatures (`SemiringCore`,
+`SemiringFastPath`), and the generic execution engine are owned by **this
+document** (Sections V–VI below).
 
 ---
 
@@ -174,34 +170,14 @@ implementing our faer backend.
 
 ### Principle: mostly 1:1 mapping
 
-Most `Instruction<Op>` variants in `CompiledProgram` map to exactly one
-StableHLO op. `StdTensorOp` is flat — no `Semiring(SemiringOpKind::...)`
-wrapping — which keeps lowering trivial. Documented exceptions include
-composite lowerings (e.g., `Conj` -> 4 ops) and multi-output linalg ops
-(e.g., `Svd` -> `custom_call` + `get_tuple_element` x N).
+Most `StdTensorOp` variants map to exactly one StableHLO op. `StdTensorOp`
+is flat — no `Semiring(SemiringOpKind)` wrapping — which keeps lowering
+trivial. Documented exceptions include composite lowerings (e.g., `Conj` → 4
+ops) and multi-output linalg ops (e.g., `Svd` → `custom_call` +
+`get_tuple_element` × N).
 
-```rust
-fn lower_instruction(inst: &Instruction<StdTensorOp>) -> StableHloOp {
-    match &inst.op {
-        StdTensorOp::Add => stablehlo::add(inst.inputs, inst.outputs),
-        StdTensorOp::Mul => stablehlo::multiply(inst.inputs, inst.outputs),
-        StdTensorOp::Neg => stablehlo::negate(inst.inputs, inst.outputs),
-        StdTensorOp::DotGeneral(c) => stablehlo::dot_general(c, inst.inputs, inst.outputs),
-        StdTensorOp::ReduceSum { axes } => stablehlo::reduce_sum(axes, inst.inputs, inst.outputs),
-        StdTensorOp::Transpose { perm } => stablehlo::transpose(perm, inst.inputs, inst.outputs),
-        StdTensorOp::Reshape { shape } => stablehlo::reshape(shape, inst.inputs, inst.outputs),
-        StdTensorOp::BroadcastInDim { shape, dims } =>
-            stablehlo::broadcast_in_dim(shape, dims, inst.inputs, inst.outputs),
-        StdTensorOp::Exp => stablehlo::exponential(inst.inputs, inst.outputs),
-        StdTensorOp::Cholesky => stablehlo::cholesky(inst.inputs, inst.outputs),
-        StdTensorOp::Svd => stablehlo::custom_call("lapack_gesvd", inst.inputs, inst.outputs),
-        StdTensorOp::Qr => stablehlo::custom_call("lapack_geqrf_orgqr", inst.inputs, inst.outputs),
-        StdTensorOp::Eigh => stablehlo::custom_call("lapack_syevd", inst.inputs, inst.outputs),
-        StdTensorOp::Solve => stablehlo::custom_call("lapack_getrf_getrs", inst.inputs, inst.outputs),
-        // ...
-    }
-}
-```
+Per-op lowering rules are owned by
+[`primitive-catalog.md`](primitive-catalog.md) (Section VI).
 
 ### Type support
 

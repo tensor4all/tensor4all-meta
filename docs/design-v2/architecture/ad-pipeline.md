@@ -689,72 +689,14 @@ docs/design-v2/examples/vector_ad_examples_check.py
 
 ### Operand
 
-`Operand` is the runtime value type. It is tensor-like, and scalars are just
-rank-0 tensors.
-
-```rust
-trait Operand: Clone + Send + Sync + 'static {
-    fn zero(shape: &[usize]) -> Self;
-    fn one(shape: &[usize]) -> Self;
-    fn reshape(&self, shape: &[usize]) -> Self;
-    fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;
-    fn add(&self, other: &Self) -> Self;
-    fn multiply(&self, other: &Self) -> Self;
-    fn reduce_sum(&self, axes: &[usize]) -> Self;
-    fn dot_general(&self, other: &Self, ...) -> Self;
-    fn conj(&self) -> Self;
-}
-```
-
-`zero` is required for zero propagation (skipping inactive tangent flow).
-`one` is required for seeding reverse-mode AD (`ct_y = one`).
-
-`Operand` is defined in computegraph, not AD-specific. This keeps the
-computation graph close to StableHLO tensor semantics.
+`Operand` is the runtime value type (tensor-like; scalars are rank-0 tensors).
+Canonical signature in [`spec/primitive-catalog.md`](../spec/primitive-catalog.md).
 
 ### PrimitiveOp
 
-`PrimitiveOp` extends `GraphOp` with a cotangent-accumulation constructor plus
-linearization and transpose rules. The rules emit fragments, not one global
-graph. `tidu` is fully generic over this trait and never references specific
-primitives. `eval`, `n_inputs`, `n_outputs`, and `type Operand` belong to
-`GraphOp` (defined in computegraph).
-
-```rust
-pub trait PrimitiveOp: GraphOp
-where
-    Self::InputKey: ADKey,
-{
-    fn add() -> Self
-    where
-        Self: Sized;
-
-    fn linearize(
-        &self,
-        builder: &mut FragmentBuilder<Self>,
-        primal_in: &[GlobalValKey<Self>],
-        primal_out: &[GlobalValKey<Self>],
-        tangent_in: &[Option<LocalValId>],
-    ) -> Vec<Option<LocalValId>>
-    where
-        Self: Sized;
-
-    fn transpose_rule(
-        &self,
-        builder: &mut FragmentBuilder<Self>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<Self>],
-        mode: &OpMode,
-    ) -> Vec<Option<LocalValId>>
-    where
-        Self: Sized;
-}
-```
-
-`tidu::differentiate` calls `linearize`; `tidu::transpose` calls
-`transpose_rule` and uses `add()` when it needs to accumulate multiple
-cotangent contributions to the same tangent value. All three are graph-level
-contract points delegated to the downstream primitive type.
+`PrimitiveOp` extends `GraphOp` with `add()` (cotangent accumulation),
+`linearize`, and `transpose_rule`. tidu is fully generic over this trait.
+Canonical signature in [`spec/ad-contract.md`](../spec/ad-contract.md).
 
 ### Linearization and transpose rules
 

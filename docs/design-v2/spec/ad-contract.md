@@ -25,6 +25,10 @@ For the AD trait design rationale, see
 
 ```rust
 trait PrimitiveOp: GraphOp {
+    /// Cotangent accumulation: construct an `Add` op for fan-out accumulation.
+    /// tidu's `transpose` calls this when a value has multiple consumers.
+    fn add() -> Self;
+
     /// Produce a linear approximation of this op at the given primal point.
     ///
     /// Returns a `LinearFragment` whose outputs are linear functions of the
