@@ -367,58 +367,61 @@ without `TracedTensor`.
 
 | Goal | What to implement |
 |---|---|
-| New scalar algebra for einsum (CPU) | `impl TensorBackend for MyBackend` |
-| Custom GPU backend for custom algebra | `impl TensorBackend for MyGpuBackend` |
-| Custom CPU backend with optimized kernels | `impl TensorBackend for MyOptCpuBackend` |
+| New scalar algebra for einsum (CPU) | `Semiring` (4 methods) + `SemiringBackend<Alg>::gemm` (1 method) |
+| Custom GPU backend for custom algebra | `impl SemiringBackend<Alg> for MyGpuBackend` (gemm + overrides) |
 | Custom linalg kernel (standard algebra) | `engine.register_custom_call("name", kernel)` |
 | AD for custom algebra | Define own Op enum, impl `PrimitiveOp` (advanced) |
 
-The minimal extension path (CPU only):
+The minimal extension path (CPU, e.g., tropical semiring):
 
-1. `impl TensorBackend for MyBackend` — define semiring operations and kernels
-2. Use `SemiringOp<MyTensor>` as the Op type
-3. Use your `MyBackend` — einsum + compile + eval work immediately
+1. Define algebra type, impl `Semiring` — `zero()`, `one()`, `add()`, `mul()`
+2. `impl SemiringBackend<MyAlgebra> for CpuBackend` — only `gemm()` required
+   (e.g., call `tropical_gemm`). `batched_gemm`, `add`, `mul`, `reduce_sum`
+   have defaults using strided-kernel + `Semiring` trait.
+3. Use `SemiringOp<MyAlgebra>` as the Op type — einsum + compile + eval work
+   immediately via `eval_semiring_ir`.
 
-Adding a GPU backend:
+Adding a GPU backend for custom algebra:
 
-1. Define `GpuMyTensor` — GPU-resident tensor type
-2. `impl TensorBackend for MyGpuBackend` — map each `SemiringOpKind` to GPU
-   kernels
-3. Use the same `CompiledProgram<SemiringOp<MyTensor>>` — graph construction
-   and compilation are backend-agnostic
+1. `impl SemiringBackend<MyAlgebra> for MyGpuBackend` — provide `gemm()` with
+   GPU kernels. Override `batched_gemm`, `add`, `mul`, `reduce_sum` if
+   optimized GPU versions exist.
+2. Use the same `CompiledProgram<SemiringOp<MyAlgebra>>` — graph construction
+   and compilation are backend-agnostic.
 
 ---
 
-## XI. TensorBackend and TensorData Traits
+## XI. Backend Traits
 
 The `Operand` trait has been **removed** from computegraph-rs entirely.
-Algebraic operations are now provided as free functions (`host_ops::typed_*`)
-and dispatched through `TensorBackend`.
 
-### TensorBackend -- algebra + kernel dispatch
+### TensorBackend -- standard algebra, full op set
 
-`TensorBackend` (defined in tenferro-tensor) is the unified trait for
-backend kernel dispatch. It provides algebraic operations (`batched_gemm`,
-`reduce_sum`, `elementwise_add`, `elementwise_mul`) and optional fast-path
-methods. Both `CpuBackend` and `CudaBackend` implement this trait in
-tenferro-tensor.
+`TensorBackend` (defined in tenferro-tensor) covers all ops for standard
+algebra. Operates on `Tensor` (type-erased). `CpuBackend` and `CudaBackend`
+implement this trait.
 
 Canonical definition: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
-### TensorData -- buffer access
+### SemiringBackend\<Alg: Semiring\> -- custom algebra, semiring ops only
 
-`TensorData` provides structural buffer access (`shape`, `data`,
-`from_data`). Needed by backends and the execution engine but not part of
-the algebra.
+`SemiringBackend<Alg>` (defined in tenferro-tensor) covers semiring ops for
+custom algebra. Operates on `TypedTensor<Alg::Scalar>` (typed). User
+provides only `gemm()` (single GEMM); `batched_gemm`, `add`, `mul`,
+`reduce_sum` have default implementations using strided-kernel + `Semiring`
+trait methods.
 
-Canonical definition: [`spec/tensor-semantics.md`](../spec/tensor-semantics.md).
+The two traits are independent (no supertrait relationship).
 
-### Structural ops -- generic functions, not trait methods
+Canonical definition: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
-`transpose`, `reshape`, `broadcast_in_dim` are generic functions over
-`TensorData`. They are the same for all algebras and are provided by the
-framework. Custom algebra implementors only define `TensorBackend` (kernel
-dispatch) plus `TensorData` (buffer access).
+### Structural ops -- algebra-independent free functions
+
+`transpose`, `reshape`, `broadcast_in_dim`, `extract_diagonal`,
+`embed_diagonal` are free functions in `tenferro-tensor::cpu::structural`.
+They are the same for all algebras. For standard algebra, `TensorBackend`
+methods delegate to these. For custom algebra, `eval_semiring_ir` calls them
+directly.
 
 ---
 
@@ -438,17 +441,28 @@ constraints.
 
 ### tenferro-tensor
 
-Tensor runtime crate. No AD-related code.
+Tensor runtime crate. No AD-related code. Organized by backend target.
 
-- `TypedTensor<T: Scalar>` — generic typed tensor (contiguous-only, no strides
-  field; the v2 compiler handles transpose optimization at IR level)
-- `Tensor` — type-erased enum over `TypedTensor<f32/f64/c32/c64>`
-- `DType` — scalar type discriminator
-- `host_ops` — naive CPU kernels (free functions: `typed_add`, `typed_mul`, etc.)
-- `gpu_ops` — GPU kernels (feature-gated)
-- `TensorBackend` trait — unified backend kernel dispatch interface
-- `CpuBackend` — CPU backend (faer/BLAS/LAPACK)
-- `CudaBackend` — CUDA backend (feature-gated)
+- `types.rs` — `TypedTensor<T>` (contiguous-only, no strides), `Tensor` enum,
+  `Buffer<T>`, `DType`, `Placement`, `MemoryKind`, `ComputeDevice`
+- `config.rs` — `DotGeneralConfig`, `CompareDir`, `GatherConfig`, `ScatterConfig`,
+  `SliceConfig`, `PadConfig` (moved from tenferro-ops to avoid dependency cycle)
+- `backend.rs` — `TensorBackend` trait, `SemiringBackend<Alg>` trait
+- `cpu/` — CPU backend:
+  - `backend.rs` — `CpuBackend: impl TensorBackend`
+  - `elementwise.rs` — strided-kernel: add, mul, neg, conj, div, abs, exp, log, ...
+  - `reduction.rs` — strided-kernel: reduce\_sum, reduce\_prod, reduce\_max, reduce\_min
+  - `structural.rs` — strided-kernel: transpose, broadcast\_in\_dim, extract\_diagonal;
+    dedicated: reshape (metadata only), embed\_diagonal
+  - `indexing.rs` — gather, scatter, slice, pad, concatenate, reverse
+  - `gemm/` — `faer_gemm.rs` (cpu-faer), `blas_gemm.rs` (cpu-blas)
+  - `linalg/` — `faer_linalg.rs` (cpu-faer), `lapack_linalg.rs` (cpu-blas)
+- `cuda/` — CUDA backend (feature-gated)
+- `rocm/` — ROCm backend (feature-gated, future)
+
+**No naive CPU loop fallbacks.** All CPU kernels use strided-kernel (elementwise,
+reduction, structural), faer or BLAS (GEMM), faer or LAPACK (linalg). Exactly
+one of `cpu-faer` or `cpu-blas` must be enabled (`compile_error!` enforced).
 
 ### tenferro-ops
 

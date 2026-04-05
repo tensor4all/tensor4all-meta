@@ -297,13 +297,15 @@ through the backend. Note that `Copy` is not an Execution IR instruction;
 inputs are ensured to be contiguous column-major at eval() pre-processing
 before IR entry.
 
-### Backend trait
+### Backend traits
 
-The backend contract is a single trait, `TensorBackend`, defined in
-`tenferro-tensor` (the tensor runtime crate). It covers **all** ops, not
-just semiring ops.
+Two backend traits, both defined in `tenferro-tensor`:
 
-**`TensorBackend`** (required):
+#### TensorBackend — standard algebra, full op set
+
+Operates on `Tensor` (type-erased). Covers **all** ops including
+non-semiring operations (analytic, indexing, linalg). Used by the standard
+algebra execution path (`eval_exec_ir<B: TensorBackend>`).
 
 | Method | Execution IR instruction(s) covered |
 |--------|----------------------------------|
@@ -318,11 +320,40 @@ just semiring ops.
 | `transpose` | `Transpose` / `Permute` |
 | `extract_diagonal` | `ExtractDiagonal` |
 | `embed_diagonal` | `EmbedDiagonal` |
+| `div`, `abs`, `sign`, ... | Standard elementwise |
+| `exp`, `log`, `sin`, ... | Analytic |
+| `gather`, `scatter`, ... | Indexing |
+| `reduce_prod`, `reduce_max`, ... | Additional reductions |
+| `cholesky`, `svd`, `qr`, ... | Linalg |
 
-This is the **single backend contract**. There is no separate
-`SemiringFastPath` trait. Optional optimized paths (e.g., faer GEMM for
-contraction) are internal to `CpuBackend`'s `TensorBackend` implementation
--- they are not exposed as a separate trait that backend authors implement.
+#### SemiringBackend\<Alg: Semiring\> — custom algebra, semiring ops only
+
+Operates on `TypedTensor<Alg::Scalar>` (typed). Used by the custom algebra
+execution path (`eval_semiring_ir<Alg, B: SemiringBackend<Alg>>`).
+
+**Required method (user implements):**
+
+| Method | Description |
+|--------|-------------|
+| `gemm` | Single GEMM: C\[i,j\] = ⊕\_k (A\[i,k\] ⊗ B\[k,j\]) |
+
+**Default methods (strided-kernel + Semiring trait):**
+
+| Method | Implementation |
+|--------|---------------|
+| `batched_gemm` | Batch loop over `self.gemm()` |
+| `add` | `strided-kernel::zip_map2_into` with `Alg::add` |
+| `mul` | `strided-kernel::zip_map2_into` with `Alg::mul` |
+| `reduce_sum` | `strided-kernel::reduce` with `Alg::add` |
+
+**Structural ops** (transpose, reshape, broadcast\_in\_dim, extract\_diagonal,
+embed\_diagonal) are **not** on this trait. They are algebra-independent free
+functions in `tenferro-tensor::cpu::structural`, shared by both execution paths.
+
+The two traits are **independent** (no supertrait relationship).
+`TensorBackend` is not parameterized by algebra; it handles all standard
+scalar types (f32/f64/c32/c64) via runtime dtype dispatch inside the `Tensor`
+enum.
 
 ### Generic execution engine
 
@@ -572,102 +603,51 @@ backend_xla/           XLA backend (takes StableHLO directly, optional feature f
 ### Custom algebra backend (Tropical / custom algebra)
 
 Custom algebra backends receive **Execution IR** (after the optimizing
-compiler), not StableHLO IR directly. They implement `TensorBackend`
+compiler), not StableHLO IR directly. They implement `SemiringBackend<Alg>`
 (canonical signature in Section V above).
 
-The generic execution engine handles the dispatch loop, using liveness
-annotations for buffer management (see "Buffer lifecycle" above):
+The custom algebra execution engine dispatches algebra-dependent ops through
+`SemiringBackend<Alg>` and structural ops through shared free functions:
 
 ```rust
-fn eval_exec_ir<B: TensorBackend>(
-    backend: &B,
+fn eval_semiring_ir<Alg: Semiring, B: SemiringBackend<Alg>>(
+    backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<B::Operand>,
-    pool: &mut BufferPool,
-) -> Vec<B::Operand> {
-    let mut slots: Vec<Option<B::Operand>> = vec![None; program.n_slots];
-    for (&slot, val) in program.input_slots.iter().zip(inputs) {
-        slots[slot] = Some(val);
-    }
+    inputs: Vec<TypedTensor<Alg::Scalar>>,
+) -> Vec<TypedTensor<Alg::Scalar>> {
     for inst in &program.instructions {
-        // Helper: consume (take) or borrow based on last_use annotation
-        let get = |slots: &mut Vec<Option<B::Operand>>, idx: usize, last: bool| {
-            if last { slots[idx].take().unwrap() }
-            else    { slots[idx].as_ref().unwrap().clone() }
-        };
-
-        // ALL ops dispatched through TensorBackend — no separate
-        // structural/standard/indexing dispatch categories.
         let result = match &inst.op {
-            ExecOp::Add => {
-                let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
-                backend.add(&lhs, &rhs)
-            }
-            ExecOp::Mul => {
-                let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
-                backend.mul(&lhs, &rhs)
-            }
-            ExecOp::Neg => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.neg(&input)
-            }
-            ExecOp::Conj => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.conj(&input)
-            }
+            // Algebra-dependent → SemiringBackend<Alg>
+            ExecOp::BatchedGemm(config) => backend.batched_gemm(lhs, rhs, config),
+            ExecOp::Add => backend.add(lhs, rhs),
+            ExecOp::Multiply => backend.mul(lhs, rhs),
+            ExecOp::ReduceSum { axes } => backend.reduce_sum(input, axes),
 
-            ExecOp::BatchedGemm { .. } => {
-                let lhs = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                let rhs = get(&mut slots, inst.inputs[1], inst.last_use[1]);
-                backend.dot_general(&lhs, &rhs, /* dim_numbers */)
-            }
-            ExecOp::ReduceSum { axes, .. } => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.reduce_sum(&input, axes)
-            }
+            // Algebra-independent → shared free functions
+            ExecOp::Permute { perm } => structural::transpose(input, perm),
+            ExecOp::Reshape { shape } => structural::reshape(input, shape),
+            ExecOp::BroadcastInDim { shape, dims } => structural::broadcast_in_dim(input, shape, dims),
+            ExecOp::ExtractDiag { axis_a, axis_b } => structural::extract_diagonal(input, axis_a, axis_b),
+            ExecOp::EmbedDiag { axis_a, axis_b } => structural::embed_diagonal(input, axis_a, axis_b),
 
-            ExecOp::Reshape { shape, .. } => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.reshape(&input, shape)
-            }
-            ExecOp::Transpose { perm, .. } => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.transpose(&input, perm)
-            }
-            ExecOp::BroadcastInDim { .. } => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.broadcast_in_dim(&input, /* dims */)
-            }
-
-            ExecOp::ExtractDiagonal { .. } => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.extract_diagonal(&input)
-            }
-            ExecOp::EmbedDiagonal { .. } => {
-                let input = get(&mut slots, inst.inputs[0], inst.last_use[0]);
-                backend.embed_diagonal(&input)
-            }
-
-            // Linalg / extensibility — kernel registry
-            ExecOp::Cholesky | ExecOp::CustomCall { .. } => {
-                dispatch_custom_call(&inst.op, &inst, &mut slots, pool)
-            }
-
-            // Future ops (analytic, comparison, indexing, etc.)
-            // will also dispatch through TensorBackend methods.
-            _ => unimplemented!("op not yet in TensorBackend"),
+            // Standard-only ops → error (not valid in semiring IR)
+            _ => panic!("non-semiring op in semiring IR"),
         };
-        slots[inst.outputs[0]] = Some(result);
+        slots[inst.output_slots[0]] = Some(result);
     }
-    program.output_slots.iter().map(|&i| slots[i].take().unwrap()).collect()
 }
 ```
 
-A custom algebra backend implements `TensorBackend`. All ops go through
-the same trait -- there is no separate common infrastructure for structural
-ops.
+A custom algebra user implements `Semiring` (4 methods: zero, one, add, mul)
+and `SemiringBackend<Alg>::gemm` (1 method: single GEMM). All other ops
+have defaults (strided-kernel for elementwise, batch loop for batched\_gemm,
+shared free functions for structural). The same compilation pipeline
+(TransposeFolding, DotDecomposer, etc.) optimizes the ExecIR before
+execution, so custom algebra benefits from the same optimizations as
+standard algebra.
+
+The standard algebra execution engine (`eval_exec_ir<B: TensorBackend>`)
+dispatches **all** ops (including structural) through `TensorBackend`.
 
 ---
 
@@ -828,7 +808,6 @@ struct TypedTensor<T: Scalar> {
     shape: Vec<usize>,
     // contiguous column-major: strides are implicit from shape
     placement: Placement,
-    preferred_compute_device: Option<ComputeDevice>,
 }
 
 enum Buffer<T> {
@@ -865,16 +844,15 @@ struct TracedTensor {
 
 See `../examples/tensor-api-pseudocode.md` for full usage examples.
 
-### Operand and TensorData traits
+### Operand trait (removed)
 
-`Operand` (pure algebra) and `TensorData` (buffer access) are separate
-concerns. Canonical signatures:
-- `Operand`: [`primitive-catalog.md` Section IV](primitive-catalog.md)
-- `TensorData`: [`tensor-semantics.md`](tensor-semantics.md)
+The `Operand` trait has been removed from computegraph-rs. Compute
+operations are no longer methods on the data type. Instead:
 
-`Tensor` and custom algebra types implement both. The split means the
-graph/AD stack never needs to know about buffer layout, and the backend
-infrastructure never needs to know about algebra.
+- Standard algebra: `TensorBackend` methods dispatch to optimized kernels
+- Custom algebra: `SemiringBackend<Alg>` methods dispatch to user-provided
+  GEMM + strided-kernel defaults for elementwise/reduction
+- Structural ops: algebra-independent free functions
 
 ---
 
