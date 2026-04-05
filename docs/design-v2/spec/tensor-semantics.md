@@ -307,3 +307,31 @@ before entering the AD graph via TracedTensor.
 Structural types live in tensor4all-rs. tenferro provides dense
 tensors + einsum with hyper edges. scatter/gather are available but
 rarely needed when einsum handles the structure.
+
+---
+
+## IV. Linalg Batch Convention
+
+Linalg ops follow **trailing-batch convention**: core matrix dims are
+leftmost, batch dims are rightmost. Shape `[M, N, B1, B2, ...]` means
+`B1*B2*...` independent M×N matrices. Each batch slice is contiguous in
+col-major memory, enabling zero-copy slicing.
+
+This differs from JAX/NumPy/PyTorch which use leading-batch `[B, M, N]`.
+The choice matches tenferro's col-major storage: rightmost dims have the
+largest stride, so trailing batch dims make each `[M, N]` slice a
+contiguous block.
+
+When `shape.len() == core_rank`, the op is a plain 2D call with zero
+overhead.
+
+| Op | Input shape | Output shape(s) |
+|---|---|---|
+| `cholesky` | `[N, N, B...]` | `[N, N, B...]` |
+| `svd` | `[M, N, B...]` | U `[M, K, B...]`, S `[K, B...]`, Vt `[K, N, B...]` |
+| `qr` | `[M, N, B...]` | Q `[M, K, B...]`, R `[K, N, B...]` |
+| `eigh` | `[N, N, B...]` | vals `[N, B...]`, vecs `[N, N, B...]` |
+| `solve` | A `[N, N, B...]`, b `[N, M, B...]` | `[N, M, B...]` |
+
+The trailing-batch convention also applies to `DotGeneral` / `BatchedGemm`
+(documented in `AGENTS.md` under Column-Major Dimension Ordering).
