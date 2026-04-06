@@ -17,6 +17,9 @@
 - `einsum` is a free function that takes `TracedTensor` inputs and returns
   `TracedTensor`. There is no eager `einsum` on `Tensor` — users wrap
   concrete data with `TracedTensor::from` first.
+- Single-output ops use clean methods and operators (`x.exp()`, `&a + &b`)
+  without any `traced_` prefix.
+- Multi-output linalg ops use free functions such as `svd(&a)` and `qr(&a)`.
 - `eval()` triggers `materialize_merge -> compile (cached) -> execute`,
   filling in the data.
 - `Engine` holds backend + compilation cache + einsum cache. It is generic
@@ -374,7 +377,7 @@ let results = backend.eval_program(&prog, &[tropical_a, tropical_b, tropical_c])
 ```rust
 let a = TracedTensor::from(Tensor::new(&a_raw, &[4, 3]));
 
-// SVD is a primitive with linearize + transpose_rule
+// SVD is exposed as a free function primitive with linearize + transpose_rule
 let (u, s, vt) = svd(&a);
 
 // Use SVD result in further computation (hyper-edge einsum, no scatter needed)
