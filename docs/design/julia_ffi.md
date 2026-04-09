@@ -70,7 +70,70 @@ Metadata access:
 **C-API delegated operations on Tensor:**
 - `contract(a, b)` / `a * b` — tensor contraction in Rust
 
-These low-level types provide the substrate on top of which higher-level TT, TreeTN, TCI, grid, and QTT-function APIs are built.
+These low-level types provide the substrate on top of which higher-level TT, TCI, grid, and QTT-function APIs are built.
+
+### `TensorTrain` — Pure Julia struct
+
+```julia
+mutable struct TensorTrain
+    data::Vector{Tensor}  # each site tensor is a Rust-backed Tensor4all.Tensor
+    llim::Int             # left orthogonality limit
+    rlim::Int             # right orthogonality limit
+end
+```
+
+- Pure Julia struct holding a chain of `Tensor` objects (analogous to `SimpleTensorTrains.SimpleTensorTrain` but using `Tensor4all.Tensor` instead of `ITensor`).
+- Julia owns the chain structure; individual tensor data lives in Rust.
+- No `t4a_treetn` or `t4a_simplett` wrapper — no tree-level C-FFI needed.
+- Serves as both MPS and MPO representation (distinguished at runtime by index structure, as in the current design).
+
+**TT-level operations via C-API:**
+
+Whole-chain operations (contraction, compression) are delegated to Rust by passing the site tensors:
+
+- `t4a_contract(tensors_a[], n_a, tensors_b[], n_b, algorithm, ...) → tensors_result[], n_result`
+  - Takes arrays of `t4a_tensor` pointers from both TTs
+  - Rust reconstructs the TT internally, performs contraction (naive/zipup/fit), returns result as array of `t4a_tensor`
+  - Julia wraps result back into `TensorTrain`
+  - Name is general enough to support tree connectivity in the future (pass adjacency info)
+
+## Julia Package Dependencies
+
+`Tensor4all.jl` integrates existing Julia packages rather than reimplementing them:
+
+| Submodule | Source | Description |
+|-----------|--------|-------------|
+| `Tensor4all.TensorTrain` | Absorb `T4ATensorTrain.jl` | TensorTrain type and operations (raw-array variant) |
+| `Tensor4all.TensorCI` | Absorb `T4ATensorCI.jl` | TCI2 algorithm |
+| `Tensor4all.QuanticsGrids` | Re-export `QuanticsGrids.jl` | Grid types and coordinate conversion |
+
+Users get the full stack with `using Tensor4all`.
+
+## Quantics Transforms
+
+Quantics transform MPOs (affine, shift, flip, phase rotation, etc.) are constructed in Rust and extracted as `Vector{Tensor}` for use in Julia.
+
+**Workflow:**
+1. Julia calls a transform constructor via C-API → returns `t4a_linop`
+2. Julia extracts site tensors via C-API → returns `t4a_tensor[]`
+3. Julia wraps as `TensorTrain`
+4. Application to a state via `t4a_contract`
+
+**C-API surface:**
+
+Transform constructors (existing):
+- `t4a_qtransform_affine` — affine y = Ax + b (rational coefficients, boundary conditions)
+- `t4a_qtransform_shift`, `t4a_qtransform_flip` — coordinate transforms
+- `t4a_qtransform_phase_rotation` — phase multiplication
+- `t4a_qtransform_cumsum` — cumulative sum
+- `t4a_qtransform_fourier` — quantics Fourier transform
+- `t4a_qtransform_binaryop` — binary operations on two variables
+- All return `t4a_linop`
+
+Tensor extraction (new):
+- `t4a_linop_get_tensors(linop, ...) → t4a_tensor[], n` — extract MPO site tensors from a linear operator
+
+This replaces the need for `Quantics.jl` on the Julia side. All carry propagation, rational arithmetic, and boundary condition logic stays in Rust.
 
 ## Design Boundary
 
@@ -81,8 +144,12 @@ These low-level types provide the substrate on top of which higher-level TT, Tre
 │  Index ops: prime, sim, hastag, ...              │
 │  Index-collection ops: findsites, commoninds,... │
 │  Tensor index ops: replaceind, prime, addtags,...│
+│  TensorTrain struct (Vector{Tensor})             │
 │  Quantics grids, layouts, variable names         │
 │  QTTFunction semantics and contraction setup     │
+│                                                  │
+│  Absorbed: T4ATensorTrain.jl, T4ATensorCI.jl     │
+│  Re-exported: QuanticsGrids.jl                   │
 │                                                  │
 │  ITensors.jl / HDF5 conversion (extension)       │
 │                                                  │
@@ -91,13 +158,15 @@ These low-level types provide the substrate on top of which higher-level TT, Tre
 │                                                  │
 │  Index: new, clone, release, dim, id, tags, plev │
 │  Tensor: new, clone, release, data, contract     │
-│  TT / TreeTN / TCI / transform kernel entrypoints│
+│  TT contraction: t4a_contract                    │
+│  Transforms: t4a_qtransform_* → t4a_linop        │
+│  Extraction: t4a_linop_get_tensors               │
 │                                                  │
 ├──────────────────────────────────────────────────┤
 │  Rust (tensor4all-rs)                            │
 │                                                  │
-│  DynIndex, TensorDynLen, TT / TreeTN types,      │
-│  contraction engine, transforms, TCI, solvers    │
+│  DynIndex, TensorDynLen, contraction engine,     │
+│  factorization, TCI, transforms, solvers         │
 │                                                  │
 └──────────────────────────────────────────────────┘
 ```
@@ -122,6 +191,7 @@ Interoperability with ITensors.jl is a hard requirement — existing Julia codeb
 - **Public naming of the high-level function abstraction**: Should the public API standardize on `QTTFunction`, `TTFunction`, or provide one as an alias of the other?
 - **Grid layout normalization**: Which layouts should be canonical internally, and which should be accepted as user-facing construction syntax?
 - **Weighted integration boundary**: Which volume-element and quadrature-like semantics should live purely in Julia, and which should be promoted to Rust kernels if performance demands it?
+- **Two TensorTrain types**: The absorbed `T4ATensorTrain.jl` uses `Vector{Array}` (no indices). The new `TensorTrain` uses `Vector{Tensor}` (Rust-backed, with indices). Relationship and conversion between these needs to be defined.
 
 ## High-Level QTT Julia Layer
 
@@ -313,10 +383,11 @@ This phase should end with a stable substrate for all later work.
 
 Expose the Rust-side tensor-network primitives needed above the raw tensor level:
 
-- TT / TensorTrain wrappers and arithmetic coverage
-- TreeTN and solver entrypoints
+- `TensorTrain` type (`Vector{Tensor}`) with basic operations
+- `t4a_contract` for TT-level contraction (pass arrays of `t4a_tensor` pointers)
+- Quantics transform constructors via `t4a_qtransform_*` → `t4a_linop` → `t4a_linop_get_tensors`
+- Absorb `T4ATensorTrain.jl` and `T4ATensorCI.jl`
 - TCI / QTCI construction and diagnostics
-- transform kernels that already have clear low-level Rust support
 
 This phase should keep the Julia API close to the Rust capabilities while making the major kernels available for composition.
 
@@ -329,6 +400,7 @@ Build the Julia-side grid abstraction independently of the high-level function t
 - fused, interleaved, and grouped representations
 - coordinate and index conversion utilities
 - validation of layout consistency and endpoint conventions
+- Re-export `QuanticsGrids.jl`
 
 This phase should end with a grid layer that is already usable for experimentation and for driving later QTT abstractions.
 
@@ -361,7 +433,7 @@ This phase should make it possible to express the kinds of workflows currently p
 
 Extend the high-level layer with transformation and resolution-changing utilities:
 
-- affine pullbacks and coordinate transforms
+- affine pullbacks and coordinate transforms (via Rust `t4a_qtransform_*`)
 - shift, flip/reverse, phase rotation, cumulative-sum, and Fourier-style operations
 - embedding into larger or higher-dimensional grids
 - coarsening / averaging
