@@ -10,12 +10,25 @@ This file is only the index. The detailed design lives in the sibling documents 
 
 | File | Purpose |
 |------|---------|
-| [julia_ffi_core.md](./julia_ffi_core.md) | `Index`, `Tensor`, ownership, low-level FFI, base Julia APIs |
-| [julia_ffi_tt.md](./julia_ffi_tt.md) | backend `TensorTrain` support and TT-level operations |
+| [julia_ffi_core.md](./julia_ffi_core.md) | `Index`, `Tensor`, ownership, low-level FFI, base Julia APIs (top-level `Tensor4all`) |
+| [julia_ffi_tt.md](./julia_ffi_tt.md) | `ITT.ITensorTrain`, `SimpleTT.TensorTrain{V,N}`, and TT-level operations |
+| [julia_ffi_tci.md](./julia_ffi_tci.md) | `TensorCI` — TCI/QTCI algorithms, re-export vs. port decision |
 | [julia_ffi_quantics.md](./julia_ffi_quantics.md) | grids, layouts, coordinates, quantics transforms, multiresolution |
 | [bubbleteaCI.md](./bubbleteaCI.md) | reusable `TTFunction` / `GriddedFunction` layer and migration plan |
 | [julia_ffi_extensions.md](./julia_ffi_extensions.md) | ITensors/HDF5 compatibility and package extension boundary |
 | [julia_ffi_roadmap.md](./julia_ffi_roadmap.md) | phased implementation order and dependencies |
+
+## Module Structure
+
+```
+Tensor4all              — Index, Tensor (core FFI primitives)
+Tensor4all.ITT          — ITensorTrain, contract, truncate, +
+Tensor4all.SimpleTT     — TensorTrain{V,N}, pure Julia TT operations
+Tensor4all.TensorCI     — TCI/QTCI algorithms (re-export or port of TensorCrossInterpolation.jl)
+Tensor4all.QuanticsGrids — grid, layout, coordinate conversion
+```
+
+`using Tensor4all` re-exports all submodules.
 
 ## Ownership Model
 

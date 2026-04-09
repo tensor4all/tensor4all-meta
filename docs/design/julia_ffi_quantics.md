@@ -29,13 +29,33 @@ This document does not cover `TTFunction` semantics. Those remain in [bubbleteaC
 - grouped layouts for user-defined groupings
 - explicit index-table control when a specific unfolding is needed
 
-## Transform Semantics
+## Transform Operators
 
-Quantics transforms can be represented as backend operators and exposed through Julia:
+Quantics transforms are constructed in Rust and extracted as `ITensorTrain` for use in Julia.
 
-- affine pullbacks
-- shifts
-- flips and reversals
+### Backend Flow
+
+1. Construct a transform in Rust via `t4a_qtransform_*` → returns `t4a_linop`
+2. Extract site tensors with `t4a_linop_get_tensors` → returns `t4a_tensor[]`
+3. Wrap the result as a Julia `ITensorTrain`
+4. Application to a state via `t4a_contract`
+
+### C-API Transform Constructors
+
+- `t4a_qtransform_affine` — affine y = Ax + b (rational coefficients, boundary conditions)
+- `t4a_qtransform_shift` — coordinate shift
+- `t4a_qtransform_flip` — flip/reversal
+- `t4a_qtransform_phase_rotation` — phase multiplication
+- `t4a_qtransform_cumsum` — cumulative sum
+- `t4a_qtransform_fourier` — quantics Fourier transform
+- `t4a_qtransform_binaryop` — binary operations on two variables
+
+### Julia-Side Transform API
+
+These are exposed as high-level Julia functions that hide the C-API flow:
+
+- affine pullbacks and coordinate transforms
+- shifts, flips, and reversals
 - phase rotation
 - cumulative sums
 - Fourier-style transforms

@@ -15,7 +15,7 @@ Exit criteria:
 
 ## Phase 2. Core Backend Coverage for TT Workflows
 
-- add `TensorTrain`
+- add `ITensorTrain` and `SimpleTT.TensorTrain{V,N}`
 - surface TT-level contraction/compression
 - expose TT transforms and backend TT helpers
 
