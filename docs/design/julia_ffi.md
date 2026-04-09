@@ -27,14 +27,14 @@ end
 - Setters: `t4a_index_set_plev`
 - Predicates: `t4a_index_has_tag`
 
-**Pure Julia operations (built on C-API getters):**
+**Pure Julia operations on Index (built on C-API getters):**
 - `sim(i)` — create a new Index with same dim but new id
 - `prime(i, n)`, `noprime(i)`, `setprime(i, n)` — prime level manipulation
 - `hastag(i, tag)` — tag query
-- `inds(t)` — get indices of a Tensor
+
+**Pure Julia operations on Index collections:**
 - `findsites(inds, query)` — find index positions matching criteria
 - `commoninds(a, b)`, `uniqueinds(a, b)` — set operations on index collections
-- `replaceinds(inds, old => new)`, `replaceind(inds, old, new)` — index replacement
 
 ### `Tensor` — Rust opaque pointer wrapper
 
@@ -53,11 +53,20 @@ end
 - Getters: `t4a_tensor_get_rank`, `t4a_tensor_get_dims`, `t4a_tensor_get_indices`, `t4a_tensor_get_data_f64`, `t4a_tensor_get_data_c64`
 - Compute: `t4a_tensor_contract`
 
-**Pure Julia operations (built on C-API):**
-- `inds(t)` — return `Vector{Index}` by reading from Rust
-- `rank(t)`, `dims(t)` — delegated to C-API
-- `contract(a, b)` / `a * b` — delegated to Rust
-- Index-based queries (`findsites`, `commoninds`, etc.) — pure Julia on the result of `inds(t)`
+**Pure Julia operations on Tensor (following ITensors.jl API):**
+
+Index manipulation on Tensor — these read indices via C-API, apply pure Julia logic, and create a new Tensor with updated indices:
+- `replaceind(T, old, new)`, `replaceinds(T, old => new, ...)` — replace indices
+- `prime(T, ...)`, `noprime(T)`, `setprime(T, ...)` — prime level manipulation
+- `addtags(T, ...)`, `removetags(T, ...)`, `settags(T, ...)`, `replacetags(T, ...)` — tag manipulation
+- `swapind(T, i1, i2)`, `swapinds(T, ...)` — swap indices
+
+Metadata access:
+- `inds(T)` — return `Vector{Index}` by reading from Rust
+- `rank(T)`, `dims(T)` — delegated to C-API
+
+**C-API delegated operations on Tensor:**
+- `contract(a, b)` / `a * b` — tensor contraction in Rust
 
 ## Design Boundary
 
@@ -65,10 +74,9 @@ end
 ┌──────────────────────────────────────────────────┐
 │  Pure Julia                                      │
 │                                                  │
-│  Index operations: prime, sim, hastag,           │
-│    replaceinds, commoninds, uniqueinds, ...      │
-│                                                  │
-│  Index-collection logic: findsites, inds, ...    │
+│  Index ops: prime, sim, hastag, ...              │
+│  Index-collection ops: findsites, commoninds,... │
+│  Tensor index ops: replaceind, prime, addtags,...│
 │                                                  │
 │  ITensors.jl conversion (extension)              │
 │                                                  │
