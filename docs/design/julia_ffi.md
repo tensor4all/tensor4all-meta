@@ -97,10 +97,16 @@ Metadata access:
 
 ## ITensors.jl Compatibility
 
-- Bidirectional conversion between `Tensor4all.Index` and `ITensors.Index{Int}` via a Julia package extension.
-- ID mapping is direct (both use UInt64).
-- Tag mapping: Tensor4all tags (comma-separated string from Rust) ↔ ITensors TagSet.
-- HDF5 I/O in ITensors format for data exchange with external tools.
+Interoperability with ITensors.jl is a hard requirement — existing Julia codebases (BubbleTeaCI, etc.) depend on it.
+
+**Bidirectional conversion (via Julia package extension):**
+- `Tensor4all.Index` ↔ `ITensors.Index{Int}` — ID mapping is direct (both UInt64), tag mapping: comma-separated string ↔ ITensors TagSet.
+- `Tensor4all.Tensor` ↔ `ITensors.ITensor` — storage mapping: DenseF64 ↔ Dense{Float64}, DenseC64 ↔ Dense{ComplexF64}.
+
+**HDF5 interoperability:**
+- `Tensor4all.Tensor` can be saved/loaded in ITensors HDF5 format.
+- Files written by ITensors.jl can be read by Tensor4all.jl and vice versa.
+- This ensures data exchange with external tools and existing workflows.
 
 ## Open Questions
 
