@@ -139,6 +139,7 @@ Conversions live in the **target type's module**, following Julia conventions.
 | `t4a_treetn_add(a, b) → out` | — | Direct sum. Bond dim = dim_a + dim_b. No truncation. |
 | `t4a_treetn_truncate(ttn, rtol, cutoff, maxdim)` | `rtol`, `cutoff` (→ `rtol=sqrt(cutoff)`), `maxdim` | In-place truncation. |
 | `t4a_treetn_contract(a, b, method, rtol, cutoff, maxdim) → out` | method (Zipup/Fit/Naive), `rtol`, `cutoff`, `maxdim` | Contraction with integrated truncation. |
+| `t4a_treetn_contract_partial(op, state, target_sites, n, method, rtol, cutoff, maxdim) → out` | target site positions + contraction params | Contract op on a subset of state's sites. **New, needed for partial transforms.** |
 
 Notes:
 - `rtol` is the native tolerance in `tensor4all-rs`.

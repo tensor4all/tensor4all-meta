@@ -67,15 +67,42 @@ fouriertransform_mpo(sites; sign=1)    → ITensorTrain
 cumsum(sites; includeown=false)         → ITensorTrain
 binaryop_mpo(sites, ...)               → ITensorTrain
 
-# --- Application (delegates to ITT.contract) ---
+# --- Application to full or partial site indices ---
 apply(op::ITensorTrain, state::ITensorTrain; method=:zipup, rtol=..., maxdim=...)
     → ITensorTrain
+# Full application: op and state have the same sites.
+
+apply(op::ITensorTrain, state::ITensorTrain, target_sites;
+      method=:zipup, rtol=..., maxdim=...)
+    → ITensorTrain
+# Partial application: op acts on a subset of state's sites.
+# e.g., apply shift operator to "x" variable only in a multi-variable QTT.
+# Delegates to Rust-side partial contract C-API.
 ```
 
 Notes:
 - All `*mpo` functions construct the operator in Rust and return `ITensorTrain`.
-- Application to states uses `ITT.contract`, not a separate Rust call.
+- Partial-site application requires a Rust-side C-API extension (see below).
 - The Julia API names follow `Quantics.jl` conventions for compatibility with existing user code.
+
+### C-API extension needed: partial-site contraction
+
+Multi-variable QTT functions require applying a transform to a subset of sites (e.g., shift only the "x" variable in f(x, y)). This should be handled in Rust for efficiency:
+
+```c
+// Contract op (length M) with state (length N, M ≤ N) at specified site positions
+t4a_treetn_contract_partial(
+    const t4a_treetn* op,           // operator (M sites)
+    const t4a_treetn* state,        // state (N sites)
+    const size_t* target_sites,     // which N sites the op acts on (length M)
+    size_t n_target_sites,
+    t4a_contract_method method,
+    double rtol, double cutoff, size_t maxdim,
+    t4a_treetn** out
+)
+```
+
+This avoids Julia-side reshuffling of site tensors and index manipulation for every partial application.
 
 ## Multiresolution (future)
 
