@@ -11,8 +11,11 @@ This document covers the low-level Julia frontend primitives that sit directly o
 - C-API ownership and lifecycle
 - metadata access
 - pure Julia index and tensor manipulation helpers
+- low-level ITensors compatibility for `Index` and `Tensor`
 
 This document does not define backend `TensorTrain` support, quantics grid semantics, or `TTFunction` / `GriddedFunction` behavior.
+
+Compatibility for `ITensorMPS.MPS` / `MPO` belongs to [julia_ffi_itt.md](./julia_ffi_itt.md), because that is an `ITT.ITensorTrain` concern rather than a primitive `Index` / `Tensor` concern.
 
 ## `Index`
 
@@ -39,6 +42,17 @@ end
 - `prime(i, n)`, `noprime(i)`, `setprime(i, n)`
 - `hastag(i, tag)`
 - `findsites`, `commoninds`, and `uniqueinds` on index collections
+
+### ITensors Compatibility
+
+- `Index` should remain structurally compatible with `ITensors.Index{Int}` workflows.
+- Provide bidirectional conversion:
+  - `Index` ↔ `ITensors.Index{Int}`
+- Preserve the usual Julia tensor-network metadata:
+  - `dim`
+  - `id`
+  - `tags`
+  - `plev`
 
 ## `Tensor`
 
@@ -68,14 +82,24 @@ end
 - `addtags`, `removetags`, `settags`, `replacetags`
 - `swapind`, `swapinds`
 
+### ITensors Compatibility
+
+- `Tensor` should support bidirectional conversion with `ITensors.ITensor`.
+- Conversion should preserve indices and dense/diagonal structure as faithfully as practical.
+- The frontend should preserve round-trips between existing Julia `ITensors.jl` tensor workflows and the new Rust-backed primitive layer.
+
 ## Design Boundary
 
 - Keep the low-level wrappers small and stable.
+- Keep compatibility for primitive `Index` / `Tensor` types here rather than in a separate extensions document.
+- Keep `MPS` / `MPO` compatibility in the TT layer.
 - Keep semantic composition out of this file.
-- Let `julia_ffi_tt.md` and `bubbleteaCI.md` build on top of these primitives.
+- Let [julia_ffi_itt.md](./julia_ffi_itt.md), [julia_ffi_simplett.md](./julia_ffi_simplett.md), and `bubbleteaCI.md` build on top of these primitives.
 
 ## Open Questions
 
 - Should tag data be cached on the Julia side?
 - Should `Tensor` cache `Vector{Index}` for metadata-heavy workflows?
 - How should low-level FFI errors be mapped into Julia exceptions?
+- Should metadata caching be handled directly by core primitives?
+- Are there additional `Index` / `Tensor` conversion paths that should be first-class from day one?

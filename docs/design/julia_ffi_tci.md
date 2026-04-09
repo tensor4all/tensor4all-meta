@@ -2,9 +2,11 @@
 
 ## Purpose
 
-This document covers the TCI (Tensor Cross Interpolation) module in the Julia frontend. TCI is a large module responsible for constructing tensor trains from function evaluations.
+This document covers the core TCI (Tensor Cross Interpolation) module in the Julia frontend. `Tensor4all.TensorCI` is responsible for generic tensor-train construction from function evaluations.
 
 This is the `Tensor4all.TensorCI` submodule.
+
+This document does not cover the quantics-specific convenience layer. That belongs to [julia_ffi_quanticstci.md](./julia_ffi_quanticstci.md).
 
 ## Relationship to `TensorCrossInterpolation.jl`
 
