@@ -21,11 +21,12 @@ This file is only the index. The detailed design lives in the sibling documents 
 ## Module Structure
 
 ```
-Tensor4all              — Index, Tensor (core FFI primitives)
-Tensor4all.ITT          — ITensorTrain, contract, truncate, +
-Tensor4all.SimpleTT     — TensorTrain{V,N}, pure Julia TT operations
-Tensor4all.TensorCI     — TCI/QTCI algorithms (re-export or port of TensorCrossInterpolation.jl)
-Tensor4all.QuanticsGrids — grid, layout, coordinate conversion
+Tensor4all                 — Index, Tensor (core FFI primitives)
+Tensor4all.ITT             — ITensorTrain, contract, truncate, +
+Tensor4all.SimpleTT        — TensorTrain{V,N}, pure Julia TT operations
+Tensor4all.TensorCI        — TCI/QTCI algorithms (port of TensorCrossInterpolation.jl)
+Tensor4all.QuanticsGrids   — grid, layout, coordinate conversion (re-export of QuanticsGrids.jl)
+Tensor4all.QuanticsTransform — transform operators (Rust-backed MPO construction, Julia-side application)
 ```
 
 `using Tensor4all` re-exports all submodules.
