@@ -10,7 +10,8 @@ The Julia frontend design is split into a hub-and-spoke set:
 
 - [julia_ffi.md](./julia_ffi.md) for the overview and index
 - [julia_ffi_core.md](./julia_ffi_core.md) for low-level primitives
-- [julia_ffi_tt.md](./julia_ffi_tt.md) for backend TT support
+- [julia_ffi_tt.md](./julia_ffi_tt.md) for backend TT support (`ITT.ITensorTrain`, `SimpleTT.TensorTrain{V,N}`)
+- [julia_ffi_tci.md](./julia_ffi_tci.md) for TCI/QTCI algorithms (`TensorCI`)
 - [julia_ffi_quantics.md](./julia_ffi_quantics.md) for quantics grids and transforms
 - [bubbleteaCI.md](./bubbleteaCI.md) for reusable `TTFunction` logic and migration
 - [julia_ffi_extensions.md](./julia_ffi_extensions.md) for compatibility and extension glue
