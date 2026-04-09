@@ -192,23 +192,40 @@ Interoperability with ITensors.jl is a hard requirement — existing Julia codeb
 - **Grid layout normalization**: Which layouts should be canonical internally, and which should be accepted as user-facing construction syntax?
 - **Weighted integration boundary**: Which volume-element and quadrature-like semantics should live purely in Julia, and which should be promoted to Rust kernels if performance demands it?
 - **Two TensorTrain types**: The absorbed `T4ATensorTrain.jl` uses `Vector{Array}` (no indices). The new `TensorTrain` uses `Vector{Tensor}` (Rust-backed, with indices). Relationship and conversion between these needs to be defined.
+- **Packaging boundary of the reusable high-level layer**: Should the refactored generic `TTFunction` layer remain a clearly separated module within `BubbleTeaCI`, or eventually become its own package once stabilized?
 
 ## High-Level QTT Julia Layer
 
 ### Summary
 
-The new Julia interface should be planned as the canonical Julia frontend to `tensor4all-rs`, not just as a thin low-level wrapper. The design should explicitly include a Julia-native high-level layer for quantics tensor-train function workflows, modeled after the functionality that is useful in `BubbleTeaCI` and exercised in `ReFrequenTT`.
+The high-level QTT functionality required by downstream Julia workflows should not be implemented twice. Rather than copying the current `BubbleTeaCI` `TTFunction` machinery into a second codebase, the plan is to refactor and migrate the reusable high-level layer currently living in `BubbleTeaCI` so that it uses the new `tensor4all-rs`-based Julia frontend instead of `ITensors.jl`.
 
-The guiding split should be:
+This migration should also separate generic functionality from application-specific physics code and clean up the reusable layer for stability, readability, flexibility, and user-friendliness. `BubbleTeaCI` is therefore not just a downstream consumer to keep in mind; it is a primary migration target whose reusable core should evolve together with the new frontend.
+
+### Ownership Boundary
+
+The intended split of responsibilities is:
 
 - `tensor4all-rs`: contraction, factorization, transforms, TCI, TT arithmetic, dense conversion, solver kernels
-- Julia layer: grid semantics, variable naming, layout bookkeeping, user-friendly function APIs, prototyping-oriented composition
+- Julia frontend: low-level wrappers, grid semantics, variable naming, layout bookkeeping, interop, and backend-facing abstractions
+- refactored reusable `BubbleTeaCI` core: `TTFunction` / `GriddedFunction` workflows, contraction semantics, embedding, integration, interpolation, and beginner-facing examples
+- `BubbleTeaCI` applications: ladder-DGammaA and other physics-specific codes built on the reusable core
+
+### Relationship to `BubbleTeaCI`
+
+- `BubbleTeaCI` is a migration target, not merely an example consumer.
+- Generic `TTFunction`-level functionality should be migrated and cleaned up, not reimplemented independently.
+- The reusable high-level layer should no longer depend on concrete `ITensors.jl` / `ITensorMPS` storage types in its public design.
+- Application-specific physics code should be separated from reusable tensor-network function infrastructure.
+- The long-term package split can remain open, but the code boundary between reusable core and applications should be explicit from the beginning.
 
 ### Key Additions
 
+The following capabilities are still required in the Julia ecosystem around the new backend. They should be delivered primarily by refactoring, stabilizing, and migrating the reusable high-level functionality currently living in `BubbleTeaCI`, rather than by creating a second independent implementation.
+
 #### 1. Rich quantics-grid abstraction in Julia
 
-Add a Julia-side grid layer with:
+Provide a Julia-side grid layer that the migrated high-level `TTFunction` workflows can depend on:
 
 - named variables, not just positional dimensions
 - explicit site layout / index-table control
@@ -218,27 +235,28 @@ Add a Julia-side grid layer with:
 
 This is essential because real workflows depend on layout and variable semantics, not just raw TT cores.
 
-#### 2. A high-level `QTTFunction` / `TTFunction` type
+#### 2. A backend-neutral high-level `QTTFunction` / `TTFunction` type
 
-Add a Julia type representing a gridded function in QTT form:
+Refactor the existing `BubbleTeaCI` `TTFunction` concept into a reusable high-level type representing a gridded function in QTT form:
 
 - wraps a TT/MPS-like object plus grid metadata
 - supports scalar-, vector-, and matrix-valued functions
 - distinguishes continuous-variable legs from discrete/component legs
+- avoids direct dependence on concrete `ITensors.jl` storage types in the public API
 - remains a Julia semantic wrapper over Rust-owned numerical objects
 
-This should be the main user-facing abstraction for prototyping.
+This should be the main user-facing abstraction for prototyping and should arise from migration and cleanup of existing reusable code, not duplication.
 
 #### 3. Function-to-QTT construction and compression APIs
 
-Add user-friendly construction paths for:
+Provide user-friendly construction paths for:
 
 - compressing Julia functions to QTT
 - scalar-, vector-, and matrix-valued function compression
 - building constants, zeros, and template-shaped functions
 - conversion from TCI/QTCI results into the high-level function type
 
-This is one of the most important usability features.
+This is one of the most important usability features and should preserve the strengths of the current `BubbleTeaCI` workflow while improving clarity and robustness.
 
 #### 4. Core QTT function operations
 
@@ -255,7 +273,7 @@ These are central for iterative prototyping and debugging.
 
 #### 5. Variable-aware contraction APIs
 
-Include a semantic contraction layer similar in spirit to `BasicContractOrder`:
+Retain and clean up a semantic contraction layer similar in spirit to `BasicContractOrder`:
 
 - contract by variable names or positions
 - support multiplication plus contraction in one operation
@@ -263,7 +281,7 @@ Include a semantic contraction layer similar in spirit to `BasicContractOrder`:
 - support contraction over discrete/component indices
 - support weighted contraction / integration options such as volume-element factors
 
-This is a major part of what makes the Julia layer practical.
+This is a major part of what makes the high-level layer practical.
 
 #### 6. Integration and reduction utilities
 
@@ -278,7 +296,7 @@ These should be first-class user operations.
 
 #### 7. Function transformation utilities
 
-Include high-level transforms for QTT functions:
+Include high-level transforms for QTT functions, preserving the workflows that already exist around `BubbleTeaCI`:
 
 - affine pullbacks / coordinate transforms
 - shift, flip/reverse, phase rotation
@@ -318,11 +336,30 @@ Include lightweight inspection APIs for:
 
 These are important for research use and debugging.
 
+### Cleanup and Stabilization Goals
+
+The migration should not be a line-by-line backend swap. It should also be used to improve the reusable high-level layer:
+
+- decouple generic high-level APIs from concrete backend storage types
+- simplify internal abstractions and reduce cross-dependencies
+- make variable, layout, and component-leg semantics easier to inspect
+- improve naming, error messages, and user ergonomics
+- define a stable and well-documented public surface for the reusable `TTFunction` layer
+
+### Tutorial and Onboarding
+
+A beginner-oriented tutorial should be included as part of the migration effort:
+
+- it should be inspired by `basic_operations.jl`, but with much more explanation
+- it should introduce grids, function compression, evaluation, contraction orders, transformations, and integration step by step
+- it should include small, inspectable examples for scalar-, vector-, and matrix-valued functions
+- it should be runnable as executable documentation and ideally serve as part of the regression suite
+
 ### Rust-Side Items to Call Out
 
 #### A. Low-level features that should be explicitly exposed through the Julia interface
 
-The plan should include wrapper coverage for useful low-level primitives such as:
+The plan should include wrapper coverage for useful low-level primitives needed by the migrated high-level layer, such as:
 
 - TT add / scale / dot
 - TT reverse / full tensor export / construction from site tensors
@@ -357,14 +394,17 @@ The design should include acceptance tests covering:
 - embedding, interpolation, and averaging across resolutions
 - interop round-trips with ITensors and HDF5
 - small dense-reference comparisons against direct Julia evaluation
+- parity checks for representative `BubbleTeaCI` workflows during migration
+- execution of tutorial/example scripts as regression tests where practical
 
 ### Assumptions and Defaults
 
 - The Julia interface should prioritize research ergonomics and prototyping speed.
 - Heavy numerical kernels should stay in Rust; semantic composition should stay in Julia.
-- The first high-level target should be a `QTTFunction`-style API, not a full reproduction of all `BubbleTeaCI` abstractions.
+- The first high-level target should be a cleaned-up, backend-neutral `QTTFunction`-style API derived from the reusable `BubbleTeaCI` layer, not a second independent implementation.
 - Named variables and layout metadata are mandatory, not optional niceties.
 - `BubbleTeaCI` and `ReFrequenTT` usage patterns should drive prioritization more than theoretical completeness.
+- No duplicate long-term implementation of the generic high-level `TTFunction` functionality should be maintained.
 
 ## Phased Implementation Roadmap
 
@@ -379,9 +419,9 @@ Establish the Julia package skeleton and the base FFI layer:
 
 This phase should end with a stable substrate for all later work.
 
-### Phase 2. Core Tensor-Network Kernel Coverage
+### Phase 2. Core Backend Coverage for TT Workflows
 
-Expose the Rust-side tensor-network primitives needed above the raw tensor level:
+Expose the Rust-side tensor-network primitives required by high-level TT/QTT workflows:
 
 - `TensorTrain` type (`Vector{Tensor}`) with basic operations
 - `t4a_contract` for TT-level contraction (pass arrays of `t4a_tensor` pointers)
@@ -389,67 +429,67 @@ Expose the Rust-side tensor-network primitives needed above the raw tensor level
 - Absorb `T4ATensorTrain.jl` and `T4ATensorCI.jl`
 - TCI / QTCI construction and diagnostics
 
-This phase should keep the Julia API close to the Rust capabilities while making the major kernels available for composition.
+This phase should make the backend capable enough to support migration of the reusable high-level layer.
 
-### Phase 3. Julia Quantics Grid Layer
+### Phase 3. Backend-Neutral High-Level Interfaces
 
-Build the Julia-side grid abstraction independently of the high-level function type:
+Define the Julia-facing interfaces that the reusable high-level layer will target:
 
+- backend-neutral abstractions for TT-like objects and operations
+- the Julia quantics-grid abstraction and layout semantics
 - named variables
 - site layout / index-table specification
 - fused, interleaved, and grouped representations
 - coordinate and index conversion utilities
 - validation of layout consistency and endpoint conventions
 - Re-export `QuanticsGrids.jl`
+- public naming and semantics of `QTTFunction` / `TTFunction`
+- an explicit rule that generic high-level APIs should not depend on concrete `ITensors.jl` storage types
 
-This phase should end with a grid layer that is already usable for experimentation and for driving later QTT abstractions.
+This phase should make migration tractable and keep the later refactor focused.
 
-### Phase 4. `QTTFunction` Core API
+### Phase 4. Separate Reusable `BubbleTeaCI` Core from Applications
 
-Introduce the main user-facing gridded-function abstraction:
+Refactor `BubbleTeaCI` so that reusable tensor-network-function code is clearly separated from physics-specific applications:
 
-- define `QTTFunction` / `TTFunction` and settle the public naming
-- wrap TT-like data together with grid metadata and optional component legs
-- support construction from TT/QTCI objects
-- support compression from scalar-, vector-, and matrix-valued Julia functions
-- implement evaluation, `grid_coords`, arithmetic, `dot`, `norm`, truncation, `collect`, and slicing
+- isolate `TTFunction` / `GriddedFunction`, contraction-order logic, transforms, integration, interpolation, and related utilities
+- keep ladder-DGammaA and other application-specific code outside the reusable core boundary
+- preserve existing behavior with tests while improving module structure and readability
 
-This phase should deliver a practical prototype surface for function representation and direct experimentation.
+This phase should leave a reusable high-level core that can be migrated independently of the applications.
 
-### Phase 5. Semantic Contractions and Reductions
+### Phase 5. Migrate the Reusable High-Level Layer to the New Backend
 
-Add the high-level operations that make the Julia frontend useful for downstream workflows:
+Retarget the separated generic layer from `ITensors.jl` to the new `tensor4all-rs`-based Julia frontend:
 
-- variable-aware contraction planning by names or positions
-- multiplication-plus-contraction workflows
-- output variable and index reordering
-- integration and partial reduction over selected variables
-- reductions over component indices
-- weighted contraction and integration options
+- migrate `QTTFunction` / `TTFunction` storage and core operations
+- preserve evaluation, `grid_coords`, arithmetic, contraction, integration, embedding, and transform semantics
+- support scalar-, vector-, and matrix-valued functions on the new backend
+- close any remaining frontend wrapper gaps required by the migrated code
 
-This phase should make it possible to express the kinds of workflows currently prototyped in `BubbleTeaCI`.
+This phase should remove direct `ITensors.jl` dependence from the reusable `BubbleTeaCI` high-level layer.
 
-### Phase 6. Transforms and Multiresolution Workflows
+### Phase 6. Cleanup, Stabilization, and Application Migration
 
-Extend the high-level layer with transformation and resolution-changing utilities:
+Use the migration to harden the design and bring the application codes across:
 
-- affine pullbacks and coordinate transforms (via Rust `t4a_qtransform_*`)
-- shift, flip/reverse, phase rotation, cumulative-sum, and Fourier-style operations
-- embedding into larger or higher-dimensional grids
-- coarsening / averaging
-- refinement / interpolation
-- template-based resampling workflows
+- simplify naming and internal data flow in the reusable core
+- improve flexibility, diagnostics, and error handling
+- document stable public APIs and expected invariants
+- ensure transform and multiresolution workflows are fully covered on the new backend, including affine pullbacks, shifts, flips, phase rotations, cumulative sums, Fourier-style operations, embedding, coarsening, refinement, and template-based resampling
+- migrate ladder-DGammaA and other applications to the refactored core and new backend
 
-This phase should cover the most important QTT function manipulations used in practice.
+This phase should turn the migrated code into a maintainable ecosystem layer rather than just a backend port.
 
-### Phase 7. Interop, Validation, and Performance Closure
+### Phase 7. Tutorial, Validation, and Performance Closure
 
-Finish the interface by hardening compatibility, tests, and performance boundaries:
+Finish the interface by hardening documentation, compatibility, and performance boundaries:
 
-- complete ITensors and HDF5 round-trip support for the high-level abstractions
+- add a beginner-oriented tutorial in the spirit of `basic_operations.jl`, with more detailed explanations and examples
+- keep tutorial and example workflows executable where practical
+- complete ITensors and HDF5 round-trip support where it remains useful
 - add diagnostics and introspection APIs
-- build dense-reference and cross-package validation tests
-- add example workflows mirroring representative `BubbleTeaCI` usage
+- build dense-reference tests and migration-parity tests against representative existing workflows
 - profile Julia-side orchestration and identify any Rust-kernel additions that are truly justified
 
-This phase should end with a documented, validated Julia frontend that is ready to serve as the main interface to `tensor4all-rs`.
+This phase should end with a documented, validated Julia frontend together with a migrated and cleaned-up reusable `BubbleTeaCI` high-level layer.
