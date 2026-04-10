@@ -115,3 +115,27 @@ optfirstpivot(f, localdims; ...) → pivot
 # Integration
 integrate(f, grid; ...) → scalar
 ```
+
+## Port Strategy and Long-term Direction
+
+### Monorepo approach
+
+`TensorCI` is ported as a submodule inside `Tensor4all.jl`, not as an independent package. Rationale:
+
+- **Type unification**: Output type is `SimpleTT.TensorTrain{V,N}` directly, eliminating conversion steps
+- **Simplified version management**: Splitting submodules into independent packages would require managing C-API distribution and cross-library version compatibility, which adds significant overhead
+- **Easier future replacement**: Within a monorepo, internal implementations can be swapped without changing user-facing APIs
+
+### Scope of the full port
+
+All functionality from TensorCrossInterpolation.jl (Matrix CI internals, sweep strategies, batch evaluation, cached function evaluation, etc.) will be ported into `Tensor4all.TensorCI`. The dependency on `TensorCrossInterpolation.TensorTrain{V,N}` is fully eliminated; `SimpleTT.TensorTrain{V,N}` becomes the sole output type.
+
+### Possible future migration to Rust TCI
+
+A Rust-based TCI implementation exists (or is under development) in tensor4all-rs. In the future, the ported Julia TCI implementation may be replaced by the Rust version via C-FFI. However, the timing and scope of this migration are undecided — the fully ported Julia implementation is the source of truth for now.
+
+Design guidelines in light of this possibility:
+
+- **Public API stability is paramount**: Function signatures (`crossinterpolate2`, `optfirstpivot`, etc.) must remain stable regardless of whether the internal implementation is Julia or Rust
+- **API compatibility over internal perfection**: Internal refactoring during the port is acceptable, but the public API should maintain compatibility with TensorCrossInterpolation.jl
+- **Incremental replacement**: If/when the Rust version becomes available, the switch should happen function-by-function rather than all at once
