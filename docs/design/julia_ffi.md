@@ -14,7 +14,7 @@ The Julia frontend owns wrappers, module boundaries, and Julia-facing APIs. `ten
 | Public module | Exposure | Primary design doc | Responsibility |
 |---------------|----------|--------------------|----------------|
 | `Tensor4all` / `Tensor4all.Core` | `Core` is re-exported from top-level `Tensor4all` | [julia_ffi_core.md](./julia_ffi_core.md) | `Index`, `Tensor`, ownership, low-level FFI, basic tensor/index helpers |
-| `Tensor4all.ITT` | namespaced submodule | [julia_ffi_itt.md](./julia_ffi_itt.md) | indexed TT/MPS/MPO-facing API built from Rust-backed `Tensor` |
+| `Tensor4all.TensorNetworks` | primary types/functions re-exported from top-level `Tensor4all` | [julia_ffi_tensornetworks.md](./julia_ffi_tensornetworks.md) | `AbstractTensorNetwork`, `TensorTrain`, `TreeTensorNetwork`, `contract`, `truncate` |
 | `Tensor4all.SimpleTT` | namespaced submodule | [julia_ffi_simplett.md](./julia_ffi_simplett.md) | raw-array `TensorTrain{V,N}` and TT operations used by TCI |
 | `Tensor4all.TensorCI` | namespaced submodule | [julia_ffi_tci.md](./julia_ffi_tci.md) | core TCI construction algorithms targeting `SimpleTT.TensorTrain{V,N}` |
 | `Tensor4all.QuanticsGrids` | namespaced submodule | [julia_ffi_quanticsgrids.md](./julia_ffi_quanticsgrids.md) | quantics grids, layouts, coordinates, endpoint conventions |
@@ -34,7 +34,7 @@ tensor4all-rs
     |
 Tensor4all
 ├── Core               # re-exported at top level
-├── ITT                # indexed tensor-train layer
+├── TensorNetworks     # AbstractTensorNetwork, TensorTrain, TreeTensorNetwork (re-exported)
 ├── SimpleTT           # raw-array tensor-train layer
 ├── TensorCI           # core TCI algorithms
 ├── QuanticsGrids      # grid/layout/coordinate semantics
@@ -60,22 +60,28 @@ Tensor4all
 ```
 
 - This is the stable frontend root.
-- Users can start from `using Tensor4all` for core tensor/index work.
-- The top-level package should primarily expose the `Core` surface, not flatten every submodule API.
+- Users can start from `using Tensor4all` for core tensor/index work plus primary tensor-network types.
+- The top-level package re-exports `Core` (Index, Tensor, ...) and `TensorNetworks` (TensorTrain, TreeTensorNetwork, contract, truncate, ...).
 
-### `Tensor4all.ITT`
+### `Tensor4all.TensorNetworks`
 
 ```text
-Tensor4all.ITT
-└── ITensorTrain
-    ├── uses Core.Tensor and Core.Index
-    ├── supports indexed TT / MPS / MPO workflows
-    └── owns contract / truncate / add at the indexed layer
+Tensor4all.TensorNetworks
+├── AbstractTensorNetwork       # common abstract type
+├── TensorTrain                 # chain topology
+│   ├── uses Core.Tensor and Core.Index
+│   ├── supports indexed TT / MPS / MPO workflows
+│   └── owns chain-specific operations (is_mps_like, is_mpo_like)
+└── TreeTensorNetwork           # tree topology (future)
+    └── general tree tensor-network workflows
+
+Common API via multiple dispatch:
+    contract, truncate, +, dot, norm
 ```
 
-- This is the indexed tensor-train layer.
-- It is the bridge from low-level `Tensor` to higher-level TT workflows.
-- It should stay focused on TT structure, not absorb `TTFunction` semantics.
+- This is the indexed tensor-network layer, supporting both chain and tree topologies.
+- Primary types and common functions (`TensorTrain`, `TreeTensorNetwork`, `contract`, etc.) are re-exported from top-level `Tensor4all`.
+- It should stay focused on TN structure, not absorb `TTFunction` semantics.
 
 ### `Tensor4all.SimpleTT`
 
@@ -89,7 +95,7 @@ Tensor4all.SimpleTT
 
 - This is the raw numerical TT layer.
 - It is the common representation for TCI/QTCI construction and low-overhead TT manipulation.
-- Conversion with `Tensor4all.ITT` is explicit and remains part of the frontend design.
+- Conversion to `Tensor4all.TensorNetworks.TensorTrain` is explicit and remains part of the frontend design.
 
 ### `Tensor4all.TensorCI`
 
@@ -144,7 +150,7 @@ Tensor4all.QuanticsTransform
 ```
 
 - This module owns transform operators, not grid semantics and not `TTFunction` semantics.
-- It depends on both `Tensor4all.QuanticsGrids` and `Tensor4all.ITT`.
+- It depends on both `Tensor4all.QuanticsGrids` and `Tensor4all.TensorNetworks`.
 - The boundary with `Tensor4all.QuanticsTCI` is still somewhat open where the existing Julia package already exposes helpers such as `quanticsfouriermpo`.
 - Partial-site application is part of this module boundary, because it is a transform concern rather than a `BubbleTeaCI` concern.
 
@@ -154,7 +160,7 @@ Tensor4all.QuanticsTransform
 Tensor4all.Core
     ^
     |
-    +---- Tensor4all.ITT
+    +---- Tensor4all.TensorNetworks  (AbstractTensorNetwork, TensorTrain, TreeTensorNetwork)
     |
     +---- Tensor4all.SimpleTT <---- Tensor4all.TensorCI
     |
@@ -165,7 +171,7 @@ Tensor4all.Core
     +---- additional modules may be split later
 
 BubbleTeaCI
-    ├── may depend on ITT
+    ├── may depend on TensorNetworks
     ├── may depend on SimpleTT / TensorCI
     └── may depend on QuanticsGrids / QuanticsTCI / QuanticsTransform
 ```

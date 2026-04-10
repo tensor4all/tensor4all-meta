@@ -15,7 +15,7 @@ This document covers the low-level Julia frontend primitives that sit directly o
 
 This document does not define backend `TensorTrain` support, quantics grid semantics, or `TTFunction` / `GriddedFunction` behavior.
 
-Compatibility for `ITensorMPS.MPS` / `MPO` belongs to [julia_ffi_itt.md](./julia_ffi_itt.md), because that is an `ITT.ITensorTrain` concern rather than a primitive `Index` / `Tensor` concern.
+Compatibility for `ITensorMPS.MPS` / `MPO` belongs to [julia_ffi_tensornetworks.md](./julia_ffi_tensornetworks.md), because that is an `TensorNetworks.TensorTrain` concern rather than a primitive `Index` / `Tensor` concern.
 
 ## `Index`
 
@@ -94,7 +94,7 @@ end
 - Keep compatibility for primitive `Index` / `Tensor` types here rather than in a separate extensions document.
 - Keep `MPS` / `MPO` compatibility in the TT layer.
 - Keep semantic composition out of this file.
-- Let [julia_ffi_itt.md](./julia_ffi_itt.md), [julia_ffi_simplett.md](./julia_ffi_simplett.md), and `bubbleteaCI.md` build on top of these primitives.
+- Let [julia_ffi_tensornetworks.md](./julia_ffi_tensornetworks.md), [julia_ffi_simplett.md](./julia_ffi_simplett.md), and `bubbleteaCI.md` build on top of these primitives.
 
 ## Open Questions
 

@@ -6,7 +6,7 @@ This document covers the `Tensor4all.SimpleTT` submodule.
 
 `Tensor4all.SimpleTT` is the raw-array tensor-train layer in the Julia frontend. It is the low-overhead TT representation used most naturally as the output of TCI/QTCI construction.
 
-This document does not define indexed MPS/MPO compatibility or high-level `TTFunction` semantics. Indexed TT workflows belong to [julia_ffi_itt.md](./julia_ffi_itt.md), while high-level workflows remain in [bubbleteaCI.md](./bubbleteaCI.md).
+This document does not define indexed MPS/MPO compatibility or high-level `TTFunction` semantics. Indexed TT workflows belong to [julia_ffi_tensornetworks.md](./julia_ffi_tensornetworks.md), while high-level workflows remain in [bubbleteaCI.md](./bubbleteaCI.md).
 
 ## In Scope
 
@@ -15,7 +15,7 @@ This document does not define indexed MPS/MPO compatibility or high-level `TTFun
 - raw-array TT evaluation and reduction
 - compression entry points at the `SimpleTT` layer
 - conversion to and from `TensorCrossInterpolation.TensorTrain{V,N}`
-- conversion to and from `ITT.ITensorTrain`
+- conversion to and from `TensorNetworks.TensorTrain`
 
 ## `Tensor4all.SimpleTT.TensorTrain{V,N}`
 
@@ -37,8 +37,8 @@ end # module SimpleTT
 ## Conversion
 
 - `SimpleTT.TensorTrain{V,N}` ↔ `TensorCrossInterpolation.TensorTrain{V,N}`
-- `SimpleTT.TensorTrain{V,N}` → `ITT.ITensorTrain`: requires explicit site indices
-- `ITT.ITensorTrain` → `SimpleTT.TensorTrain{V,N}`: extract raw data arrays from Rust-backed tensors
+- `SimpleTT.TensorTrain{V,N}` → `TensorNetworks.TensorTrain`: requires explicit site indices
+- `TensorNetworks.TensorTrain` → `SimpleTT.TensorTrain{V,N}`: extract raw data arrays from Rust-backed tensors
 
 Conversions should live in the target type's module, following Julia conventions.
 
@@ -101,7 +101,7 @@ Notes:
 ## Relationship to Other Docs
 
 - [julia_ffi_tci.md](./julia_ffi_tci.md) treats `SimpleTT.TensorTrain{V,N}` as the output boundary of core TCI.
-- [julia_ffi_itt.md](./julia_ffi_itt.md) defines the indexed TT layer that `SimpleTT` can convert into.
+- [julia_ffi_tensornetworks.md](./julia_ffi_tensornetworks.md) defines the indexed TT layer that `SimpleTT` can convert into.
 
 ## Open Questions
 

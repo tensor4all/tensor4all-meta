@@ -10,7 +10,7 @@ The Julia frontend design is split into a hub-and-spoke set:
 
 - [julia_ffi.md](./julia_ffi.md) for the overview and index
 - [julia_ffi_core.md](./julia_ffi_core.md) for low-level primitives
-- [julia_ffi_itt.md](./julia_ffi_itt.md) for indexed TT support (`ITT.ITensorTrain`)
+- [julia_ffi_tensornetworks.md](./julia_ffi_tensornetworks.md) for indexed tensor-network support (`TensorNetworks`: `TensorTrain`, `TreeTensorNetwork`)
 - [julia_ffi_simplett.md](./julia_ffi_simplett.md) for raw-array TT support (`SimpleTT.TensorTrain{V,N}`)
 - [julia_ffi_tci.md](./julia_ffi_tci.md) for core TCI algorithms (`TensorCI`)
 - [julia_ffi_quanticsgrids.md](./julia_ffi_quanticsgrids.md) for `QuanticsGrids`
