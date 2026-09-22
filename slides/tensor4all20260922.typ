@@ -233,7 +233,7 @@
 // =====================================================================
 #slide("tensor4all-rs: what changed", tag: "tensor4all-rs", color: c-t4rs)[
   - *New algorithms*: randomized TreeTN contraction, cross interpolation native to trees, partitioned tree networks with reconstruction.
-  - *Parallel*: adaptive interpolation runs on hataori-rs, Rayon by default and MPI opt-in.
+  - *Parallel*: PartitionedTT adaptive interpolation runs on hataori-rs, Rayon by default and MPI opt-in.
   - *Quality*: an August audit removed library panics, introduced typed errors, layering rules and a performance evidence ledger.
   - *Boundaries*: C API for Julia unchanged; a PyO3 crate for Python started.
 ][
@@ -267,7 +267,7 @@
   #set text(size: 17pt)
   #set list(spacing: 0.65em)
   - ACI approximates pointwise functions without forming the exact high-rank result (Ritter et al.). The chain crate ports AlternatingCrossInterpolation.jl.
-  - *New*: native ACI on compatible TreeTNs—no chain conversion or full-tensor materialization—and n-way products in one run without intermediate products.
+  - *New*: native ACI on compatible TreeTNs, with no chain conversion or full-tensor materialization, and n-way products in one run without intermediate products.
   - Same core controls as chain ACI, plus tree traversal and explicit resource / cache budgets.
   - A full round visits every directed edge once: a minimum-retracing forward walk of length $2|E| - "diameter"$ followed by the reverse diameter spine. A chain gives the familiar forward / backward pair.
 ][
@@ -279,7 +279,7 @@
   - *PartitionedTreeTN*: adaptive patching (Grosso et al.) generalized from tensor trains to arbitrary tree topologies.
   - Patch error budgets proportional to patch volume, $epsilon_p^2 prop "vol"_p$.
   - *Reconstruction*: repartition a patched target under a global L2 allowance; operators on index subsets such as the quantics Fourier transform.
-  - *Parallel adaptive interpolation*: patch waves scheduled by hataori-rs, deterministic sampling across serial, Rayon and MPI runs.
+  - *PartitionedTT adaptive interpolation*: patch waves scheduled by hataori-rs, deterministic sampling across serial, Rayon and MPI runs.
 ][
   G. Grosso, M. K. Ritter, S. Rohshap, S. Badr, A. Kauch, M. Wallerberger, J. von Delft, H. Shinaoka, "Adaptive patching for tensor train computations", arXiv:2602.22372 (2026).
 ]
@@ -321,8 +321,8 @@
       - Provenance policy and CITATION.cff per repository
     ],
     [
-      *Next*
-      - tenferro-rs JOSS paper, mid-October, with Jin-Guo Liu's Rust quantum circuit simulator
+      *Next steps*
+      - PartitionedTreeTN: adaptive TCI with region splitting and hataori-rs parallel scheduling
       - SRC and TreeACI benchmarks against zip-up and fitting on quantics workloads
       - Python: CI, wheels; Tensor4all.jl: catch up to TreeTN
     ])
