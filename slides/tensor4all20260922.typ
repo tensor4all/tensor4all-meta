@@ -252,22 +252,26 @@
 
 // =====================================================================
 #slide("Successive randomized compression (SRC)", tag: "tensor4all-rs", color: c-t4rs)[
-  - Randomized algorithm for the compressed MPO × MPS product, by Camaño, Epperly and Tropp; extended here to general trees.
-  - Fixed-rank and adaptive variants, Rust and C API. Adaptive SRC rests on tenferro's incremental Householder QR and rank-revealing QR.
-  - CUDA-resident TreeTNs stay on device through the whole contraction.
-  - Verified line by line against the authors' reference code; the provenance audit is in the repository docs.
+  #set text(size: 17pt)
+  #set list(spacing: 0.65em)
+  - Compresses tensor-network products without forming the exact high-rank product: Gaussian sketches plus local QR and projection. The MPO × MPS method of Camaño, Epperly and Tropp is extended here to general trees.
+  - Rust supports fixed-rank and adaptive variants; the C API currently exposes fixed-rank SRC. Adaptive SRC uses tenferro-backed QR / RRQR; its native incremental Householder state is not yet wired in.
+  - Explicit-context SRC keeps tensor payloads and intermediates CUDA-resident; only bounded rank and error decision metadata returns to the host.
+  - The chain path was cross-checked against the paper and authors' reference code; the tree recurrence was separately derived and provenance-audited.
 ][
   C. Camaño, E. N. Epperly, J. A. Tropp, "Successive randomized compression: a randomized algorithm for the compressed MPO-MPS product", arXiv:2504.06475 (2025). Reference code: github.com/chriscamano/RandomMPOMPS.
 ]
 
 // =====================================================================
 #slide("TreeACI: alternating cross interpolation on trees", tag: "tensor4all-rs", color: c-t4rs)[
-  - ACI approximates elementwise functions of tensor trains by cross interpolation (Ritter et al.). Our chain crate is a port of AlternatingCrossInterpolation.jl.
-  - *New*: ACI runs on a TreeTN directly, same options as the chain version, n-way products in one run.
-  - Sweep is a deterministic minimum-retracing walk of length $2|E| - "diameter"$, reducing to the usual two sweeps on a chain.
-  - Chain ACI gained a global-pivot guard and cache reuse across sweeps.
+  #set text(size: 17pt)
+  #set list(spacing: 0.65em)
+  - ACI approximates pointwise functions without forming the exact high-rank result (Ritter et al.). The chain crate ports AlternatingCrossInterpolation.jl.
+  - *New*: native ACI on compatible TreeTNs—no chain conversion or full-tensor materialization—and n-way products in one run without intermediate products.
+  - Same core controls as chain ACI, plus tree traversal and explicit resource / cache budgets.
+  - A full round visits every directed edge once: a minimum-retracing forward walk of length $2|E| - "diameter"$ followed by the reverse diameter spine. A chain gives the familiar forward / backward pair.
 ][
-  M. K. Ritter et al., "Alternating cross interpolation", arXiv:2604.00037 (2026). Original Julia library: github.com/tensor4all/AlternatingCrossInterpolation.jl (Marc K. Ritter and contributors).
+  Experimental: performance parity is workload-dependent. M. K. Ritter et al., "Alternating cross interpolation", arXiv:2604.00037 (2026); github.com/tensor4all/AlternatingCrossInterpolation.jl.
 ]
 
 // =====================================================================
