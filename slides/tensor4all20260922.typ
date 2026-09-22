@@ -85,8 +85,8 @@
 }
 #slide("The community is growing")[
   #grid(columns: (1fr, 1fr, 1fr, 1fr), gutter: 12pt,
-    stat[43][contributors, whole org #linebreak() 36 in May],
-    stat[19][contributors, Rust stack #linebreak() 12 in May],
+    stat[34][contributors, whole org #linebreak() 29 in May],
+    stat[12][contributors, Rust stack #linebreak() 7 in May],
     stat[78][stars on tenferro-rs #linebreak() 5 in May],
     stat[9][external repos using tenferro #linebreak() 0 in May],
   )
@@ -95,7 +95,7 @@
     [
       #text(size: 14pt, weight: "bold")[Cumulative contributors, Rust stack (2026)]
       #v(4pt)
-      #bars((("Jan", 4), ("Feb", 4), ("Mar", 6), ("Apr", 12), ("May", 12), ("Jun", 14), ("Jul", 17), ("Aug", 18), ("Sep", 19)), color: c-tenferro)
+      #bars((("Jan", 4), ("Feb", 4), ("Mar", 5), ("Apr", 7), ("May", 7), ("Jun", 9), ("Jul", 11), ("Aug", 12), ("Sep", 12)), color: c-tenferro, maxv: 13)
     ],
     [
       #set text(size: 14pt)
@@ -105,7 +105,7 @@
       - Dependents: yao-rs (Liu), TeNeT (Watanabe), latticeqcd-rs, hataori-rs
     ])
 ][
-  Commit authors on GitHub, bots and forked repositories excluded; org total covers Julia, C++ and Rust repositories. Stars and dependents from the GitHub API on 2026-09-22.
+  Distinct commit authors since 2024 on GitHub, bots and forked repositories excluded; org total covers Julia, C++ and Rust repositories. Stars and dependents from the GitHub API on 2026-09-22.
 ]
 
 // =====================================================================
