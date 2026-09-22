@@ -164,7 +164,7 @@
   )
   #v(0.8em)
   - Period: mid-May to mid-September 2026. Full features live in Rust; Julia and Python are thin entry points.
-  - Plan: tenferro-rs (20 min) → tensor4all-rs (20 min) → hataori-rs, bindings, next steps (15 min).
+  - Plan: community → tenferro-rs (15 min) → tensor4all-rs (20 min) → hataori-rs, bindings, next steps (15 min).
 ]
 
 // =====================================================================
@@ -172,7 +172,7 @@
   #set text(size: 16pt)
   #table(columns: (1.5fr, 1fr, 2.4fr), stroke: 0.5pt, inset: 8pt,
     [*Repository*], [*Merged PRs*], [*Releases*],
-    [tenferro-rs], [about 350], [v0.2 (Jul) → v0.3 → v0.4 → *v0.5 (Sep 8)*, on crates.io],
+    [tenferro-rs], [about 380], [v0.2 (Jul) → v0.3 → v0.4 → v0.5 → *v0.6 (Sep 21)*, on crates.io],
     [tensor4all-rs], [about 115], [v0.2.0 (Jun)],
     [strided-rs], [about 65], [v0.3 (Jul) → v0.4 (Aug), on crates.io],
     [hataori-rs], [new], [first working engine (Aug)],
@@ -185,44 +185,49 @@
 ]
 
 // =====================================================================
-#slide("tenferro-rs: sessions instead of per-call setup", tag: "tenferro-rs", color: c-tenferro)[
-  - *Finding*: on small tensors the gap to PyTorch was per-operation overhead, not the kernels.
-  - *Answer*: one session API shared by eager, autodiff and traced execution. Buffer pools, Rayon pool and BLAS handles live in the session.
-  - tensor4all-rs now runs on an explicit CPU / CUDA execution context.
-  #v(0.6em)
-  #code-block[
-    ```rust
-    let cpu = CpuBackend::new()?;          // build once, reuse everywhere
-    let s = cpu.session();                  // enter a shared execution scope
-    let c = einsum_in(&s, "ij,jk->ik", [&a, &b])?;
-    ```
-  ]
+#slide("tenferro-rs: what changed since May", tag: "tenferro-rs", color: c-tenferro)[
+  - *Execution*: one explicit backend session shared by eager, autodiff and traced paths. Building the backend once removed most of the small-tensor overhead gap to PyTorch.
+  - *Linear algebra*: full SVD on CPU and CUDA, incremental Householder QR, rank-revealing QR; derivative rules generated from linearization.
+  - *Einsum*: strided-rs replay plans, ellipsis everywhere, TBLIS and grouped GEMM providers, a tropical (semiring) extension.
+  - *CUDA*: cached cuTENSOR plans, cuFFT, cuSOLVER driver selection, asynchronous event contract. Unsupported ops return typed errors, never a silent CPU fallback.
+  - *v0.6 (Sep 21)*: open scalar contract, so downstream crates can define their own scalar types. WebGPU and Metal remain experimental.
 ]
 
 // =====================================================================
-#slide("tenferro-rs: linalg, einsum, GPU", tag: "tenferro-rs", color: c-tenferro)[
-  - *Linear algebra*: full and compact SVD, incremental Householder QR, rank-revealing QR; derivative rules generated from linearization, with opt-in gauge conventions.
-  - *Einsum*: strided-rs replay plans compiled once, ellipsis everywhere, TBLIS and grouped GEMM providers, a tropical (semiring) extension.
-  - *CUDA*: cached cuTENSOR plans, cuFFT, on-device QR, asynchronous event contract. Unsupported ops return typed errors, never a silent CPU fallback.
-  - *Portable*: WebGPU and Metal through CubeCL / CubeK, still experimental.
-]
-
-// =====================================================================
-#slide("Benchmark: CPU einsum, Apple M5 Max", tag: "tenferro-benchmark", color: c-tenferro)[
+#slide("Benchmark on NVIDIA A100", tag: "tenferro-benchmark", color: c-tenferro)[
+  #set text(size: 14pt)
+  #grid(columns: (1fr, 1.1fr), gutter: 24pt,
+    [
+      *Dense linear algebra, f64 (ms)*
+      #v(3pt)
+      #table(columns: (2fr, 1fr, 1fr), stroke: 0.5pt, inset: 5pt, align: (left, right, right),
+        [*Problem*], [*tenferro*], [*PyTorch*],
+        [matmul 3072], [3.30], [3.12],
+        [batched matmul], [2.32], [2.08],
+        [eigh 1024], [14.0], [14.3],
+        [QR 1536], [12.0], [11.8],
+        [SVD 256], [12.2], [12.1],
+        [solve 2048], [10.1], [9.1],
+      )
+    ],
+    [
+      *Permutation, 2 GiB tensors (ms)*
+      #v(3pt)
+      #table(columns: (2fr, 1.1fr, 1.3fr, 0.9fr), stroke: 0.5pt, inset: 5pt, align: (left, right, right, right),
+        [*Pattern*], [*tenferro*], [*cuTENSOR*], [*Torch*],
+        [18D reverse], [8.8], [8.7], [33.2],
+        [23D reverse], [7.7], [7.6], [45.7],
+        [2D transpose], [5.7], [5.5], [20.8],
+        [3D transpose], [5.4], [5.3], [27.4],
+        [24D TN-shaped], [5.6], [5.5], [5.3],
+      )
+    ])
+  #v(0.4em)
   #set text(size: 15pt)
-  #table(columns: (2.4fr, 1fr, 1fr, 1fr, 0.9fr, 1.1fr), stroke: 0.5pt, inset: 7pt, align: (left, right, right, right, right, right),
-    [*Instance (ms)*], [*tenferro trace*], [*tenferro eager*], [*PyTorch*], [*JAX*], [*OMEinsum*],
-    [matmul 1024], [8.4], [5.3], [*5.2*], [35.5], [40.7],
-    [MERA closed network], [177], [190], [*160*], [848], [980],
-    [batched likelihood (LM)], [*10.4*], [26.1], [18.4], [29.7], [85.8],
-    [tensor-network permutation], [*123*], [156], [134], [212], [180],
-  )
-  #v(0.8em)
-  #set text(size: 19pt)
-  - Same BLAS (Accelerate), one thread, medians, refreshed mid-September.
-  - Traced mode matches PyTorch on tensor-network-shaped instances; eager mode still pays dispatch on tiny ops.
+  - Dense linalg and GEMM within a few percent of PyTorch and of cuBLASLt / cuSOLVER: no backend overhead.
+  - High-rank permutations run at cuTENSOR speed, up to 6× faster than PyTorch.
 ][
-  Full tables, GPU (A100) suites and run metadata: github.com/tensor4all/tenferro-benchmark
+  Medians, device-resident inputs, synchronized timing. A100 80GB PCIe, CUDA 12.9, 2026-09-18. Full tables incl. vendor columns: github.com/tensor4all/tenferro-benchmark
 ]
 
 // =====================================================================
