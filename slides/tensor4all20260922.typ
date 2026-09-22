@@ -109,6 +109,50 @@
 ]
 
 // =====================================================================
+#slide("Who contributed in 2026")[
+  #set text(size: 11.5pt)
+  #set par(leading: 0.4em)
+  #let nw = text(fill: c-green, weight: "bold")[·]
+  #grid(columns: (1.2fr, 1fr), gutter: 18pt,
+    [
+      #text(size: 14pt, weight: "bold", fill: c-tenferro)[Rust stack] #text(size: 11pt, fill: gray)[(#nw joined since May, ordered by first commit)]
+      #v(2pt)
+      #table(columns: (1.6fr, 1.1fr, 2.6fr), stroke: 0.4pt, inset: 3.8pt,
+        [*Name*], [*Affiliation*], [*Repositories*],
+        [Hiroshi Shinaoka], [Saitama], [all],
+        [Satoshi Terasaki], [AtelierArith], [tenferro-rs, tenferro-benchmark, strided-rs, hataori-rs],
+        [Jin-Guo Liu], [HKUST(GZ)], [omeinsum-rs, tenferro-rs],
+        [Ken Inayoshi], [Saitama], [tensor4all-rs],
+        [Nepomuk Ritz], [LMU], [tensor4all-rs],
+        [Selina Dirnböck], [TU Wien], [tensor4all-rs],
+        [#nw Xiwei Pan], [HKUST(GZ)], [omeinsum-rs],
+        [#nw Ryo Watanabe], [Osaka], [tenferro-rs, strided-rs],
+        [#nw Yusheng Zhao], [HKUST(GZ)], [omeinsum-rs, tenferro-rs],
+        [#nw Samuel Badr], [TU Wien], [tensor4all-rs],
+        [#nw Lingrui Cheng], [LMU / TUM], [tensor4all-rs, tensor4all-benchmark],
+      )
+    ],
+    [
+      #text(size: 14pt, weight: "bold", fill: c-t4jl)[Julia and C++ libraries]
+      #v(2pt)
+      #table(columns: (1.4fr, 2.4fr), stroke: 0.4pt, inset: 3.8pt,
+        [*Name*], [*Repositories*],
+        [Marc K. Ritter], [TensorCrossInterpolation.jl, AlternatingCrossInterpolation.jl],
+        [Hirone Ishida], [tensorizingflows],
+        [Martin Mikkelsen], [InterpolativeQTT.jl, Tensor4all.jl],
+        [Nepomuk Ritz], [Tensor4all.jl],
+        [Samuel Badr], [QuanticsGrids.jl, QuanticsTCI.jl],
+        [Markus Frankenbach], [AlternatingCrossInterpolation.jl, TCIAlgorithms.jl],
+        [T. Kloss, Y. Núñez Fernández, S. B., J. Fowkes], [xfac],
+      )
+      #v(4pt)
+      #text(size: 11pt, fill: gray.darken(30%))[Issue reporters without commits: Guo P. Chen, LeoXia (HKUST(GZ)).]
+    ])
+][
+  Distinct commit authors with at least one commit in 2026, bots excluded; one trivial single-commit author omitted.
+]
+
+// =====================================================================
 #slide("The stack, and what this talk covers")[
   #set text(size: 16pt)
   #table(columns: (1.3fr, 4fr), stroke: 0.5pt, inset: 8pt,
