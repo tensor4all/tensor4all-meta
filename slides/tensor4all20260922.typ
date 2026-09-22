@@ -63,8 +63,50 @@
   subtitle: "tenferro-rs · tensor4all-rs · hataori-rs · bindings",
   author: "Hiroshi Shinaoka",
   date: "tensor4all meeting, 2026-09-22",
-  acknowledgements: "With Ryo Watanabe, Satoshi Terasaki, Marc K. Ritter (ACI / TCI algorithms), Selina Dirnböck, Markus Frankenbach, Nepomuk Ritz, Jin-Guo Liu",
+  acknowledgements: "With S. Terasaki, R. Watanabe, L. Cheng, M. K. Ritter (ACI / TCI algorithms), S. Badr, K. Inayoshi, S. Dirnböck, M. Frankenbach, N. Ritz, J.-G. Liu, Y. Zhao and the HKUST(GZ) group",
 )
+
+// =====================================================================
+#let stat(n, label) = align(center)[
+  #text(size: 38pt, weight: "bold", fill: blue)[#n]
+  #v(-0.7em)
+  #text(size: 13pt, fill: gray.darken(30%))[#label]
+]
+#let bars(data, color: blue, maxv: 20) = {
+  let h = 2.6cm
+  grid(columns: data.len(), column-gutter: 5pt, align: bottom,
+    ..data.map(((m, val)) => align(center)[
+      #text(size: 11pt)[#val]
+      #v(2pt)
+      #rect(width: 100%, height: h * val / maxv, fill: color, radius: 2pt)
+      #v(2pt)
+      #text(size: 10pt, fill: gray.darken(20%))[#m]
+    ]))
+}
+#slide("The community is growing")[
+  #grid(columns: (1fr, 1fr, 1fr, 1fr), gutter: 12pt,
+    stat[43][contributors, whole org #linebreak() 36 in May],
+    stat[19][contributors, Rust stack #linebreak() 12 in May],
+    stat[78][stars on tenferro-rs #linebreak() 5 in May],
+    stat[9][external repos using tenferro #linebreak() 0 in May],
+  )
+  #v(0.3em)
+  #grid(columns: (1.1fr, 1fr), gutter: 28pt,
+    [
+      #text(size: 14pt, weight: "bold")[Cumulative contributors, Rust stack (2026)]
+      #v(4pt)
+      #bars((("Jan", 4), ("Feb", 4), ("Mar", 6), ("Apr", 12), ("May", 12), ("Jun", 14), ("Jul", 17), ("Aug", 18), ("Sep", 19)), color: c-tenferro)
+    ],
+    [
+      #set text(size: 14pt)
+      #set list(spacing: 0.5em)
+      - *tenferro-rs*: committers 3 → 6 since June; five new issue reporters from Jin-Guo Liu's group
+      - *tensor4all-rs*: Lingrui Cheng landed 14 PRs; Samuel Badr, Ken Inayoshi joined
+      - Dependents: yao-rs (Liu), TeNeT (Watanabe), latticeqcd-rs, hataori-rs
+    ])
+][
+  Commit authors on GitHub, bots and forked repositories excluded; org total covers Julia, C++ and Rust repositories. Stars and dependents from the GitHub API on 2026-09-22.
+]
 
 // =====================================================================
 #slide("The stack, and what this talk covers")[
