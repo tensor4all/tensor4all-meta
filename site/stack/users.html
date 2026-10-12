@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stack for TN users</title>
+<meta name="description" content="A guide to the tensor4all Rust stack for QTT, TCI and tree tensor network users: which crate to use, how it maps to the Julia packages, and what runs underneath.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="brand" href="https://tensor4all.org/">tensor4all</a>
+  <nav>
+    <a href="./">Stack overview</a>
+    <a href="users.html" aria-current="page">For tensor network users</a>
+    <a href="backend.html">For backend developers</a>
+  </nav>
+</div></header>
+
+<div class="layout with-toc">
+<aside class="toc">
+  <p class="label">On this page</p>
+  <ol>
+    <li><a href="#workflow">The typical workflow</a></li>
+    <li><a href="#julia">Coming from Julia</a></li>
+    <li><a href="#crates">Which crate to use</a></li>
+    <li><a href="#two-stacks">Two stacks and the bridge</a></li>
+    <li><a href="#start">Getting started</a></li>
+    <li><a href="#underneath">What runs underneath</a></li>
+    <li><a href="#parallel">Parallel runs with hataori</a></li>
+    <li><a href="#maturity">Maturity and help</a></li>
+  </ol>
+</aside>
+<main>
+  <section class="hero">
+    <p class="eyebrow">Guide A</p>
+    <h1>The stack for tensor network users</h1>
+    <p class="lead">You work with quantics tensor trains, tensor cross interpolation or tree tensor networks. This guide tells you which tensor4all-rs crate does what, how it lines up with the Julia packages you may know, and how much of the backend you need to care about (very little).</p>
+    <p class="asof">Status as of 2026-10-13.</p>
+  </section>
+
+  <figure class="figure">
+    <div class="map-scroll"><div class="stack-map" data-focus="users"></div></div>
+    <figcaption>Your code sits at the top two layers. The highlighted bands are the subject of this guide; the rest is covered in the <a href="backend.html">backend guide</a>.</figcaption>
+  </figure>
+
+  <h2 id="workflow">The typical workflow</h2>
+  <p>Most QTT work follows the same four steps, and each step has a home crate.</p>
+  <ol class="steps">
+    <li><strong>Describe a grid.</strong> Map continuous variables to binary digits with a <code>DiscretizedGrid</code> (from quanticsgrids-rs, re-exported by <code>tensor4all-quanticstci</code>), choosing bounds, resolution and how variables are interleaved.</li>
+    <li><strong>Learn a QTT from a function.</strong> Run quantics TCI on your function with <code>tensor4all-quanticstci</code>. The function is sampled in batches, so it can be an expensive solver call. The result can be evaluated, summed and integrated.</li>
+    <li><strong>Transform it.</strong> Apply QTT operators from <code>tensor4all-quanticstransform</code>: Fourier transform, shift, flip, phase rotation, cumulative sum and affine coordinate maps, with multivariable variants.</li>
+    <li><strong>Contract and compress.</strong> Multiply, contract and truncate with <code>tensor4all-treetn</code> (zip-up, variational fit, randomized SRC), or with <code>tensor4all-simplett</code> for plain tensor trains. Elementwise products of QTTs use <code>tensor4all-aci</code>. Save results in an ITensors.jl compatible HDF5 file with <code>tensor4all-hdf5</code>.</li>
+  </ol>
+
+  <h2 id="julia">Coming from Julia</h2>
+  <p>tensor4all-rs started as a port of the tensor4all Julia ecosystem, so most packages have a direct counterpart. Names follow the Julia ones where it made sense, but the APIs are Rust APIs, not transliterations.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Julia package</th><th>Rust crate</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>TensorCrossInterpolation.jl</td><td><code>tensor4all-tensorci</code></td><td>TCI2 is the primary algorithm; TCI1 is kept for compatibility</td></tr>
+      <tr><td>QuanticsGrids.jl</td><td>quanticsgrids-rs</td><td>re-exported from <code>tensor4all-quanticstci</code></td></tr>
+      <tr><td>QuanticsTCI.jl</td><td><code>tensor4all-quanticstci</code></td><td>high level quantics TCI</td></tr>
+      <tr><td>Quantics.jl</td><td><code>tensor4all-quanticstransform</code></td><td>QTT operators as MPOs</td></tr>
+      <tr><td>SimpleTensorTrains.jl</td><td><code>tensor4all-simplett</code></td><td>raw array tensor trains, compression</td></tr>
+      <tr><td>ITensors.jl (MPS, MPO)</td><td><code>tensor4all-itensorlike</code>, <code>tensor4all-core</code></td><td>dynamic <code>Index</code> and <code>Tensor</code>, ITensors-like tensor train API</td></tr>
+      <tr><td>ITensorNetworks.jl, FastMPOContractions.jl</td><td><code>tensor4all-treetn</code></td><td>arbitrary tree topology; canonicalization, contraction, DMRG, TDVP, linear solve</td></tr>
+      <tr><td>TreeTCI.jl</td><td><code>tensor4all-treetci</code></td><td>cross interpolation on trees</td></tr>
+      <tr><td>AlternatingCrossInterpolation.jl</td><td><code>tensor4all-aci</code></td><td>elementwise products of tensor trains</td></tr>
+      <tr><td>InterpolativeQTT.jl</td><td><code>tensor4all-interpolativeqtt</code></td><td>multiscale interpolative QTT construction</td></tr>
+      <tr><td>PartitionedMPSs.jl, TCIAlgorithms.jl (patching)</td><td><code>tensor4all-partitionedtreetn</code></td><td>masked subdomains, adaptive patching; replaces the deprecated <code>tensor4all-partitionedtt</code></td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><p>If you want to stay in Julia, <a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a> calls tensor4all-rs through its C API. It is maintained on a best effort basis and is meant for light use and teaching. For production runs or anything performance sensitive, use the Rust crates directly.</p></div>
+
+  <h2 id="crates">Which crate to use</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>You want to</th><th>Start with</th></tr></thead>
+    <tbody>
+      <tr><td>Compress a function of one or more continuous variables into a QTT</td><td><code>tensor4all-quanticstci</code></td></tr>
+      <tr><td>Run TCI on a function of discrete indices</td><td><code>tensor4all-tensorci</code></td></tr>
+      <tr><td>Fourier transform, shift or otherwise transform a QTT</td><td><code>tensor4all-quanticstransform</code></td></tr>
+      <tr><td>Work with plain tensor trains as arrays (evaluate, sum, compress)</td><td><code>tensor4all-simplett</code></td></tr>
+      <tr><td>Use named indices like ITensors (MPS and MPO style code)</td><td><code>tensor4all-itensorlike</code></td></tr>
+      <tr><td>Contract, truncate or sweep (DMRG, TDVP) on chains or trees</td><td><code>tensor4all-treetn</code></td></tr>
+      <tr><td>Interpolate on a tree topology</td><td><code>tensor4all-treetci</code></td></tr>
+      <tr><td>Multiply two QTTs elementwise</td><td><code>tensor4all-aci</code> (experimental tree variants: <code>treeaci</code>, <code>treersi</code>)</td></tr>
+      <tr><td>Split a hard function into patches with bounded bond dimension</td><td><code>tensor4all-partitionedtreetn</code></td></tr>
+      <tr><td>Read and write ITensors.jl HDF5 files</td><td><code>tensor4all-hdf5</code></td></tr>
+      <tr><td>Call from C, Julia or another language</td><td><code>tensor4all-capi</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="two-stacks">Two stacks and the bridge</h2>
+  <p>tensor4all-rs deliberately contains two families of crates.</p>
+  <ul>
+    <li><strong>The TT and TCI stack</strong> (<code>simplett</code>, <code>tensorci</code>, <code>quanticstci</code>, <code>quanticstransform</code>) works with tensor trains as arrays indexed by position. It is close to the Julia TCI packages and is the fastest path from a function to a QTT.</li>
+    <li><strong>The network stack</strong> (<code>core</code>, <code>itensorlike</code>, <code>treetn</code>, <code>treetci</code>, <code>partitionedtreetn</code>) works with named indices and arbitrary tree topologies. A chain is just a tree shaped like a path, so MPS and MPO algorithms live here too.</li>
+  </ul>
+  <p>They coexist on purpose. Converting between them is the job of a single bridge in <code>tensor4all-treetn</code>: <code>tensor_train_to_treetn</code> and <code>treetn_to_tensor_train</code> (with variants that set node names and site indices). A common pattern is to learn a QTT with quantics TCI, move it to the network stack, then apply operators and contract there.</p>
+
+  <h2 id="start">Getting started</h2>
+  <p>The crates are not on crates.io yet. Add them as git dependencies; pin a revision with <code>rev = "..."</code> for reproducible runs.</p>
+  <pre><code>[dependencies]
+tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-simplett" }
+tensor4all-quanticstci = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-quanticstci" }</code></pre>
+  <p class="codecap">A tensor train, from the README (checked in CI):</p>
+  <pre><code>use tensor4all_simplett::prelude::*;
+
+let tt = SimpleTensorTrain::&lt;f64&gt;::constant(&amp;[2, 3, 4], 1.0);
+assert!((tt.evaluate(&amp;[0, 1, 2]).unwrap() - 1.0).abs() &lt; 1e-12);
+assert!((tt.sum() - 24.0).abs() &lt; 1e-12);</code></pre>
+  <p class="codecap">Quantics TCI of x² on [0, 1] with 2<sup>4</sup> points, from the crate documentation (a doctest):</p>
+  <pre><code>use tensor4all_quanticstci::{
+    quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions, QuanticsBatch,
+};
+
+let grid = DiscretizedGrid::builder(&amp;[4])
+    .with_lower_bound(&amp;[0.0])
+    .with_upper_bound(&amp;[1.0])
+    .build()
+    .unwrap();
+let f = |batch: QuanticsBatch&lt;'_, f64&gt;| -&gt; anyhow::Result&lt;Vec&lt;f64&gt;&gt; {
+    Ok((0..batch.n_points())
+        .map(|point| batch.get(0, point).unwrap().powi(2))
+        .collect())
+};
+let (qtci, _ranks, _errors) =
+    quanticscrossinterpolate_batch(&amp;grid, f, None, QtciOptions::default()).unwrap();
+let integral = qtci.integral().unwrap();</code></pre>
+  <p>For longer runnable examples (operators, tree networks, patching, GPU contraction), go to the <a href="https://tensor4all.org/tensor4all-rs/">tensor4all-rs user guide</a> and the <a href="https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_core/">API reference</a>.</p>
+
+  <h3>Other entry points</h3>
+  <ul>
+    <li><strong>Julia:</strong> <a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a> (best effort, see above). Its build step compiles tensor4all-rs for you.</li>
+    <li><strong>C:</strong> <code>tensor4all-capi</code> exposes indices, tensors, tree tensor networks and quantics materialization through a small FFI surface.</li>
+    <li><strong>Python:</strong> <code>tensor4all-py</code> is an early PyO3 prototype forwarding to the core, tree network, tree TCI and quantics TCI crates.</li>
+  </ul>
+
+  <h2 id="underneath">What runs underneath</h2>
+  <p>You rarely need to look below tensor4all-rs, but knowing the shape helps when reading performance numbers or error messages.</p>
+  <ul>
+    <li>Every dense operation (contraction, SVD, QR) goes through <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a>, reached through one adapter crate, <code>tensor4all-tensorbackend</code>. tenferro chooses CPU or GPU kernels and provides automatic differentiation.</li>
+    <li>On the CPU, tenferro hands contractions to <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> and factorizations to <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> (pure Rust, using faer) or optionally to a vendor LAPACK.</li>
+    <li>There is no hidden global thread pool. Parallelism comes from an execution context that the caller creates (in tensor4all-rs, a <code>CpuExecutionContext</code>) and that is reused across calls. If you construct a new context in a tight loop, you throw away its buffers.</li>
+    <li>CUDA contraction of dense tree networks exists as an experimental path with explicit upload and download; see the <a href="https://tensor4all.org/tensor4all-rs/tutorials/gpu/cuda-tree-contraction.html">CUDA tutorial</a>.</li>
+  </ul>
+  <p>The <a href="backend.html">backend guide</a> explains these layers in detail.</p>
+
+  <h2 id="parallel">Parallel runs with hataori</h2>
+  <p>Many tensor network studies are embarrassingly parallel at the outer level: a parameter scan, a set of momenta, independent patches. <a href="https://tensor4all.org/hataori-rs/">hataori</a> provides <code>map</code> and a dynamically scheduled <code>pmap</code> (in the spirit of Distributed.jl) over serial, Rayon, MPI and hybrid MPI plus threads execution. Its MPI support can load the MPI library at run time, so the same binary can share the MPI installation used by MPI.jl or mpi4py.</p>
+  <p>hataori owns the processes and threads, and lends them to each task through the same explicit contexts described above, so outer and inner parallelism do not fight over cores. Adapters for tenferro and tensor4all exist in the hataori repository. The synchronous <code>map</code> and <code>pmap</code> are usable today; the asynchronous runtime is still under development.</p>
+
+  <h2 id="maturity">Maturity and help</h2>
+  <ul>
+    <li><strong>Stable enough to build on:</strong> TT and TCI, quantics TCI, quantics operators, tree network contraction and compression. APIs can still change between revisions, so pin one.</li>
+    <li><strong>Experimental:</strong> tree ACI and RSI, CUDA contraction, the Python bindings.</li>
+    <li><strong>Deprecated:</strong> <code>tensor4all-partitionedtt</code>; use <code>tensor4all-partitionedtreetn</code>.</li>
+  </ul>
+  <p>Using a coding agent? Install the tensor4all-rs agent skill, which teaches it the crate map and conventions:</p>
+  <pre><code>npx skills add tensor4all/tensor4all-rs --skill use-tensor4all-rs -g</code></pre>
+  <p>A machine oriented index of the documentation is in <a href="https://github.com/tensor4all/tensor4all-rs/blob/main/llms.txt">llms.txt</a>. Questions and bug reports go to the <a href="https://github.com/tensor4all/tensor4all-rs/issues">tensor4all-rs issue tracker</a>. If you publish results, please read the <a href="https://github.com/tensor4all/tensor4all-rs/blob/main/docs/PROVENANCE_AND_CITATION_POLICY.md">citation policy</a>, which asks you to cite the algorithm papers your work relies on.</p>
+</main>
+</div>
+
+<footer><div class="inner">
+  Maintained in <a href="https://github.com/tensor4all/tensor4all-meta">tensor4all-meta</a>. Next: <a href="backend.html">the backend guide</a>.
+</div></footer>
+<script src="assets/stack-map.js"></script>
+</body>
+</html>

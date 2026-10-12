@@ -2,6 +2,15 @@
 
 Meta-information for the [tensor4all](https://github.com/tensor4all) project.
 
+## Rust stack guides
+
+Published at <https://tensor4all.org/tensor4all-meta/stack/> from [`site/`](site/)
+by [`.github/workflows/pages.yml`](.github/workflows/pages.yml):
+
+- [Stack overview](https://tensor4all.org/tensor4all-meta/stack/): layer map, repositories, release status
+- [For tensor network users](https://tensor4all.org/tensor4all-meta/stack/users.html): QTT, TCI, tree tensor networks
+- [For backend developers](https://tensor4all.org/tensor4all-meta/stack/backend.html): tenferro, cpueinsum, tcontract, tlinalg, strided-rs, hataori
+
 ## tenferro Design Documents
 
 All tenferro design documents are maintained in the
