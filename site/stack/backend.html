@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stack for backend developers</title>
+<meta name="description" content="A guide to the backend of the tensor4all Rust stack: tenferro, cpueinsum, tcontract, tlinalg, strided-rs and explicit execution, including use from quantum chemistry codes.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="brand" href="https://tensor4all.org/">tensor4all</a>
+  <nav>
+    <a href="./">Stack overview</a>
+    <a href="users.html">For tensor network users</a>
+    <a href="backend.html" aria-current="page">For backend developers</a>
+  </nav>
+</div></header>
+
+<div class="layout with-toc">
+<aside class="toc">
+  <p class="label">On this page</p>
+  <ol>
+    <li><a href="#boundaries">Who owns what</a></li>
+    <li><a href="#principles">Design principles</a></li>
+    <li><a href="#tenferro">tenferro</a></li>
+    <li><a href="#cpueinsum">cpueinsum</a></li>
+    <li><a href="#tcontract">tcontract</a></li>
+    <li><a href="#tlinalg">tlinalg</a></li>
+    <li><a href="#strided">strided-rs</a></li>
+    <li><a href="#execution">Execution and hataori</a></li>
+    <li><a href="#qc">For quantum chemistry codes</a></li>
+    <li><a href="#bench">Benchmarks</a></li>
+    <li><a href="#status">Status and contributing</a></li>
+  </ol>
+</aside>
+<main>
+  <section class="hero">
+    <p class="eyebrow">Guide B</p>
+    <h1>The stack for backend developers</h1>
+    <p class="lead">What happens below the tensor network algorithms: a tensor runtime with automatic differentiation, and underneath it small, tensor-free libraries for strided contraction and batched linear algebra that you can use on their own, from Rust or from C. If you maintain a quantum chemistry or many-body code and need fast contractions without transposes, the middle of this page is for you.</p>
+    <p class="asof">Status as of 2026-10-13. Several crates described here are not on crates.io yet; this page says so where it matters.</p>
+  </section>
+
+  <figure class="figure">
+    <div class="map-scroll"><div class="stack-map" data-focus="backend"></div></div>
+    <figcaption>The highlighted bands are the subject of this guide. Arrows from hataori show where execution resources enter the stack.</figcaption>
+  </figure>
+
+  <h2 id="boundaries">Who owns what</h2>
+  <p>The backend is split along one line: a <strong>host</strong> that knows about tensors, and <strong>providers</strong> that only see borrowed strided memory. Most design decisions follow from keeping that line clean.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Layer</th><th>Owns</th><th>Leaves to others</th></tr></thead>
+    <tbody>
+      <tr><td><strong>tenferro-rs</strong> (host)</td><td>tensor types, allocation, dtype dispatch, device placement, AD rules, graph tracing, gauge conventions, error wrapping</td><td>the inner loops of contraction and factorization</td></tr>
+      <tr><td><strong>cpueinsum</strong></td><td>executing an N-ary einsum in a given order: which labels each intermediate keeps, one reusable scratch buffer</td><td>choosing the order, parsing <code>"ij,jk-&gt;ik"</code>, GPUs</td></tr>
+      <tr><td><strong>tcontract</strong></td><td>one binary contraction over arbitrary strides: planning, packing, microkernels, threading inside the call</td><td>N-ary einsum, ordering, linear algebra, AD</td></tr>
+      <tr><td><strong>tlinalg</strong>, <strong>tlinalg-blas</strong></td><td>batched factorizations and solves, the batch loop and its lane fan-out</td><td>tensors, allocation policy, dtype and device dispatch</td></tr>
+      <tr><td><strong>strided-rs</strong></td><td>the strided view types and traits everyone exchanges; permutation and elementwise kernels</td><td>everything above</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="principles">Design principles</h2>
+  <ul>
+    <li><strong>Explicit execution, no ambient state.</strong> Threads and scratch memory come from a context the caller passes in. No library starts a global pool, and no environment variable changes results. Two consequences: the same call is reproducible regardless of what else runs in the process, and an outer scheduler (MPI, hataori, a Julia session) can partition the machine without fighting the libraries.</li>
+    <li><strong>Tensor-free provider interfaces.</strong> Providers take borrowed strided views plus a few scalars and flags. They can be tested and benchmarked on plain buffers, and a different host (a quantum chemistry code, another tensor library) can call them without adopting tenferro.</li>
+    <li><strong>Plan once, execute many times.</strong> Contractions and einsums have a plan object that fixes the strategy, kernel and blocking for given shapes and strides. Tensor network sweeps and iterative solvers repeat the same shapes thousands of times, so per-call overhead matters as much as peak throughput.</li>
+    <li><strong>Measured, not assumed.</strong> Performance claims live in benchmark repositories keyed by commit and hardware, with comparisons against PyTorch and JAX (for tenferro) and vendor LAPACK (for tlinalg).</li>
+  </ul>
+
+  <h2 id="tenferro">tenferro: the host</h2>
+  <p><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a> is a Rust tensor runtime for scientific code: typed and dynamic dense tensors, einsum, linear algebra, FFT, and automatic differentiation, on CPU, CUDA (through a CubeCL fork) and experimental WebGPU, with an XLA path. tensor4all-rs uses it for every dense operation.</p>
+  <ul>
+    <li><strong>Tensor types.</strong> <code>TypedTensor&lt;T&gt;</code> and dynamic <code>Tensor</code> for direct compute; <code>EagerTensor</code> adds PyTorch-style <code>backward()</code>; <code>TracedTensor</code> records a graph (in <a href="https://github.com/tensor4all/computegraph-rs">computegraph</a>) for JAX-style VJP, JVP and composed higher-order derivatives such as Hessian vector products.</li>
+    <li><strong>Conventions.</strong> Storage is column-major, matching LAPACK, Fortran and Julia. There is no facade crate: depend on <code>tenferro-runtime</code>, a backend such as <code>tenferro-cpu</code>, and the operation crates you use. Operations take an explicit backend; create it once and reuse it, since it carries the buffer pool.</li>
+    <li><strong>Providers.</strong> On the CPU, <code>tenferro-einsum</code> and <code>tenferro-cpu</code> execute through cpueinsum (and so tcontract), and <code>tenferro-linalg</code> adapts tlinalg and tlinalg-blas to an interface tenferro defines. The providers do not depend on tenferro.</li>
+  </ul>
+  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts. Version 0.7.1 is on crates.io; the main branch already builds on the unpublished providers described below.</p>
+
+  <h2 id="cpueinsum">cpueinsum: N-ary einsum in a given order</h2>
+  <p><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> runs an einsum over integer labels with a contraction order supplied by the caller in SSA form. For each binary step it plans a tcontract call. On top it decides which labels every intermediate must keep (those in the output or needed later; everything else is summed as early as possible) and places all intermediates in one reusable scratch buffer.</p>
+  <p>It intentionally does not search for contraction orders and does not parse string notation. Those belong to the caller (tenferro, or your own code with an order from opt_einsum, cotengra or a hand-derived factorization).</p>
+  <p class="codecap">d[i, l] = Σ a[i, j] b[j, k] c[k, l], contracting (a b) first. From the cpueinsum README:</p>
+  <pre><code>use cpueinsum::strided_view::{StridedView, StridedViewMut};
+use cpueinsum::{EinsumPlan, EinsumSpec, Exec, Layout, Scratch};
+
+// Inputs are operands 0, 1, 2; step 0 makes operand 3.
+let spec = EinsumSpec::new(&amp;[&amp;[0, 1], &amp;[1, 2], &amp;[2, 3]], &amp;[0, 3], &amp;[[0, 1], [3, 2]])?;
+let cm = Layout::new(&amp;[2, 2], &amp;[1, 2])?;
+let plan = EinsumPlan::&lt;f64&gt;::new(&amp;spec, &amp;[cm, cm, cm], cm)?;
+let mut scratch = Scratch::new();
+// ... build StridedViews over your buffers, then:
+plan.execute_into(&amp;Exec::serial(), &amp;views, &amp;mut out, &amp;mut scratch)?;</code></pre>
+  <p>Threading is explicit: <code>Exec::rayon(&amp;Pool::borrow(&amp;pool))</code> runs on a Rayon pool you own. For workloads made of many small heterogeneous contractions, <code>BinaryPlan</code> and <code>GroupedPlan</code> prepare jobs once and run a whole group under one scheduler.</p>
+  <p>cpueinsum links no BLAS. The separate <code>cpueinsum-blas</code> crate can take over binary steps large enough to profit from a vendor GEMM (at least 2<sup>15</sup> multiply accumulates per GEMM) and leaves smaller steps on tcontract. It depends on <code>cblas-sys</code> only, so the final binary chooses the BLAS provider.</p>
+
+  <h2 id="tcontract">tcontract: binary contraction without transposes</h2>
+  <p><a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> computes</p>
+  <pre><code>D = alpha * op(A) * op(B) + beta * op(C)</code></pre>
+  <p>for strided operands of <code>f32</code>, <code>f64</code>, <code>c32</code> and <code>c64</code>, with contracted, batch and free indices, repeated indices (diagonals), reductions and conjugation. Operands are never transposed or copied into a canonical layout first. It was previously named tprims-rs and includes kernels contributed from Lukas Devos's tensorprimitives work.</p>
+
+  <h3>How a contraction runs</h3>
+  <ol class="steps">
+    <li><strong>Describe the problem.</strong> A <code>Problem</code> is built either from a <code>DotGeneral</code> (contracting and batch axes, as in XLA) or from index labels, together with the layouts (dims and strides) of A, B and D.</li>
+    <li><strong>Plan once.</strong> <code>Plan&lt;T&gt;::new</code> validates the problem and chooses a strategy and a kernel. The plan is reusable for every call with the same layouts.</li>
+    <li><strong>Execute.</strong> <code>execute_into</code> takes an execution context (<code>Exec::serial()</code> or a Rayon pool the host owns) and the views. <code>contract_batched</code> runs many independent problems of one shape.</li>
+  </ol>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Strategy</th><th>Used when</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><td>packed</td><td>general strides and index orders</td><td>a TBLIS-style block-scatter driver packs strided operands straight into microkernel panels, with cache blocking</td></tr>
+      <tr><td>faer</td><td>the problem fuses into one batched GEMM without copies</td><td>calls faer's matrix multiply directly on the views</td></tr>
+      <tr><td>elementwise</td><td>every index is a batch index</td><td>a single elementwise pass</td></tr>
+    </tbody>
+  </table></div>
+  <p>Microkernel families cover AVX2, AVX-512 and NEON register tiles, native complex kernels, and portable reference kernels; the planner resolves the family for the target and freezes the blocking in the plan.</p>
+  <p class="codecap">D = A B with column-major 2 × 2 operands. Abridged from <code>crates/tcontract/examples/readme.rs</code>, which CI compiles and runs:</p>
+  <pre><code>use strided_view::{StridedView, StridedViewMut};
+use tcontract::api::{DType, DotGeneral, LayoutSpec, OperandSpec, Problem};
+use tcontract::{Plan, PlanConfig};
+use tcontract_exec::Exec;
+
+let layout = |dims: &amp;[usize], strides: &amp;[isize]| {
+    Ok(OperandSpec::new(LayoutSpec::new(dims, strides, 0)?))
+};
+// contract axis 1 of A with axis 0 of B; no batch axes
+let dot = DotGeneral::new(&amp;[1], &amp;[0], &amp;[], &amp;[]);
+let problem = Problem::from_dot_general(
+    DType::F64,
+    layout(&amp;[2, 2], &amp;[1, 2])?,
+    layout(&amp;[2, 2], &amp;[1, 2])?,
+    layout(&amp;[2, 2], &amp;[1, 2])?,
+    &amp;dot,
+)?;
+let plan = Plan::&lt;f64&gt;::new(&amp;problem, &amp;PlanConfig::default())?;
+println!("strategy: {:?}", plan.report().algorithm);
+plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</code></pre>
+
+  <h3>The C ABI</h3>
+  <p>tcontract builds into one shared library, <code>libtcontract_capi</code>, that implements <a href="https://arxiv.org/abs/2601.07827">TAPP</a>, the community standard C interface for tensor products, declared by the pinned upstream headers. A C or C++ program that includes only <code>&lt;tapp.h&gt;</code> can create tensor descriptors, plan and execute a contraction serially. On top of the standard, operands can be passed as DLPack tensors, and a few named extensions expose executors for multithreaded runs. Because the ABI is a standard, a code written against TAPP can switch between implementations without source changes.</p>
+
+  <h2 id="tlinalg">tlinalg: batched linear algebra</h2>
+  <p><a href="https://github.com/tensor4all/tlinalg-rs">tlinalg-rs</a> holds the factorizations that tensor algorithms reduce to once a tensor is unfolded into matrices. It is the layer tenferro's CPU linear algebra has been extracted into.</p>
+  <h3>The batched interface</h3>
+  <p>Every entry point is batched in the style of PyTorch: one call takes a strided descriptor of rank 2 + B with dimensions <code>[rows, cols, b...]</code> and processes all B batch items. The library owns the loop over the batch, so it can decide whether to run many small matrices in parallel or give all threads to one large matrix. Outputs are compact and column-major. When items fail, the reported error is deterministic: the failing item with the lowest index.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Family</th><th>Includes</th></tr></thead>
+    <tbody>
+      <tr><td>SVD</td><td>thin, full, values only</td></tr>
+      <tr><td>QR</td><td>QR, column-pivoted QR (rank revealing), compact Householder form</td></tr>
+      <tr><td>LU and solves</td><td>packed LU, factor once and solve, full-pivot LU, triangular solve</td></tr>
+      <tr><td>Cholesky</td><td>factorization and solves</td></tr>
+      <tr><td>Eigensolvers</td><td>Hermitian (<code>eigh</code>, <code>eigvalsh</code>) and general (<code>eig</code>, <code>eigvals</code>)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Two sibling providers</h3>
+  <div class="cards">
+    <div class="card">
+      <h3><code>tlinalg</code></h3>
+      <p>Pure Rust, on faer. Takes a <code>Parallel</code> token describing the threads it may use; with the default Auto policy the library decides between fanning out over batch items (for small matrices, up to 64 rows or columns) and letting faer parallelize inside one item.</p>
+    </div>
+    <div class="card">
+      <h3><code>tlinalg-blas</code></h3>
+      <p>The same batched signatures on LAPACK and BLAS. The batch loop is serial and the vendor library owns its threading. Scratch comes from a host workspace queried once per call and reused for every item. The vendor is chosen by the final binary.</p>
+    </div>
+  </div>
+  <p>Neither provider depends on the other, and they share no trait crate. tenferro defines the interface it needs and adapts each provider to it. A parity suite runs every family through both providers for all four element types and several batch shapes (including transposed and broadcast batch strides) and compares the results in a gauge-aware way.</p>
+
+  <h2 id="strided">strided-rs: the shared vocabulary</h2>
+  <p><a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines <code>StridedView</code>, <code>StridedViewMut</code> and the raw descriptors that every CPU layer passes across crate boundaries, plus fast permutation and elementwise kernels. Arbitrary strides are allowed, including negative and zero (broadcast).</p>
+  <p>Because these types cross crate boundaries, every crate in a build must resolve to the same strided-rs release, currently 0.4.8; two copies would produce two incompatible view types. To make this cheap for downstream users, the plan is to version the core types and traits separately from the permutation engine and stabilize them toward 1.0 (<a href="https://github.com/tensor4all/strided-rs/issues/296">strided-rs#296</a>). A longer term direction is to make strided-rs embeddable from other languages through its own C API (<a href="https://github.com/tensor4all/strided-rs/issues/234">strided-rs#234</a>).</p>
+
+  <h2 id="execution">Execution contexts and hataori</h2>
+  <p>Each layer has its own explicit context, and the contexts nest:</p>
+  <ul>
+    <li>tcontract and cpueinsum take an <code>Exec</code>: serial, or a borrowed, owned or shared Rayon pool. Width is chosen from the amount of work, so a small contraction does not wake every thread.</li>
+    <li>tlinalg takes a <code>Parallel</code> token with a thread budget; tlinalg-blas leaves threading to the vendor.</li>
+    <li>tenferro carries these inside its backend object, and tensor4all-rs wraps that in a <code>CpuExecutionContext</code>.</li>
+  </ul>
+  <p>Something has to own the processes and threads at the top. That is <a href="https://tensor4all.org/hataori-rs/">hataori</a>: <code>map</code> and a dynamically scheduled <code>pmap</code> over serial, Rayon, MPI and hybrid execution, inspired by Distributed.jl. hataori splits the machine into ranks and thread domains and passes each task the pool it may use, which flows down through the contexts above. MPI can be linked at build time or loaded at run time (through <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a>), so a Rust extension can share the MPI library of a Julia or Python host. The synchronous API is usable now; an asynchronous runtime with futures, remote objects and migration is in development in the same repository.</p>
+
+  <h2 id="qc">For quantum chemistry and other host codes</h2>
+  <p>Coupled cluster, integral transformations, density fitting and many-body perturbation theory spend their time in contractions of tensors whose index order rarely matches what GEMM wants. The usual workaround (permute, call GEMM, permute back) costs memory traffic and extra buffers. tcontract is built to avoid exactly that, in the same spirit as TBLIS, and is designed to be called from code that has its own tensor containers.</p>
+  <ul>
+    <li><strong>From C, C++ or Fortran:</strong> link <code>libtcontract_capi</code> and program against the TAPP headers. Your arrays stay where they are; descriptors carry the strides. Fortran codes can call the C ABI through <code>iso_c_binding</code>, and column-major layouts are first class.</li>
+    <li><strong>From Python:</strong> DLPack operands let arrays exported by NumPy, PyTorch, JAX or CuPy style libraries be described without copying, given a thin binding layer.</li>
+    <li><strong>From Rust:</strong> depend on <code>tcontract</code> directly for binary contractions, on <code>cpueinsum</code> if you already have a contraction order for a multi-tensor expression, and on <code>tlinalg</code> for batched factorizations of the resulting matrices. None of them require tenferro.</li>
+    <li><strong>Threads:</strong> pass your own pool. Nothing in these libraries competes with OpenMP or MPI in your code behind your back.</li>
+  </ul>
+  <div class="note warm"><p>None of tcontract, cpueinsum and tlinalg is on crates.io yet, and their interfaces may still change. Pin a git revision. If you are evaluating them for a production code, opening an issue with your typical tensor shapes is the most useful thing you can do: it feeds directly into the benchmark campaigns below.</p></div>
+
+  <h2 id="bench">Benchmarks</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Repository</th><th>What it measures</th></tr></thead>
+    <tbody>
+      <tr><td><a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a></td><td>tenferro against PyTorch and JAX on CPU and GPU, per workload class</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a></td><td>binary contractions across shapes and strides, keyed by commit and hardware profile</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a></td><td>batched factorizations, faer provider against LAPACK, keyed by commit and hardware profile</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tensor4all-benchmark">tensor4all-benchmark</a></td><td>tensor network level algorithms: QTT elementwise products, MPO MPO contraction</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="status">Status and contributing</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Component</th><th>State</th></tr></thead>
+    <tbody>
+      <tr><td>tenferro-rs</td><td><span class="pill ok">crates.io 0.7.1</span> main depends on the unpublished providers</td></tr>
+      <tr><td>cpueinsum, tcontract</td><td><span class="pill wip">git only</span> early, interfaces settling</td></tr>
+      <tr><td>tlinalg, tlinalg-blas</td><td><span class="pill wip">git only</span> extraction from tenferro in progress</td></tr>
+      <tr><td>strided-rs</td><td><span class="pill ok">crates.io 0.4.8</span> core versioning split planned</td></tr>
+      <tr><td>computegraph</td><td><span class="pill ok">crates.io 0.1.0</span></td></tr>
+      <tr><td>hataori</td><td><span class="pill wip">git only</span> synchronous API usable, runtime in development</td></tr>
+    </tbody>
+  </table></div>
+  <p>All repositories accept issues and pull requests, including AI assisted contributions; each one documents its rules in <code>AGENTS.md</code> and its contributing guide. Good first contributions are benchmark cases from real applications, kernels for hardware we have not tuned for, and bindings for other languages.</p>
+</main>
+</div>
+
+<footer><div class="inner">
+  Maintained in <a href="https://github.com/tensor4all/tensor4all-meta">tensor4all-meta</a>. Back to <a href="./">the stack overview</a>.
+</div></footer>
+<script src="assets/stack-map.js"></script>
+</body>
+</html>
