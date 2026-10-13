@@ -161,7 +161,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
   <div class="cards">
     <div class="card">
       <h3><code>tlinalg</code></h3>
-      <p>Pure Rust, on faer. Takes a <code>Parallel</code> token describing the threads it may use; with the default Auto policy the library decides between fanning out over batch items (for small matrices, up to 64 rows or columns) and letting faer parallelize inside one item.</p>
+      <p>Pure Rust, on <a href="https://github.com/tensor4all/faer">tensor4all's fork of faer</a>. Takes a <code>Parallel</code> token describing the threads it may use; with the default Auto policy the library decides between fanning out over batch items (for small matrices, up to 64 rows or columns) and letting faer parallelize inside one item.</p>
     </div>
     <div class="card">
       <h3><code>tlinalg-blas</code></h3>
@@ -173,6 +173,9 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
   <h2 id="strided">strided-rs: the shared vocabulary</h2>
   <p><a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines <code>StridedView</code>, <code>StridedViewMut</code> and the raw descriptors that every CPU layer passes across crate boundaries, plus fast permutation and elementwise kernels. Arbitrary strides are allowed, including negative and zero (broadcast).</p>
   <p>Because these types cross crate boundaries, every crate in a build must resolve to the same strided-rs release, currently 0.4.8; two copies would produce two incompatible view types. To make this cheap for downstream users, the plan is to version the core types and traits separately from the permutation engine and stabilize them toward 1.0 (<a href="https://github.com/tensor4all/strided-rs/issues/296">strided-rs#296</a>). A longer term direction is to make strided-rs embeddable from other languages through its own C API (<a href="https://github.com/tensor4all/strided-rs/issues/234">strided-rs#234</a>).</p>
+
+  <h3>The faer fork</h3>
+  <p>The pure Rust dense kernels come from <a href="https://github.com/tensor4all/faer">tensor4all/faer</a>, a fork of <a href="https://codeberg.org/sarah-quinones/faer">faer</a> developed independently and published as the <code>t4a-faer</code> crates. It is where workload specific changes are tried quickly: strided and batched entry points, uninitialized output destinations, caller-owned workspaces, an explicit thread policy, and numerical fixes such as the unpivoted QR fix that tlinalg relies on. Many of these are not in upstream faer. Every change is recorded in <a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a>; the fork keeps upstream's license and attribution, and consumers pin a revision or a published <code>t4a-faer</code> version.</p>
 
   <h2 id="execution">Execution contexts and hataori</h2>
   <p>Each layer has its own explicit context, and the contexts nest:</p>
@@ -212,6 +215,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
       <tr><td>cpueinsum, tcontract</td><td><span class="pill wip">git only</span> early, interfaces settling</td></tr>
       <tr><td>tlinalg, tlinalg-blas</td><td><span class="pill wip">git only</span> extraction from tenferro in progress</td></tr>
       <tr><td>strided-rs</td><td><span class="pill ok">crates.io 0.4.8</span> core versioning split planned</td></tr>
+      <tr><td>faer fork</td><td><span class="pill ok">crates.io t4a-faer 0.24.4</span> independent of upstream, no compatibility promise</td></tr>
       <tr><td>computegraph</td><td><span class="pill ok">crates.io 0.1.0</span></td></tr>
       <tr><td>hataori</td><td><span class="pill wip">git only</span> synchronous API usable, runtime in development</td></tr>
     </tbody>

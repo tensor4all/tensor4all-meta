@@ -57,7 +57,7 @@
     <li><strong>tensor4all-rs.</strong> The algorithms: tensor trains, TCI, quantics grids and operators, tree tensor networks, patching, HDF5 I/O. It holds two stacks on purpose (a TT and TCI stack and a network stack) with an explicit bridge between them.</li>
     <li><strong>tenferro-rs.</strong> The tensor runtime: typed and dynamic tensors, eager and traced automatic differentiation, and CPU, GPU and XLA backends. tensor4all-rs reaches it through one adapter crate.</li>
     <li><strong>Providers.</strong> Tensor-free numerical libraries that tenferro calls: <a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> for N-ary einsum, <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> for binary contraction over arbitrary strides, and <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> for batched factorizations. They take borrowed strided views and an explicit execution context, so they are usable on their own, including from C.</li>
-    <li><strong>Foundation.</strong> <a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines the strided view types every layer above passes around; faer and, optionally, a vendor BLAS and LAPACK do the dense arithmetic.</li>
+    <li><strong>Foundation.</strong> <a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines the strided view types every layer above passes around; faer and, optionally, a vendor BLAS and LAPACK do the dense arithmetic. tensor4all develops <a href="https://github.com/tensor4all/faer">its own fork of faer</a>, published as <code>t4a-faer</code>, which carries strided and batched entry points, caller-owned workspaces, an explicit thread policy and fixes that upstream does not have.</li>
     <li><strong>hataori-rs.</strong> <a href="https://tensor4all.org/hataori-rs/">Data-parallel map and pmap</a> over serial, Rayon, MPI and hybrid execution. Since no layer in the stack owns a global thread pool, hataori is where pools and MPI ranks come from.</li>
   </ul>
 
@@ -75,6 +75,7 @@
       <tr><td><a href="https://github.com/tensor4all/tcontract-rs">tcontract-rs</a></td><td>binary strided contraction, TAPP C ABI</td><td><span class="pill wip">git only</span></td><td>README</td></tr>
       <tr><td><a href="https://github.com/tensor4all/tlinalg-rs">tlinalg-rs</a></td><td>batched SVD, QR, LU, Cholesky, eigensolvers</td><td><span class="pill wip">git only</span></td><td>README</td></tr>
       <tr><td><a href="https://github.com/tensor4all/strided-rs">strided-rs</a></td><td>strided view types, permutation, kernels</td><td><span class="pill ok">crates.io 0.4.8</span></td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/faer">faer (fork)</a></td><td>tensor4all fork of faer, tuned for the stack</td><td><span class="pill ok">crates.io t4a-faer 0.24.4</span></td><td><a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a></td><td>map and pmap over Rayon and MPI</td><td><span class="pill wip">git only</span></td><td><a href="https://tensor4all.org/hataori-rs/">docs</a></td></tr>
     </tbody>
   </table></div>
