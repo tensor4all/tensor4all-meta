@@ -144,7 +144,7 @@ let integral = qtci.integral().unwrap();</code></pre>
   <p>You rarely need to look below tensor4all-rs, but knowing the shape helps when reading performance numbers or error messages.</p>
   <ul>
     <li>Every dense operation (contraction, SVD, QR) goes through <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a>, reached through one adapter crate, <code>tensor4all-tensorbackend</code>. tenferro chooses CPU or GPU kernels and provides automatic differentiation.</li>
-    <li>On the CPU, tenferro hands contractions to <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> and factorizations to <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> (pure Rust, using faer) or optionally to a vendor LAPACK.</li>
+    <li>On the CPU, tenferro hands contractions to <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> and factorizations to <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> (pure Rust, using tensor4all's fork of faer) or optionally to a vendor LAPACK.</li>
     <li>There is no hidden global thread pool. Parallelism comes from an execution context that the caller creates (in tensor4all-rs, a <code>CpuExecutionContext</code>) and that is reused across calls. If you construct a new context in a tight loop, you throw away its buffers.</li>
     <li>CUDA contraction of dense tree networks exists as an experimental path with explicit upload and download; see the <a href="https://tensor4all.org/tensor4all-rs/tutorials/gpu/cuda-tree-contraction.html">CUDA tutorial</a>.</li>
   </ul>
