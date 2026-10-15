@@ -20,7 +20,7 @@
       { t: "tlinalg, tlinalg-blas", d: "batched SVD, QR, eigh, LU", href: GH + "tlinalg-rs" } ] },
     { id: "found", kind: "backend", label: "Foundation", sub: "shared types, kernels", boxes: [
       { t: "strided-rs", d: "shared strided view types", href: GH + "strided-rs" },
-      { t: "faer (t4a fork)", d: "pure Rust, tuned for the stack", href: GH + "faer" },
+      { t: "t4a-faer", d: "our fork of faer, pure Rust", href: GH + "faer" },
       { t: "BLAS, LAPACK", d: "vendor library, optional", href: null } ] }
   ];
   var NS = "http://www.w3.org/2000/svg";
