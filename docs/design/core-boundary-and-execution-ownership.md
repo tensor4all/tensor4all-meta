@@ -113,7 +113,7 @@ let mut serial = CpuEngine::serial();              // no pool at all
 
 let c = dot_general(&mut engine, &a, &b, &dims)?;          // eager operation
 let grads = loss.backward_in(&mut engine)?;                // backward pass on the same engine
-let out = runtime.run_prepared(&mut engine, &program, &inputs)?; // compiled graph, same engine
+let out = runtime.run(&mut [&mut engine], &prepared, &inputs)?; // compiled graph, same engine
 let d = dot_general(&mut serial, &a, &b, &dims)?;          // same code, serial engine
 ```
 
@@ -222,10 +222,11 @@ stays, attached to a narrower scope instead of a public object:
 
 * **Recovery after a panic.** Buffer accounting is restored when an
   operation unwinds. This becomes a guard around each operation.
-* **Deferred runs.** A compiled program run whose outputs are collected
-  later keeps its execution state alive until it finishes, and retires its
-  work even if it is dropped early. It now borrows the engine instead of a
-  session for that time.
+* **Unfinished GPU work.** Work that a run queued but the GPU has not
+  finished, with the temporary memory and transfer buffers it still uses,
+  is kept by the engine until it completes, including after an error or a
+  panic. (There is no separate deferred-run object any more; see "Running a
+  compiled graph".)
 * **GPU context restoration.** Native GPU code that changes the device
   context restores it on exit, including on unwind. This becomes a guard
   around each such call.
@@ -300,8 +301,8 @@ different reason:
 
 | Step | Input | Output | Done how often |
 | --- | --- | --- | --- |
-| **compile** | a recorded graph | a `CompiledGraph`: the computation, simplified and fused, independent of input shapes and hardware | once per computation |
-| **prepare** | a compiled graph and the inputs' shapes, types and kinds of memory | a prepared program: an execution plan for those inputs, and the requirements an engine must meet to run it (device, memory kind, supported operations) | once per input signature |
+| **compile** | a recorded graph | a `CompiledGraph`: the computation in a hardware-independent form, keeping the shape constraints that were recorded (fixed sizes stay fixed; only symbolic sizes may vary) | once per computation |
+| **prepare** | a compiled graph and the inputs' shapes, types and kinds of memory | a prepared program: an execution plan for those inputs, including fusion chosen for the target hardware, and the requirements an engine must meet to run it (device, memory kind, supported operations) | once per input signature |
 | **run** | a prepared program, the engines and the inputs | the outputs | as often as needed |
 
 Prepare does the expensive checks and decisions once, so that run only
@@ -321,12 +322,23 @@ let outputs = runtime.run(&mut [&mut engine], &prepared, &inputs)?;
 several of them, for example a CPU engine and a GPU engine with transfers
 between them; a program on one engine gets a list of one.
 
-**Inputs and outputs.** Inputs are borrowed views of tensors. Most outputs
-are new, owned tensors. An output that is just an input, or a view of one
-(for example its transpose), is returned as a view of that input instead of
-a copy; Rust's borrow rules then keep the input alive as long as the output
+**Inputs and outputs.** Inputs are borrowed views of tensors. Each output
+is one of two kinds:
+
+```rust
+enum Output<'a> {
+    Owned(Tensor),            // a new tensor, stored compactly
+    Borrowed(TensorView<'a>), // an input, or a view of one, without a copy
+}
+```
+
+An output computed by the graph is a new tensor with a compact layout: for
+`transpose(neg(x))` the result is materialized in its transposed order, not
+kept as a lazy view. An output that is just an input, or a view of one (for
+example `transpose(x)`), is returned as a view of that input instead of a
+copy; Rust's borrow rules then keep the input alive as long as the output
 is used. A caller that needs an owned tensor converts the output, which
-copies only in that case.
+copies only in the borrowed case.
 
 **When run returns.** On the CPU, run returns when the work is done. On a
 GPU, run returns once the work is queued on the engine's stream and once it
@@ -337,8 +349,8 @@ runs work in order; reading them on the host, or calling
 `engine.synchronize()`, waits for the work. Handing outputs to another
 engine follows the rules of section 4.
 
-**What this replaces.** tenferro had nine entry points for this: one-shot
-variants that compiled and prepared on every call, a variant that kept lazy
+**What this replaces.** tenferro had several entry points for this: one-shot
+variants that entered preparation on every call, a variant that kept lazy
 views in its outputs, a variant for borrowed inputs, a variant where the
 runtime opened sessions itself and one where the caller supplied a session,
 a deferred variant that batched runs and waited at the end, and a detached
