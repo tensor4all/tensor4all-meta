@@ -159,17 +159,21 @@ Rules:
    borrowed permission to run provider code on the engine's pool and
    workspace, and its budget is the largest number of workers that code may
    use. A downstream kernel that calls a provider directly passes this token,
-   so it uses the same threads and the same budget as tenferro.
+   so it uses the same threads and the same budget as tenferro. Getting the
+   token takes `&mut engine` and applies the check of rule 5; what the kernel
+   then does with the token is that kernel's responsibility, as with any
+   direct provider call.
 5. **An operation must not be called from one of its engine's own workers.**
    For example, `pool.install(|| dot_general(&mut engine, ...))`, where
-   `engine` was built from `pool`, is an error. The operation expects to use
-   all workers of the pool (rule 3), but the calling worker is busy waiting
-   for the result, so the work would run with one worker short, and provider
-   code that waits for every worker to join could hang. tenferro detects
-   this case at the start of the operation and returns an error instead of
-   silently running serially. Calling from a worker of a *different* pool
-   (the normal nested case) is fine, and a serial engine has no pool to
-   check.
+   `engine` was built from `pool`, is an error. In that call the operation
+   runs on one of the pool's own workers, and some provider strategies
+   cannot start from there: a strategy that needs every worker of the pool
+   at once (a team that meets at a barrier) is refused, while others would
+   run with less parallelism than rule 3 promises. Rather than let the
+   outcome depend on which strategy a provider picks, tenferro checks this
+   case at the start of the operation and returns an error. Calling from a
+   worker of a *different* pool is allowed, with one caveat described under
+   "The calling thread" below, and a serial engine has no pool to check.
 
 How one operation runs:
 
@@ -186,7 +190,7 @@ backend-neutral trait that `CpuEngine` and the GPU engines implement.
 
 tenferro used to have a second concept, the session: a handle opened from a
 backend for the duration of a closure, through which every operation ran.
-The session existed to do work that this design removes:
+Its main reasons to exist are removed by this design:
 
 * admission against the process wide arbiter, and the reentry and
   contention errors that came with it;
@@ -213,6 +217,25 @@ Without those, a session would only repeat what the engine already gives:
   synchronizes. These are points in time, not a scope, so they need no
   closure.
 
+The session also did cleanup at the end of its scope, and that cleanup
+stays, attached to a narrower scope instead of a public object:
+
+* **Recovery after a panic.** Buffer accounting is restored when an
+  operation unwinds. This becomes a guard around each operation.
+* **Deferred runs.** A compiled program run whose outputs are collected
+  later keeps its execution state alive until it finishes, and retires its
+  work even if it is dropped early. It now borrows the engine instead of a
+  session for that time.
+* **GPU context restoration.** Native GPU code that changes the device
+  context restores it on exit, including on unwind. This becomes a guard
+  around each such call.
+
+**GPU engine drop.** Dropping a GPU engine may block while its queued work
+is retired, and it cannot report an error; if retirement fails, the memory
+that might still be in use is kept rather than freed, as today. A caller
+that needs to know the work finished, or wants its error, calls
+`synchronize()` first.
+
 A run that needs several engines (CPU and GPU with transfers, rule 1)
 receives them as a set of borrowed engines for that one call. That set is
 an argument, not a stored object, and it is not called a session.
@@ -227,8 +250,9 @@ tasks above the engine. Parallelism above one operation is therefore
 expressed by holding more engines, and coordinating them is the caller's
 job (see "Responsibilities of the caller"). An example is at the end of this section.
 
-Using `k` engines at the same time takes `k` calling threads, one per
-engine, and none of them may be a worker of a compute pool it calls into
+Say the caller wants `k` computations at the same time, each on its own
+pool of `m` threads. Using `k` engines at the same time takes `k` calling
+threads, one per engine, and none of them may be a worker of a compute pool it calls into
 (rule 5). The calling threads are usually a pool of the caller's own, for
 example `k` threads that run the caller's tasks; that pool is separate from
 the `k` compute pools, and tenferro never sees it. The process then has `k`
@@ -302,6 +326,14 @@ gives each task its own engine, and an engine is used by whoever holds it.
 * **The calling thread.** Parts of an operation, including vendor BLAS and
   LAPACK calls, run on the thread that called it. Its CPU affinity and stack
   size are the caller's, exactly like the pool's.
+* **Calling threads that are Rayon workers.** When a worker of one Rayon
+  pool calls an operation on another pool's engine, Rayon lets that worker
+  run other jobs of its own pool while it waits. A second task can then
+  start on the same thread before the first operation returns. That is
+  harmless if each task carries its engine as an argument. It deadlocks if
+  tasks find their engine through a lock that the waiting task already
+  holds, and it fails if they look it up per thread. Plain threads, or a
+  scheduler that gives each task its engine explicitly, avoid this.
 * **Asynchronous execution.** tenferro does not start background threads to
   run work later. A caller that wants a computation in the background starts
   its own thread and runs it there.
@@ -407,12 +439,13 @@ may use its whole pool.
 
 1. *How does an engine prove it is compatible with a compiled
    program?* Backend kind alone is too weak (CPU allocation domains, GPU
-   device and stream state). Settled in tenferro-rs#2206.
+   device and stream state). To be settled in tenferro-rs#2206.
 2. *What does a GPU engine cost per operation without a session scope?*
    The session bound the device stream to the calling thread once per
-   closure. An engine binds it per operation, or remembers which thread it
-   is bound to and skips the binding when nothing changed. Measure before
-   choosing.
+   closure. An engine binds it per operation, or skips the binding when it
+   can prove nothing changed; the thread alone is not enough proof, since
+   another engine or stream may have been bound on the same thread in
+   between. Measure before choosing.
 
 The figures are generated by `figures/make_figures.py` (standard library
 Python). Edit the script and rerun it rather than editing the SVG files.
