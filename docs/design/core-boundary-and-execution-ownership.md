@@ -510,23 +510,23 @@ let d = dot_general(&mut gpu, &c, &b, &dims)?;     // runs after c, in stream or
 gpu.synchronize()?;                                // wait for the work and report errors
 ```
 
-### One engine per GPU
+### Engines do not share GPU memory
 
-In the first version there is one engine per opened GPU, so all work on a
-GPU's memory goes through one stream. Because a stream runs its work in
-order, nothing can read memory before it is written or reuse memory that is
-still being read: the order of the program is the order on the GPU, and no
-tracking is needed.
+In the first version each GPU engine has its own memory and one stream, and
+its tensors are used only by that engine. All work on that memory therefore
+goes through one stream, and a stream runs its work in order: nothing can
+read memory before it is written or reuse memory that is still being read.
+The order of the program is the order on the GPU, and no tracking is needed.
 
-Opening the same GPU twice gives two independent engines, each with its own
-memory. A tensor of one cannot be used by the other directly; that is
-rejected, and data moves between them only by an explicit transfer, which
-orders itself, as transfers between a CPU and a GPU do.
+Opening the same GPU twice gives two independent engines. Their work may run
+side by side or one after another, depending on how the GPU runtime maps
+their streams, but they never share tensors: using one engine's tensor on
+the other is rejected, and data moves between them only by an explicit
+transfer (rule 3).
 
-Several engines on one GPU, sharing tensors, could let independent work
-overlap on the device. No user needs that today. If one does, it will be
-added together with tenferro's own GPU runtime layer (below), whose memory
-allocator can track which stream uses which memory.
+Sharing tensors between engines on one GPU waits for a real need. If one
+appears, it will be added together with tenferro's own GPU runtime layer
+(below), whose memory allocator can track which stream uses which memory.
 
 ### Rules
 
@@ -536,26 +536,38 @@ allocator can track which stream uses which memory.
    unfinished work may still use it, even after the engine itself has been
    dropped; if finishing cannot be confirmed (for example after a device
    error), the memory is set aside and never reused.
-2. **Paths outside the stream are `unsafe`.** Code that reaches device
-   memory directly (raw CUDA pointers for a caller's own kernels or vendor
-   calls) takes the device memory through an `unsafe` function whose
-   contract states which stream may use it and until when.
-3. **Flush and synchronize are points in time.** `engine.flush()` hands queued
+2. **A raw device address is valid only while it is pinned.** The GPU
+   runtime may move live memory to compact its pools unless the memory is
+   pinned for use. tenferro's own vendor calls pin every operand for as long
+   as they use its address and never keep an address after unpinning it.
+   Code that reaches device memory directly (raw CUDA pointers for a
+   caller's own kernels) does so through an `unsafe` function whose contract
+   states which stream may use the address and until when.
+3. **Transfers order both sides.** A transfer between two engines (or
+   between a CPU and a GPU) starts only after the source's earlier writes
+   have finished, and the source memory is neither overwritten nor reused
+   until the transfer has read it. The destination is used only after the
+   transfer has written it. A pending download keeps its destination and its
+   completion state until it finishes, even if the tensors or the engine
+   that started it are dropped.
+4. **Flush and synchronize are points in time.** `engine.flush()` hands queued
    work to the GPU; `engine.synchronize()` waits for the engine's stream and
    reports the errors the driver reports there. Neither needs a scope.
    Errors that belong to a particular output buffer still surface when that
    buffer is read.
-4. **Dropping an engine waits for its work, best effort.** It may block, it
+5. **Dropping an engine waits for its work, best effort.** It may block, it
    cannot report errors, and memory whose completion cannot be proven is kept
    rather than freed. Pending transfers keep their own completion state, so
    a transfer may outlive the engine that started it.
-5. **Per operation, an engine only selects its stream.** Driver context
+6. **Per operation, an engine only selects its stream.** Driver context
    switches and flushes happen only at the boundaries that need them: raw
    CUDA and vendor library calls (cuBLAS, cuSOLVER, cuFFT, cuTENSOR, a
-   caller's own kernels), and explicit submission, waiting and completion
-   points. Ordinary kernels pay neither.
+   caller's own kernels), the hand-over to a caller's own CubeCL kernels,
+   and explicit submission, waiting and completion points. Ordinary kernels
+   pay neither.
 
-WebGPU follows the same shape: one `WgpuEngine` per opened device.
+WebGPU follows the same shape: each `WgpuEngine` has its own memory and one
+queue.
 
 ### What is not yet under tenferro's ownership: CubeCL's runtime layer
 
@@ -629,8 +641,8 @@ may use its whole pool.
   recycled buffers and its own limit on memory held by unfinished work.
   Plans are shared when engines share prepared programs or a `PlanCache`.
 * A bad CPU layout shows up as lost performance, not as an error.
-* In the first version a GPU runs one stream of tenferro work at a time;
-  independent work cannot overlap on one GPU (section 4).
+* In the first version GPU engines cannot share tensors; moving data between
+  two engines on one GPU is a copy (section 4).
 * Calling an engine from a worker of its own pool is still possible and is
   detected at run time.
 * Every execution names its engine, so code is more explicit than with a
@@ -684,9 +696,9 @@ single pull request when it is finished, not as a series of partial ones.
    session is removed (see "One concept: the engine"). The word "backend"
    also leaves the public API: `CpuBackend` becomes `CpuEngine`.
 
-6. *Can several engines share one GPU?* Not in the first version: one
-   engine per opened GPU, so stream order alone makes GPU memory use safe
-   (section 4). Sharing a GPU between engines waits for a real need and for
+6. *Can GPU engines share tensors?* Not in the first version: each engine's
+   memory is used only by its own stream, so stream order alone makes GPU
+   memory use safe (section 4). Sharing waits for a real need and for
    tenferro's own GPU runtime layer. Direct device memory access is
    `unsafe`.
 7. *Where do plans live?* In prepared programs, and in `PlanCache` values
