@@ -268,6 +268,15 @@ tasks above the engine. Parallelism above one operation is therefore
 expressed by holding more engines, and coordinating them is the caller's
 job (next section). An example is at the end of this section.
 
+Using `k` engines at the same time takes `k` calling threads, one per
+engine, and none of them may be a worker of a compute pool it calls into
+(rule 5). The calling threads are usually a pool of the caller's own, for
+example `k` threads that run the caller's tasks; that pool is separate from
+the `k` compute pools, and tenferro never sees it. The process then has `k`
+calling threads plus `k * m` workers. A calling thread mostly waits while its
+operation runs on the workers, but it does run the serial parts of an
+operation (see "The calling thread" below).
+
 ### Responsibilities of the caller
 
 * **Machine layout.** Whether the pools of different engines overlap on CPUs,
@@ -297,10 +306,12 @@ job (next section). An example is at the end of this section.
 This example uses hataori's vocabulary, which tenferro does not share. A
 hataori *lane* is one of the `k` streams in which hataori runs its tasks,
 one task after another; tasks are its units of work, such as one patch.
-hataori builds `k` pools of `m` threads, makes one engine from each, and
-gives each lane its own engine for the whole run. An operation inside a
-task may use all `m` workers of its lane's engine. The lane's thread is not
-a worker of that pool, so rule 5 holds.
+hataori runs its lanes on `k` threads of its own, separate from the
+compute pools. It builds `k` compute pools of `m` threads, makes one engine
+from each, and gives each lane thread its own engine for the whole run. An
+operation inside a task is called from the lane thread and may use all `m`
+workers of that lane's engine. The lane thread is not a worker of that
+pool, so rule 5 holds.
 
 ![Nesting in hataori: k lanes, one CpuEngine of m threads each](figures/nesting.svg)
 

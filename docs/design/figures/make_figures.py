@@ -219,20 +219,20 @@ def operation():
 
 def nesting():
     f = Figure(860, 470)
-    f.box(40, 20, 780, 75, "hataori (owns the pools)",
-          ["builds k pools of m threads; CPU overlap is the caller's "
-           "responsibility"], style="neutral")
+    f.box(40, 20, 780, 75, "hataori: k lane threads (its own pool)",
+          ["builds k compute pools of m threads; CPU overlap is the "
+           "caller's responsibility"], style="neutral")
     xs = [40, 330, 620]
     names = ["CpuEngine 1", "CpuEngine 2", "CpuEngine k"]
     cpus = ["CPUs 0 .. m-1", "CPUs m .. 2m-1", "CPUs (k-1)m .. km-1"]
     for x, n, c in zip(xs, names, cpus):
-        f.arrow([(x + 100, 95), (x + 100, 140)], label="lane",
+        f.arrow([(x + 100, 95), (x + 100, 140)], label="lane thread calls ops",
                 label_at=(x + 100, 117))
         f.box(x, 140, 200, 230, None, style="green")
         f.text(x + 100, 172, n, size=16, weight=600, color="#1F5A3F")
         f.text(x + 100, 194, "&mut, one lane at a time", size=12.5,
                color="#1F5A3F")
-        f.box(x + 20, 212, 160, 66, "Pool", ["m threads,", "built by hataori"],
+        f.box(x + 20, 212, 160, 66, "Compute pool", ["m threads,", "built by hataori"],
               style="purple", r=8)
         f.box(x + 20, 290, 160, 60, "Workspace", ["per engine"],
               style="purple", r=8)
