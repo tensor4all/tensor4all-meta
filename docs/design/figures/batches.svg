@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="330" viewBox="0 0 800 330">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="800" height="330" fill="#FCFCFA"/>
+<rect x="20" y="20" width="370" height="290" rx="10" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="205.0" y="44" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="middle">Regular batch</text>
+<text x="205" y="66" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1F5A3F" text-anchor="middle">every item has the same shape</text>
+<rect x="70" y="95" width="90" height="70" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="190" y="95" width="70" height="70" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="84" y="109" width="90" height="70" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="204" y="109" width="70" height="70" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="98" y="123" width="90" height="70" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="218" y="123" width="70" height="70" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="112" y="137" width="90" height="70" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="232" y="137" width="70" height="70" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="157" y="230" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">A[b, i, j]</text>
+<text x="267" y="230" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">B[b, j, k]</text>
+<text x="205" y="262" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#1F5A3F" text-anchor="middle">one dot_general call</text>
+<text x="205" y="284" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1F5A3F" text-anchor="middle">in the tenferro core</text>
+<rect x="410" y="20" width="370" height="290" rx="10" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="595.0" y="44" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">Irregular batch</text>
+<text x="595" y="66" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">each block has its own shape</text>
+<rect x="440" y="95" width="40" height="60" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="460.0" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">3 x 5</text>
+<rect x="500" y="95" width="90" height="45" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="545.0" y="156" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">7 x 4</text>
+<rect x="610" y="95" width="30" height="30" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="625.0" y="141" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">2 x 2</text>
+<rect x="660" y="95" width="70" height="95" rx="4" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="695.0" y="206" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">5 x 8</text>
+<text x="595" y="262" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#3A2F9A" text-anchor="middle">the caller's own kernel</text>
+<text x="595" y="284" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">loops over blocks, one provider GEMM each</text>
+</svg>

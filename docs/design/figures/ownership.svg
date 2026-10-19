@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="400" viewBox="0 0 820 400">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="820" height="400" fill="#FCFCFA"/>
+<rect x="20" y="20" width="380" height="360" rx="10" fill="#FBEAE6" stroke="#C0563F" stroke-width="1.2"/>
+<text x="210.0" y="44" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#8A2E1C" text-anchor="middle">Today: tenferro owns the threads</text>
+<rect x="55" y="65" width="240" height="50" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="175.0" y="95.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">caller / hataori</text>
+<rect x="55" y="175" width="240" height="60" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="175.0" y="200.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">ResourceArbiter</text>
+<text x="175.0" y="221.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">engine registry, owner locals</text>
+<rect x="55" y="295" width="240" height="60" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="175.0" y="320.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">pool built by tenferro</text>
+<text x="175.0" y="341.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">held session, phase lease</text>
+<path d="M 125 115 L 125 175" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="59.349999999999994" y="133.0" width="131.3" height="24" rx="4" fill="#FFFFFF"/>
+<text x="125" y="150.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">ask for admission</text>
+<path d="M 175 235 L 175 295" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 295 325 L 345 325 L 345 90 L 295 90" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="303.5" y="177.0" width="83.0" height="60" rx="4" fill="#FFFFFF"/>
+<text x="345" y="194.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">lends</text>
+<text x="345" y="212.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">one worker</text>
+<text x="345" y="230.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">per lane</text>
+<rect x="420" y="20" width="380" height="360" rx="10" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="610.0" y="44" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="middle">This design: the caller owns the threads</text>
+<rect x="480" y="65" width="260" height="50" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="610.0" y="95.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">caller / hataori</text>
+<rect x="450" y="180" width="320" height="175" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="610.0" y="204" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">CpuEngine</text>
+<text x="610.0" y="225" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">used through &amp;mut</text>
+<rect x="470" y="240" width="280" height="45" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="610.0" y="257.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">Pool</text>
+<text x="610.0" y="278.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">owned or borrowed</text>
+<rect x="470" y="295" width="280" height="45" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="610.0" y="312.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">Workspace</text>
+<text x="610.0" y="333.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">buffers, plan and analysis caches</text>
+<path d="M 610 115 L 610 180" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="547.8" y="136.0" width="124.4" height="24" rx="4" fill="#FFFFFF"/>
+<text x="610" y="153.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">builds and holds</text>
+</svg>
