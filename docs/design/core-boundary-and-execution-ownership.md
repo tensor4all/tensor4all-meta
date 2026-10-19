@@ -581,8 +581,8 @@ tenferro's GPU kernels are built with [CubeCL](https://github.com/tracel-ai/cube
   pool.
 
 The runtime layer contradicts this design: it is a hidden per-device global
-with its own thread. With one engine per GPU this does not affect
-correctness in the first version, but the engine's stream is a CubeCL
+with its own thread. Because GPU engines do not share memory, this does not
+affect correctness in the first version, but the engine's stream is a CubeCL
 *logical* stream rather than one the engine owns, and every flush hands work
 to CubeCL's server thread.
 
@@ -596,7 +596,7 @@ to CubeCL's server thread.
    vendor libraries): a real stream owned by the engine, a stream-ordered
    memory pool, events, and no device server thread. This removes the
    blocking hand-off to the server thread that every flush pays today, and
-   it is where several engines per GPU would be added if they are ever
+   it is where sharing tensors between engines would be added if it is ever
    needed.
 3. *Later.* Decide separately whether CubeCL stays as a kernel compiler only,
    and what happens to WebGPU, which runs only through CubeCL today.
