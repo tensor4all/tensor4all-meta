@@ -261,8 +261,8 @@ def runtime_split():
         f.box(x + 20, 318, 160, 50, "Workspace",
               ["caches, run scratch"], style="purple", r=8)
     f.text(575, 300, "...", size=22, color="#77756F")
-    f.text(430, 412, "Dashed: every lane reads the same prepared program. "
-           "Everything execution writes lives in the lane's engine.",
+    f.text(430, 412, "Dashed: every lane runs the same compiled program. "
+           "Workspaces and caches live in the lane's engine.",
            size=12.5, color="#4A4844")
     f.save("runtime_split.svg")
 

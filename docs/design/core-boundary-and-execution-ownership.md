@@ -17,9 +17,9 @@ steps) belong in tenferro-rs issues and `docs/design/`.
    provider crates.
 2. The caller owns the threads. Every layer, tenferro included, borrows the
    pool it is given and never decides how the machine is partitioned.
-3. The caller owns the execution state. Runtimes keep only what was prepared
-   (graphs, compiled programs); everything that execution changes travels
-   with the engine the caller passes in.
+3. The caller owns the execution resources. Runtimes keep the computation
+   (graphs, compiled programs, values and gradients); the workspaces and
+   caches that execution uses travel with the engine the caller passes in.
 
 ## 2. Layers
 
@@ -74,10 +74,15 @@ tenferro's internals.
   exist and on which CPU cores they run decides how the machine is shared.
 * **Workspace.** Everything a numerical routine keeps between calls so the next
   call is faster: recycled buffers, cached contraction plans, cached analysis
-  of GEMM shapes, scratch for multi-operand contractions. A workspace is
+  of matrix-multiplication shapes, scratch for multi-operand contractions. A workspace is
   mutable and is only safe to use from one computation at a time.
 * **Engine.** A `CpuEngine` bundles one pool with one workspace. It is the
   unit of "computing power plus memory" that one caller uses at a time.
+* **Task lane and worker.** A *task lane* is one stream of work in the
+  caller's scheduler, for example one of the `k` parallel tasks hataori runs.
+  A *worker* is one thread of an engine's pool. Each task lane gets its own
+  engine, and inside that lane an operation may use the `m` workers of that
+  engine's pool.
 * **Session.** The window during which one engine executes operations. Code
   inside a session receives a borrowed handle and uses it for every operation;
   the session ends when the caller's closure returns.
@@ -146,12 +151,15 @@ Rules:
    it under a small internal lock. If that engine no longer exists, the memory
    is simply freed.
 3. **Every operation may use the whole pool of its engine.** Throttling for
-   small work happens inside the providers, which already choose the number
-   of lanes from a work model within the budget they are given. A caller that
+   small work happens inside the providers, which already choose how many
+   workers to wake from a work model, up to the budget they are given. A caller that
    wants fewer threads builds a smaller pool.
 4. **The engine hands out the provider token for its pool** (sketch:
-   `engine.exec(budget) -> tcontract_exec::Exec<'_>`), so a downstream kernel
-   uses the same threads and the same budget as tenferro.
+   `engine.exec(budget) -> tcontract_exec::Exec<'_>`). The token is a
+   borrowed permission to run provider code on the engine's pool and
+   workspace, and its budget is the largest number of workers that code may
+   use. A downstream kernel that calls a provider directly passes this token,
+   so it uses the same threads and the same budget as tenferro.
 5. **The caller of an operation must not be a worker of that engine's pool.**
    tenferro checks this against the engine's own pool and reports an error
    rather than silently running serially.
@@ -183,22 +191,27 @@ engine.with_session(|s| {
 
 Compiling a traced graph or setting up automatic differentiation is expensive
 and gives the same result for every lane, so it should happen once and be
-shared. Executing needs mutable memory, so it must not be shared. The design
-therefore splits every runtime into two parts:
+shared. Executing needs scratch memory and caches that change on every run,
+so those must not be shared. The design therefore splits every runtime into
+two parts:
 
 * **Kept in the runtime and shared:** what describes the computation and its
   results: graphs, compiled programs and their cache, differentiation rules,
   recorded values and gradients. None of this depends on which engine runs
-  the work.
-* **Moved to the engine:** everything execution writes to: buffers, plan and
+  the work. (The eager graph grows and gradients accumulate as operations
+  run; how concurrent updates to them are synchronized is a property of the
+  runtime and is not changed by this design. Separate engines do not give
+  separate gradients.)
+* **Moved to the engine:** the execution resources: buffers, plan and
   analysis caches, extension plan caches (for example FFT plans), and the
   scratch slots a compiled graph uses while it runs.
 
-With this split, `k` lanes run the same compiled program at the same time,
-each on its own engine, and the program is compiled once. Today a runtime
-keeps one copy of the execution state behind a lock, so lanes that share a
-runtime run one after another, and lanes that want to run in parallel must
-each build and compile their own runtime.
+With this split, `k` task lanes run the same compiled program at the same
+time, each on its own engine, and the program is compiled once. Today a
+runtime keeps one copy of the execution resources behind a lock, so runs on
+one runtime cannot overlap: a second run either waits or is rejected as busy.
+Task lanes that want to run in parallel must each build and compile their own
+runtime.
 
 The cost is that caches filled during execution are per engine: each lane
 warms up its own plan caches, and memory for them grows with the number of
