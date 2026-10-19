@@ -404,14 +404,25 @@ gpu_a.synchronize()?;                            // wait for gpu_a's work and re
 2. **Handing a tensor to another engine is explicit.** Because two engines
    have two streams, engine B may start reading a tensor before engine A has
    finished writing it. Before B uses a tensor that A produced or changed,
-   the caller makes B wait for A (sketch: `gpu_b.wait_for(&gpu_a)`, which
-   only queues the wait and does not block the host) or synchronizes A. tenferro does not track this
+   the caller makes B wait for A (sketch: `gpu_b.wait_for(&gpu_a)`) or
+   synchronizes A. `wait_for` covers the work A was given before the call,
+   not later work. It makes the GPU wait rather than the program, although
+   handing A's queued work to the GPU first may briefly block on today's
+   CubeCL runtime. tenferro does not track this
    automatically in the first version.
-3. **Memory goes back to the engine that allocated it.** When a tensor is
-   dropped, the allocating engine reuses its memory in its own stream order.
-   If another engine used the tensor, the hand-off of rule 2 also applies in
-   the other direction: before the tensor is dropped or overwritten, the
-   caller makes the allocating engine wait for the engine that used it.
+3. **Before memory is written again, its earlier users must be done.** Two
+   cases, both arranged by the caller with the waits of rule 2:
+   * *Overwriting.* The engine that writes into an existing tensor waits for
+     every other engine that still reads or writes it.
+   * *Reuse after drop.* A dropped tensor's memory goes back to the engine
+     that allocated it, which reuses it in its own stream order. If other
+     engines used the tensor, the allocating engine waits for them before the
+     tensor is dropped.
+
+   For example, A allocates `x` and B reads it: `gpu_b.wait_for(&gpu_a)`
+   before B reads, and `gpu_a.wait_for(&gpu_b)` before `x` is dropped. If C
+   is then to overwrite `x` while B may still be reading, C waits for B
+   first.
 4. **Flush and synchronize are points in time.** `engine.flush()` hands queued
    work to the GPU; `engine.synchronize()` waits for the engine's stream and
    reports the errors the driver reports there. Neither needs a scope.
@@ -422,8 +433,10 @@ gpu_a.synchronize()?;                            // wait for gpu_a's work and re
    rather than freed. Pending transfers keep their own completion state, so
    a transfer may outlive the engine that started it.
 6. **Per operation, an engine only selects its stream.** Driver context
-   switches and flushes happen only where native vendor code (cuBLAS,
-   cuSOLVER, cuFFT, cuTENSOR) is called, as today, not on every kernel.
+   switches and flushes happen only at the boundaries that need them: raw
+   CUDA and vendor library calls (cuBLAS, cuSOLVER, cuFFT, cuTENSOR, a
+   caller's own kernels), and explicit submission, waiting and completion
+   points. Ordinary kernels pay neither.
 
 WebGPU follows the same shape (`WgpuDevice`, `WgpuEngine`); its queues are
 not independent hardware queues, so two WebGPU engines on one device run one
