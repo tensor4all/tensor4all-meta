@@ -263,7 +263,7 @@ def runtime_split():
               ["buffers, run scratch"], style="purple", r=8)
     f.text(575, 300, "...", size=22, color="#77756F")
     f.text(430, 412, "Dashed: concurrent runs share one compiled program. "
-           "Workspaces and caches live in each run's engine.",
+           "Buffers and scratch live in each run's engine.",
            size=12.5, color="#4A4844")
     f.save("runtime_split.svg")
 
