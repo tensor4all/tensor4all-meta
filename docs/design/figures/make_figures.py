@@ -182,10 +182,10 @@ def ownership():
     f.box(480, 65, 260, 50, "caller / hataori", style="plain")
     f.box(450, 180, 320, 175, "CpuEngine", ["used through &mut"],
           style="plain", title_at="top")
-    f.box(470, 240, 280, 45, "Pool", ["owned or borrowed"], style="purple",
+    f.box(470, 240, 280, 45, "Pool", ["built by the caller"], style="purple",
           r=8)
     f.box(470, 295, 280, 45, "Workspace",
-          ["buffers, plan and analysis caches"], style="purple", r=8)
+          ["buffers, plan caches, run scratch"], style="purple", r=8)
     f.arrow([(610, 115), (610, 180)], label="builds and holds",
             label_at=(610, 148))
     f.save("ownership.svg")
@@ -232,7 +232,7 @@ def nesting():
         f.text(x + 100, 172, n, size=16, weight=600, color="#1F5A3F")
         f.text(x + 100, 194, "&mut, one lane at a time", size=12.5,
                color="#1F5A3F")
-        f.box(x + 20, 212, 160, 66, "Pool", ["m threads,", "owned or borrowed"],
+        f.box(x + 20, 212, 160, 66, "Pool", ["m threads,", "built by hataori"],
               style="purple", r=8)
         f.box(x + 20, 290, 160, 60, "Workspace", ["per engine"],
               style="purple", r=8)
@@ -244,9 +244,33 @@ def nesting():
     f.save("nesting.svg")
 
 
+def runtime_split():
+    f = Figure(860, 430)
+    f.box(230, 20, 400, 110, "Runtime (shared, prepared once)",
+          ["graphs, compiled programs, AD rules,", "recorded values and gradients"],
+          style="neutral", title_at="top")
+    xs = [40, 330, 620]
+    names = ["lane 1", "lane 2", "lane k"]
+    for x, n in zip(xs, names):
+        f.arrow([(430, 130), (x + 100, 200)], dashed=True)
+        f.text(x + 100, 190, n, size=12.5, color="#4A4844")
+        f.box(x, 205, 200, 175, None, style="green")
+        f.text(x + 100, 232, "CpuEngine", size=15, weight=600, color="#1F5A3F")
+        f.text(x + 100, 252, "passed in per call", size=12, color="#1F5A3F")
+        f.box(x + 20, 265, 160, 45, "Pool", style="purple", r=8)
+        f.box(x + 20, 318, 160, 50, "Workspace",
+              ["caches, run scratch"], style="purple", r=8)
+    f.text(575, 300, "...", size=22, color="#77756F")
+    f.text(430, 412, "Dashed: every lane runs the same compiled program. "
+           "Workspaces and caches live in the lane's engine.",
+           size=12.5, color="#4A4844")
+    f.save("runtime_split.svg")
+
+
 if __name__ == "__main__":
     layers()
     batches()
     ownership()
     operation()
     nesting()
+    runtime_split()
