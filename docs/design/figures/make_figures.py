@@ -199,8 +199,8 @@ def operation():
         ("CpuEngine", ["&mut, budget = whole pool", "rejects a caller",
                        "inside its own pool"], "green"),
         ("provider", ["tcontract, tlinalg, ...", "work model picks",
-                      "the number of lanes"], "amber"),
-        ("pool workers", ["only the chosen lanes", "wake up"], "purple"),
+                      "how many workers"], "amber"),
+        ("pool workers", ["only the chosen", "workers wake up"], "purple"),
     ]
     for x, (t, ls, s) in zip(xs, boxes):
         f.box(x, 30, 190, 120, t, ls, style=s)
@@ -250,10 +250,11 @@ def runtime_split():
           ["graphs, compiled programs, AD rules,", "recorded values and gradients"],
           style="neutral", title_at="top")
     xs = [40, 330, 620]
-    names = ["lane 1", "lane 2", "lane k"]
+    names = ["run 1", "run 2", "run k"]
     for x, n in zip(xs, names):
         f.arrow([(430, 130), (x + 100, 200)], dashed=True)
-        f.text(x + 100, 190, n, size=12.5, color="#4A4844")
+        lx = x + 128 if x == 330 else x + 100   # keep the middle label off its arrow
+        f.text(lx, 190, n, size=12.5, color="#4A4844")
         f.box(x, 205, 200, 175, None, style="green")
         f.text(x + 100, 232, "CpuEngine", size=15, weight=600, color="#1F5A3F")
         f.text(x + 100, 252, "passed in per call", size=12, color="#1F5A3F")
@@ -261,8 +262,8 @@ def runtime_split():
         f.box(x + 20, 318, 160, 50, "Workspace",
               ["caches, run scratch"], style="purple", r=8)
     f.text(575, 300, "...", size=22, color="#77756F")
-    f.text(430, 412, "Dashed: every lane runs the same compiled program. "
-           "Workspaces and caches live in the lane's engine.",
+    f.text(430, 412, "Dashed: concurrent runs share one compiled program. "
+           "Workspaces and caches live in each run's engine.",
            size=12.5, color="#4A4844")
     f.save("runtime_split.svg")
 
