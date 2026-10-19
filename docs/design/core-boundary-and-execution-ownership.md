@@ -2,11 +2,12 @@
 
 **Status:** Proposed future design. Target: implementation starts around 2026-10-27.
 **Scope:** tenferro-rs, the provider crates (tcontract, cpueinsum, tlinalg, t4a-faer), hataori-rs, and downstream libraries that write their own kernels (symtn, tensor4all-rs).
-**Checked against:** tenferro-rs main `2ecd7911`, symtn main `88e5895b` (2026-10-19).
+**Checked against:** tenferro-rs main `14bc1ab9`, tcontract-rs main, symtn main `88e5895b` (2026-10-20).
 
-This document fixes two cross-repository decisions. The first is what belongs
+This document fixes three cross-repository decisions. The first is what belongs
 in the tenferro core and what users of tenferro build themselves. The second
-is who owns CPU threads. Repository-internal details (type names, migration
+is who owns CPU threads. The third is who owns the mutable state used while
+executing. Repository-internal details (type names, migration
 steps) belong in tenferro-rs issues and `docs/design/`.
 
 ## 1. Policy in one sentence each
@@ -16,6 +17,9 @@ steps) belong in tenferro-rs issues and `docs/design/`.
    provider crates.
 2. The caller owns the threads. Every layer, tenferro included, borrows the
    pool it is given and never decides how the machine is partitioned.
+3. The caller owns the execution state. Runtimes keep only what was prepared
+   (graphs, compiled programs); everything that execution changes travels
+   with the engine the caller passes in.
 
 ## 2. Layers
 
@@ -59,26 +63,98 @@ On the left, tenferro decides who may use which worker and must check those
 decisions at run time. On the right, there is nothing to check: whoever holds
 the engine uses its pool.
 
+### Background for readers new to the CPU stack
+
+This section explains the words used below without assuming knowledge of
+tenferro's internals.
+
+* **Thread pool.** A fixed set of worker threads that wait for parallel work.
+  tensor4all uses [Rayon](https://docs.rs/rayon) pools. Creating a pool is
+  cheap compared with a large computation but not free, and how many pools
+  exist and on which CPU cores they run decides how the machine is shared.
+* **Workspace.** Everything a numerical routine keeps between calls so the next
+  call is faster: recycled buffers, cached contraction plans, cached analysis
+  of GEMM shapes, scratch for multi-operand contractions. A workspace is
+  mutable and is only safe to use from one computation at a time.
+* **Engine.** A `CpuEngine` bundles one pool with one workspace. It is the
+  unit of "computing power plus memory" that one caller uses at a time.
+* **Session.** The window during which one engine executes operations. Code
+  inside a session receives a borrowed handle and uses it for every operation;
+  the session ends when the caller's closure returns.
+* **Runtime.** tenferro's eager runtime (immediate execution with automatic
+  differentiation) and its traced runtime (record a graph, compile it once,
+  run it many times). A runtime stores what was *prepared*: graphs, compiled
+  programs, differentiation rules, gradients being accumulated.
+
+An analogy that matches the design: a runtime holds recipes, an engine is a
+kitchen with its staff (the pool) and its counters and utensils (the
+workspace). Several kitchens can cook from the same recipe book at the same
+time. A recipe book that owned one kitchen would force everyone to queue for
+it, and a kitchen whose staff were hired and assigned by the recipe book
+would leave the restaurant owner unable to decide how many cooks work where.
+Today tenferro does both; this design undoes both.
+
+### Why the caller, not tenferro, owns the threads
+
+The programs that use tenferro already have a scheduler: hataori distributes
+work over MPI ranks and over lanes inside a rank, and tensor4all-rs fans out
+over patches and tree nodes. Only that scheduler knows how many tasks run at
+once and how the machine should be split between them. When tenferro also
+builds and arbitrates threads, two schedulers compete for the same cores, and
+tenferro has to rent workers back to the real scheduler under rules it can
+verify at run time. That is where the arbiter, the held sessions, the phase
+lease and the child tickets listed in section 4 came from. Each was a
+reasonable fix; together they are the cost of the ownership being upside
+down, not of numerical work.
+
+When the caller owns the threads, none of those rules are needed: the caller
+gives each task its own engine, and an engine is used by whoever holds it.
+
 ### The CPU engine
 
 A `CpuEngine` is a plain value:
 
 | Part | Content |
 | --- | --- |
-| pool | a Rayon pool, either owned by the engine or borrowed from the caller |
-| workspace | buffer pool, GEMM analysis cache, indexed plan cache, N-ary contraction workspace |
+| pool | a Rayon pool built by the caller, or none for a serial engine |
+| workspace | buffer pool, GEMM analysis cache, indexed plan cache, N-ary contraction workspace, extension plan caches, graph execution scratch |
+
+tenferro never builds threads. There is one way to make a parallel engine,
+from a pool the caller built, and one way to make a serial engine, with no
+pool at all. A serial engine runs everything on the calling thread and never
+touches a global Rayon pool, so it is safe to use from inside any other pool
+(for example inside a task of the caller's own scheduler).
+
+tenferro offers one helper, a `rayon::ThreadPoolBuilder` preset with the
+worker stack size that the linear algebra providers need (deep recursion in
+some LU implementations overflows Rayon's default stack). It returns the
+ordinary Rayon builder; the caller sets the thread count, pins workers if it
+wants to, and builds the pool. The helper is a convenience, not a second
+construction mode.
 
 Rules:
 
-1. The engine is used through `&mut`, so one caller uses it at a time.
-2. Every operation may use the whole pool of its engine. Throttling for
+1. **The engine is passed to every execution.** Runtimes and tensors never
+   store an engine. Eager operations, the backward pass and traced program
+   runs all take the session of the engine they should run on. A run that
+   needs several engines (for example CPU and GPU with transfers between
+   them) receives all of them for that call.
+2. **One computation per engine at a time.** The engine is used through
+   `&mut`, so Rust's borrow rules guarantee this without run time locks. The
+   one exception is buffer return: a tensor may be dropped on any thread, and
+   its memory then goes back to the buffer pool of the engine that allocated
+   it under a small internal lock. If that engine no longer exists, the memory
+   is simply freed.
+3. **Every operation may use the whole pool of its engine.** Throttling for
    small work happens inside the providers, which already choose the number
-   of lanes from a work model within the budget they are given.
-3. The engine hands out the provider token for its pool (sketch:
+   of lanes from a work model within the budget they are given. A caller that
+   wants fewer threads builds a smaller pool.
+4. **The engine hands out the provider token for its pool** (sketch:
    `engine.exec(budget) -> tcontract_exec::Exec<'_>`), so a downstream kernel
    uses the same threads and the same budget as tenferro.
-4. The caller of an operation must not be a worker of that engine's pool.
-   tenferro reports this as an error rather than silently running serially.
+5. **The caller of an operation must not be a worker of that engine's pool.**
+   tenferro checks this against the engine's own pool and reports an error
+   rather than silently running serially.
 
 How one operation runs:
 
@@ -90,12 +166,43 @@ A downstream kernel takes the same path from the third step on, by calling
 Sketch (names are not final):
 
 ```rust
-let pool_a = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
-let mut engine_a = CpuEngine::from_pool(&pool_a);      // borrowed
-let mut engine_b = CpuEngine::builder().threads(4).build()?; // owned
+let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
+let mut engine = CpuEngine::new(Arc::new(pool));   // parallel, uses all 4 threads
+let mut serial = CpuEngine::serial();              // no pool at all
 
-let c = dot_general(&mut engine_a, &a, &b, &dims)?;    // uses all of pool_a
+engine.with_session(|s| {
+    let c = dot_general(s, &a, &b, &dims)?;        // eager operation
+    let grads = loss.backward_in(s)?;              // backward pass on the same engine
+    runtime.run_prepared(s, &program, &inputs)     // compiled graph on the same engine
+})?;
 ```
+
+### Runtimes hold what was prepared, engines hold what is mutable
+
+![Runtimes are shared; each lane brings its own engine](figures/runtime_split.svg)
+
+Compiling a traced graph or setting up automatic differentiation is expensive
+and gives the same result for every lane, so it should happen once and be
+shared. Executing needs mutable memory, so it must not be shared. The design
+therefore splits every runtime into two parts:
+
+* **Kept in the runtime and shared:** what describes the computation and its
+  results: graphs, compiled programs and their cache, differentiation rules,
+  recorded values and gradients. None of this depends on which engine runs
+  the work.
+* **Moved to the engine:** everything execution writes to: buffers, plan and
+  analysis caches, extension plan caches (for example FFT plans), and the
+  scratch slots a compiled graph uses while it runs.
+
+With this split, `k` lanes run the same compiled program at the same time,
+each on its own engine, and the program is compiled once. Today a runtime
+keeps one copy of the execution state behind a lock, so lanes that share a
+runtime run one after another, and lanes that want to run in parallel must
+each build and compile their own runtime.
+
+The cost is that caches filled during execution are per engine: each lane
+warms up its own plan caches, and memory for them grows with the number of
+engines (see section 5).
 
 ### Nesting
 
@@ -113,35 +220,57 @@ checks it.
 
 ### Responsibilities of the caller
 
-* Whether the pools of different engines overlap on CPUs, and whether the
-  total thread count oversubscribes the machine, is the caller's
-  responsibility. tenferro does not check it. The engine builder accepts a
-  thread count and an optional CPU set for pinning, so that a disjoint layout
-  is easy to build.
+* **Machine layout.** Whether the pools of different engines overlap on CPUs,
+  whether the total thread count oversubscribes the machine, and whether
+  workers are pinned to cores are the caller's decisions. tenferro does not
+  check them.
+* **One pool, one active engine.** A Rayon pool backs at most one engine in
+  use at a time. Lanes that run at the same time need separate pools. (The
+  provider crates keep per-pool coordination state inside the engine, so two
+  engines on one pool would not see each other.)
+* **The calling thread.** Parts of an operation, including vendor BLAS and
+  LAPACK calls, run on the thread that called it. Its CPU affinity and stack
+  size are the caller's, exactly like the pool's.
+* **Asynchronous execution.** tenferro does not start background threads to
+  run work later. A caller that wants a computation in the background starts
+  its own thread and runs it there.
 * Threads started by a vendor BLAS or LAPACK are outside tenferro's control,
   as before.
 
 ## 4. What this removes from tenferro
 
-The following exist only to let tenferro own and subdivide threads on behalf
-of its callers, and are removed:
+The following exist only to let tenferro own, subdivide or hide threads and
+execution state on behalf of its callers, and are removed:
 
+* every constructor that builds threads: thread counts and CPU sets on the
+  backend, sizing from `RAYON_NUM_THREADS`, NUMA placement, the worker stack
+  setting
 * the process global resource arbiter and its CPU set conflict detection
 * the per placement engine registry
 * owner thread locals used as admission keys, and owner inheritance
 * the held CPU session, the per worker phase lease, and the child execution
   ticket, together with their error types
+* tenferro's own thread pinning, including narrowing the calling thread's CPU
+  mask during a session
+* backends and execution state stored inside runtimes, and the locks that
+  serialize execution on one runtime
+* the detached submission API that runs a compiled graph on a thread tenferro
+  starts
 
 The work these served moves to the caller: per lane execution becomes one
 engine per lane, and lanes are no longer forced to run serially inside.
 
 ## 5. Costs we accept
 
-* Workspaces are per engine, so memory use and warm up grow with the number
-  of engines.
+* Workspaces and execution caches are per engine, so memory use and warm up
+  grow with the number of engines. Each engine has its own retention limit
+  for recycled buffers.
 * A bad CPU layout shows up as lost performance, not as an error.
-* Calling an engine from a worker of its own pool remains possible with a
-  borrowed pool, and must be detected at run time.
+* Calling an engine from a worker of its own pool is still possible and is
+  detected at run time.
+* Every execution names its engine, so code is more explicit than with a
+  runtime that hides its backend. This is intended: the engine in the call is
+  exactly what decides where the work runs.
 
 ## 6. Consistency with other documents
 
@@ -154,18 +283,26 @@ engine per lane, and lanes are no longer forced to run serially inside.
 
 ## 7. Plan
 
-1. Open a tenferro-rs issue that implements section 3 and lists the removals
-   of section 4, without a compatibility layer.
-2. Port the downstream users (tensor4all-rs adaptive interpolation, the
-   hataori tenferro adapter) to one engine per lane.
+1. Implement section 3 and the removals of section 4 in tenferro-rs
+   ([tenferro-rs#2206](https://github.com/tensor4all/tenferro-rs/issues/2206)),
+   without a compatibility layer. Internal details (how a session proves it
+   is compatible with a compiled program, the exact public names) are settled
+   there.
+2. Port the downstream users to one engine per lane, each in its own change:
+   tensor4all-rs (adaptive interpolation, tests, the C API's default engine),
+   the hataori tenferro adapter, tenferro-benchmark, gaugefields-rs.
 3. Update the backend guide and retire the superseded tenferro design notes.
 
-## Open questions
+## Settled questions
 
-1. Should the workspace be separable from the pool, so that two engines over
-   the same pool at different times can share caches?
-2. How should the pinning option behave on macOS, where thread affinity is
-   advisory?
+1. *Should the workspace be separable from the pool?* Not in the first
+   version. An engine owns its workspace; two engines never share one.
+2. *How should pinning behave on macOS?* tenferro does no pinning, so the
+   question moves to whoever builds the pools.
+3. *Should tenferro keep a mode that builds its own pool?* No. One helper
+   presets the Rayon builder; the caller always builds the pool.
+4. *Should runtimes own their engine?* No. Engines are passed per call, and
+   runtimes keep only what was prepared.
 
 The figures are generated by `figures/make_figures.py` (standard library
 Python). Edit the script and rerun it rather than editing the SVG files.
