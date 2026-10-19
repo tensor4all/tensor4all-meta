@@ -544,15 +544,15 @@ may use its whole pool.
 4. *Should runtimes own their engine?* No. Engines are passed per call, and
    runtimes keep only what was prepared.
 
-6. *How are tensors handed between GPU engines on one device?* Explicitly,
-   in the first version: the caller makes the receiving engine wait for the
-   producing one (section 4, rules 2 and 3). Automatic tracking waits until
-   tenferro owns the GPU runtime layer.
-
 5. *Are "engine" and "session" two concepts or one?* One. Operations take
    `&mut` of the engine through a backend-neutral `Engine` trait, and the
    session is removed (see "One concept: the engine"). The word "backend"
    also leaves the public API: `CpuBackend` becomes `CpuEngine`.
+
+6. *How are tensors handed between GPU engines on one device?* Explicitly,
+   in the first version: the caller makes the receiving engine wait for the
+   producing one (section 4, rules 2 and 3). Automatic tracking waits until
+   tenferro owns the GPU runtime layer.
 
 ## Open questions (to mature before implementation)
 
