@@ -292,6 +292,61 @@ The cost is that caches filled during execution are per engine: each engine
 warms up its own plan caches, and memory for them grows with the number of
 engines (see section 6).
 
+### Running a compiled graph: compile, prepare, run
+
+The traced runtime turns a recorded computation into something that can be
+run many times. This happens in three steps, and each step exists for a
+different reason:
+
+| Step | Input | Output | Done how often |
+| --- | --- | --- | --- |
+| **compile** | a recorded graph | a `CompiledGraph`: the computation, simplified and fused, independent of input shapes and hardware | once per computation |
+| **prepare** | a compiled graph and the inputs' shapes, types and kinds of memory | a prepared program: an execution plan for those inputs, and the requirements an engine must meet to run it (device, memory kind, supported operations) | once per input signature |
+| **run** | a prepared program, the engines and the inputs | the outputs | as often as needed |
+
+Prepare does the expensive checks and decisions once, so that run only
+checks that the inputs still match and that the engines it is given meet
+the prepared requirements. A prepared program does not hold an engine: any
+engine that meets its requirements may run it, so several callers can run
+one prepared program at the same time, each on its own engine.
+
+There is exactly one way to prepare and one way to run:
+
+```rust
+let prepared = runtime.prepare(&compiled, &inputs)?;
+let outputs = runtime.run(&mut [&mut engine], &prepared, &inputs)?;
+```
+
+`run` takes the engines as a list because a prepared program may span
+several of them, for example a CPU engine and a GPU engine with transfers
+between them; a program on one engine gets a list of one.
+
+**Inputs and outputs.** Inputs are borrowed views of tensors. Most outputs
+are new, owned tensors. An output that is just an input, or a view of one
+(for example its transpose), is returned as a view of that input instead of
+a copy; Rust's borrow rules then keep the input alive as long as the output
+is used. A caller that needs an owned tensor converts the output, which
+copies only in that case.
+
+**When run returns.** On the CPU, run returns when the work is done. On a
+GPU, run returns once the work is queued on the engine's stream and once it
+no longer reads memory that the caller could change or free (for example,
+host data being uploaded). The GPU may still be computing. Outputs can be
+used right away by later operations on the same engine, because the stream
+runs work in order; reading them on the host, or calling
+`engine.synchronize()`, waits for the work. Handing outputs to another
+engine follows the rules of section 4.
+
+**What this replaces.** tenferro had nine entry points for this: one-shot
+variants that compiled and prepared on every call, a variant that kept lazy
+views in its outputs, a variant for borrowed inputs, a variant where the
+runtime opened sessions itself and one where the caller supplied a session,
+a deferred variant that batched runs and waited at the end, and a detached
+submission on a background thread. They differed in who owned the session,
+when completion was awaited and how outputs were returned. With engines
+passed per call, completion handled by the engine's stream, and one output
+type, those differences disappear.
+
 ### Why the caller, not tenferro, owns the threads
 
 The programs that use tenferro already have a scheduler: hataori distributes
@@ -500,6 +555,8 @@ execution state on behalf of its callers, and are removed:
   serialize execution on one runtime
 * the detached submission API that runs a compiled graph on a thread tenferro
   starts
+* the other ways to run a compiled graph (one-shot, lazy-output, scoped,
+  caller-session and deferred variants); only `prepare` and `run` remain
 * on the GPU: `CudaBackend` (split into `CudaDevice` and `CudaEngine`), the
   scoped and held CUDA sessions with their reservation and statistics, the
   session thread-locals, the per-runtime table that maps streams to vendor
@@ -535,16 +592,21 @@ may use its whole pool.
 
 ## 8. Plan
 
-1. Implement sections 3 and 4 and the removals of section 5 in tenferro-rs
+Work proceeds from the bottom of the stack up. Downstream libraries are not
+changed until tenferro and the layers below it are finished.
+
+1. Fix the layers below tenferro first: for example, a serial engine must
+   not start Rayon's global pool, which needs a change in strided-rs.
+2. Implement sections 3 and 4 and the removals of section 5 in tenferro-rs
    ([tenferro-rs#2206](https://github.com/tensor4all/tenferro-rs/issues/2206)),
    without a compatibility layer. Internal details (how an engine proves it
-   is compatible with a compiled program, the exact public names) are settled
+   is compatible with a prepared program, the exact public names) are settled
    there.
-2. Port the downstream users to engines built from their own pools, each in
-   its own change:
-   tensor4all-rs (adaptive interpolation, tests, the C API's default engine),
-   the hataori tenferro adapter, tenferro-benchmark, gaugefields-rs.
-3. Update the backend guide and retire the superseded tenferro design notes.
+3. Only then port the downstream users to engines built from their own
+   pools, each in its own change: tensor4all-rs (adaptive interpolation,
+   tests, the C API's default engine), the hataori tenferro adapter,
+   tenferro-benchmark, gaugefields-rs.
+4. Update the backend guide and retire the superseded tenferro design notes.
 
 ## Settled questions
 
