@@ -77,15 +77,15 @@ tenferro's internals.
   of matrix-multiplication shapes, scratch for multi-operand contractions. A workspace is
   mutable and is only safe to use from one computation at a time.
 * **Engine.** A `CpuEngine` bundles one pool with one workspace. It is the
-  unit of "computing power plus memory" that one caller uses at a time.
+  unit of "computing power plus memory" that one caller uses at a time, and
+  it is what every operation takes as its argument. A GPU engine bundles a
+  device stream with its memory pools in the same way. There is no separate
+  session object (see "One concept: the engine" below).
 * **Task lane and worker.** A *task lane* is one stream of work in the
   caller's scheduler, for example one of the `k` parallel tasks hataori runs.
   A *worker* is one thread of an engine's pool. Each task lane gets its own
   engine, and inside that lane an operation may use the `m` workers of that
   engine's pool.
-* **Session.** The window during which one engine executes operations. Code
-  inside a session receives a borrowed handle and uses it for every operation;
-  the session ends when the caller's closure returns.
 * **Runtime.** tenferro's eager runtime (immediate execution with automatic
   differentiation) and its traced runtime (record a graph, compile it once,
   run it many times). A runtime stores what was *prepared*: graphs, compiled
@@ -141,7 +141,7 @@ Rules:
 
 1. **The engine is passed to every execution.** Runtimes and tensors never
    store an engine. Eager operations, the backward pass and traced program
-   runs all take the session of the engine they should run on. A run that
+   runs all take `&mut` of the engine they should run on. A run that
    needs several engines (for example CPU and GPU with transfers between
    them) receives all of them for that call.
 2. **One computation per engine at a time.** The engine is used through
@@ -178,12 +178,50 @@ let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
 let mut engine = CpuEngine::new(Arc::new(pool));   // parallel, uses all 4 threads
 let mut serial = CpuEngine::serial();              // no pool at all
 
-engine.with_session(|s| {
-    let c = dot_general(s, &a, &b, &dims)?;        // eager operation
-    let grads = loss.backward_in(s)?;              // backward pass on the same engine
-    runtime.run_prepared(s, &program, &inputs)     // compiled graph on the same engine
-})?;
+let c = dot_general(&mut engine, &a, &b, &dims)?;          // eager operation
+let grads = loss.backward_in(&mut engine)?;                // backward pass on the same engine
+let out = runtime.run_prepared(&mut engine, &program, &inputs)?; // compiled graph, same engine
+let d = dot_general(&mut serial, &a, &b, &dims)?;          // same code, serial engine
 ```
+
+### One concept: the engine
+
+Code that runs work names exactly one kind of object, the engine. Generic
+code takes `&mut dyn Engine` (or `&mut E` with `E: Engine`), a
+backend-neutral trait that `CpuEngine` and the GPU engines implement.
+
+tenferro used to have a second concept, the session: a handle opened from a
+backend for the duration of a closure, through which every operation ran.
+The session existed to do work that this design removes:
+
+* admission against the process wide arbiter, and the reentry and
+  contention errors that came with it;
+* narrowing the calling thread's CPU mask while the closure ran and
+  restoring it afterwards;
+* holding an exclusive lease on a backend that several callers could reach.
+
+Without those, a session would only repeat what the engine already gives:
+
+* **Exclusivity** comes from `&mut engine`. A caller that really wants to
+  share one engine between threads wraps it in a `Mutex`; the guard is then
+  the lease, written in ordinary Rust.
+* **The check of rule 5** (caller not a worker of the pool) runs at the
+  start of each operation. It is one thread-local read, negligible against
+  any operation that reaches a provider.
+* **Provider state that should live across operations** (the
+  `tcontract_exec::Pool` wrapper with its arena and its SPMD gate) is owned
+  by the engine, which builds it once with `Pool::shared` from its
+  `Arc<rayon::ThreadPool>`. Nothing has to be rebuilt per operation or per
+  closure.
+* **GPU work boundaries.** A GPU engine owns its stream. Submitting queued
+  work and waiting for the device are explicit engine methods (sketch:
+  `engine.submit()`, `engine.synchronize()`), and dropping the engine
+  synchronizes. These are points in time, not a scope, so they need no
+  closure.
+
+A run that needs several engines (CPU and GPU with transfers, rule 1)
+receives them as a set of borrowed engines for that one call. That set is
+an argument, not a stored object, and it is not called a session.
 
 ### Runtimes hold what was prepared, engines hold what is mutable
 
@@ -263,6 +301,9 @@ execution state on behalf of its callers, and are removed:
 * owner thread locals used as admission keys, and owner inheritance
 * the held CPU session, the per worker phase lease, and the child execution
   ticket, together with their error types
+* the session layer itself: opening a session from a backend and running
+  operations through a closure; the backend-neutral session trait becomes the
+  `Engine` trait implemented by the engines directly
 * tenferro's own thread pinning, including narrowing the calling thread's CPU
   mask during a session
 * backends and execution state stored inside runtimes, and the locks that
@@ -298,7 +339,7 @@ engine per lane, and lanes are no longer forced to run serially inside.
 
 1. Implement section 3 and the removals of section 4 in tenferro-rs
    ([tenferro-rs#2206](https://github.com/tensor4all/tenferro-rs/issues/2206)),
-   without a compatibility layer. Internal details (how a session proves it
+   without a compatibility layer. Internal details (how an engine proves it
    is compatible with a compiled program, the exact public names) are settled
    there.
 2. Port the downstream users to one engine per lane, each in its own change:
@@ -317,17 +358,21 @@ engine per lane, and lanes are no longer forced to run serially inside.
 4. *Should runtimes own their engine?* No. Engines are passed per call, and
    runtimes keep only what was prepared.
 
+5. *Are "engine" and "session" two concepts or one?* One. Operations take
+   `&mut` of the engine through a backend-neutral `Engine` trait, and the
+   session is removed (see "One concept: the engine"). The word "backend"
+   also leaves the public API: `CpuBackend` becomes `CpuEngine`.
+
 ## Open questions (to mature before implementation)
 
-1. *Are "engine" and "session" two concepts or one?* Readers find the pair
-   hard to follow. Under this design the engine is passed to every call, so
-   a separate session (a borrowed handle opened from the engine for a closure)
-   may be unnecessary: operations could take `&mut` of the engine itself,
-   behind a backend-neutral trait for CPU and GPU. Decide whether the session
-   survives, and choose names a newcomer can read without this document.
-2. *How does a session (or engine) prove it is compatible with a compiled
+1. *How does an engine prove it is compatible with a compiled
    program?* Backend kind alone is too weak (CPU allocation domains, GPU
    device and stream state). Settled in tenferro-rs#2206.
+2. *What does a GPU engine cost per operation without a session scope?*
+   The session bound the device stream to the calling thread once per
+   closure. An engine binds it per operation, or remembers which thread it
+   is bound to and skips the binding when nothing changed. Measure before
+   choosing.
 
 The figures are generated by `figures/make_figures.py` (standard library
 Python). Edit the script and rerun it rather than editing the SVG files.
