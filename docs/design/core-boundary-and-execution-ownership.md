@@ -18,8 +18,8 @@ steps) belong in tenferro-rs issues and `docs/design/`.
 2. The caller owns the threads. Every layer, tenferro included, borrows the
    pool it is given and never decides how the machine is partitioned.
 3. The caller owns the execution resources. Runtimes keep the computation
-   (graphs, compiled programs, values and gradients); the workspaces and
-   caches that execution uses travel with the engine the caller passes in.
+   (graphs, compiled programs, plans, values and gradients); the memory and
+   scratch that execution writes travel with the engine the caller passes in.
 
 ## 2. Layers
 
@@ -74,10 +74,13 @@ tenferro's internals.
   tensor4all uses [Rayon](https://docs.rs/rayon) pools. Creating a pool is
   cheap compared with a large computation but not free, and how many pools
   exist and on which CPU cores they run decides how the machine is shared.
-* **Workspace.** Everything a numerical routine keeps between calls so the next
-  call is faster: recycled buffers, cached contraction plans, cached analysis
-  of matrix-multiplication shapes, scratch for multi-operand contractions. A workspace is
-  mutable and is only safe to use from one computation at a time.
+* **Workspace.** The memory a computation writes while it runs and keeps for
+  the next call: recycled buffers and scratch areas. A workspace is mutable
+  and is only safe to use from one computation at a time.
+* **Plan.** A decision worked out once and reused, such as how to split a
+  contraction or which kernel to use for a matrix-multiplication shape. A
+  plan is never changed after it is made, so any number of computations can
+  read it at the same time.
 * **Engine.** A `CpuEngine` bundles one pool with one workspace. It is the
   unit of "computing power plus memory" that one caller uses at a time, and
   it is what every operation takes as its argument. A GPU engine bundles a
@@ -108,12 +111,12 @@ Sketch (names are not final):
 
 ```rust
 let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
-let mut engine = CpuEngine::new(Arc::new(pool));   // parallel, uses all 4 threads
+let mut engine = CpuEngine::new(pool);             // takes the pool; uses all 4 threads
 let mut serial = CpuEngine::serial();              // no pool at all
 
 let c = dot_general(&mut engine, &a, &b, &dims)?;          // eager operation
 let grads = loss.backward_in(&mut engine)?;                // backward pass on the same engine
-let out = runtime.run(&mut [&mut engine], &prepared, &inputs)?; // compiled graph, same engine
+let out = runtime.run(&mut [&mut engine], &prepared, &inputs)?; // prepared graph, same engine
 let d = dot_general(&mut serial, &a, &b, &dims)?;          // same code, serial engine
 ```
 
@@ -121,12 +124,21 @@ A `CpuEngine` is a plain value:
 
 | Part | Content |
 | --- | --- |
-| pool | a Rayon pool built by the caller, or none for a serial engine |
-| workspace | buffer pool, GEMM analysis cache, indexed plan cache, N-ary contraction workspace, extension plan caches, graph execution scratch |
+| pool | a Rayon pool built by the caller and handed over to the engine, or none for a serial engine |
+| workspace | buffer pool, N-ary contraction scratch, graph execution scratch, and accounting of memory still in use by unfinished work |
+
+Plans (contraction plans, matrix-multiplication analysis, extension plans
+such as FFT plans) are not part of the engine. They are immutable, so they
+are shared: a prepared program carries the plans it needs, and eager
+operations look them up in a plan cache owned by the runtime. Only plans
+that are tied to one engine's device handles (for example cuTENSOR plans on
+a GPU) stay in that engine.
 
 tenferro never builds threads. There is one way to make a parallel engine,
-from a pool the caller built, and one way to make a serial engine, with no
-pool at all. A serial engine runs everything on the calling thread and never
+from a pool the caller built and hands over, and one way to make a serial
+engine, with no pool at all. The engine takes the pool by value, so one pool
+can never back two engines; `engine.pool()` gives the caller read access to
+it, for example to ask its size. A serial engine runs everything on the calling thread and never
 touches a global Rayon pool, so it is safe to use from inside any other pool
 (for example inside a task of the caller's own scheduler).
 
@@ -150,6 +162,14 @@ Rules:
    its memory then goes back to the buffer pool of the engine that allocated
    it under a small internal lock. If that engine no longer exists, the memory
    is simply freed.
+   **Unfinished work is bounded, and a broken engine says so.** On a GPU,
+   work may still be running after a call returns (see "When run returns").
+   The engine counts the memory that unfinished work still holds (inputs it
+   reads, temporaries, outputs being written) and, above a limit the caller
+   can set, waits for its oldest work before taking more. If an operation
+   panics, or the device reports an error the engine cannot recover from,
+   the engine marks itself broken; every later operation on it returns an
+   error, and the caller replaces it with a new engine.
 3. **Every operation may use the whole pool of its engine.** Throttling for
    small work happens inside the providers, which already choose how many
    workers to wake from a work model, up to the budget they are given. A caller that
@@ -208,9 +228,8 @@ Without those, a session would only repeat what the engine already gives:
   any operation that reaches a provider.
 * **Provider state that should live across operations** (the
   `tcontract_exec::Pool` wrapper with its arena and its SPMD gate) is owned
-  by the engine, which builds it once with `Pool::shared` from its
-  `Arc<rayon::ThreadPool>`. Nothing has to be rebuilt per operation or per
-  closure.
+  by the engine, which builds it once around the pool it owns. Nothing has
+  to be rebuilt per operation or per closure.
 * **GPU work boundaries.** A GPU engine owns its stream. Submitting queued
   work and waiting for the device are explicit engine methods (sketch:
   `engine.submit()`, `engine.synchronize()`), and dropping the engine
@@ -272,15 +291,16 @@ so those must not be shared. The design therefore splits every runtime into
 two parts:
 
 * **Kept in the runtime and shared:** what describes the computation and its
-  results: graphs, compiled programs and their cache, differentiation rules,
-  recorded values and gradients. None of this depends on which engine runs
+  results: graphs, compiled programs and their cache, prepared programs with
+  their plans, the plan cache used by eager operations, differentiation
+  rules, recorded values and gradients. None of this depends on which engine runs
   the work. (The eager graph grows and gradients accumulate as operations
   run; how concurrent updates to them are synchronized is a property of the
   runtime and is not changed by this design. Separate engines do not give
   separate gradients.)
-* **Moved to the engine:** the execution resources: buffers, plan and
-  analysis caches, extension plan caches (for example FFT plans), and the
-  scratch slots a compiled graph uses while it runs.
+* **Moved to the engine:** what execution writes: buffers, scratch, the
+  slots a compiled graph uses while it runs, and plans that are tied to the
+  engine's own device handles.
 
 With this split, several callers run the same compiled program at the same
 time, each on its own engine, and the program is compiled once. Today a
@@ -289,9 +309,9 @@ one runtime cannot overlap: a second run either waits or is rejected as busy.
 Callers that want to run in parallel must each build and compile their own
 runtime.
 
-The cost is that caches filled during execution are per engine: each engine
-warms up its own plan caches, and memory for them grows with the number of
-engines (see section 6).
+Because plans are shared, adding an engine does not repeat the work of
+planning; each engine only warms up its own buffers and scratch (see
+section 6).
 
 ### Running a compiled graph: compile, prepare, run
 
@@ -302,19 +322,29 @@ different reason:
 | Step | Input | Output | Done how often |
 | --- | --- | --- | --- |
 | **compile** | a recorded graph | a `CompiledGraph`: the computation in a hardware-independent form, keeping the shape constraints that were recorded (fixed sizes stay fixed; only symbolic sizes may vary) | once per computation |
-| **prepare** | a compiled graph and the inputs' shapes, types and kinds of memory | a prepared program: an execution plan for those inputs, including fusion chosen for the target hardware, and the requirements an engine must meet to run it (device, memory kind, supported operations) | once per input signature |
+| **prepare** | a compiled graph, the inputs' shapes, types, layouts and kinds of memory, and a description of the engines it will run on | a prepared program: an execution plan for those inputs, including fusion chosen for the target hardware, and the requirements an engine must meet to run it (device, memory kind, supported operations) | once per input signature |
 | **run** | a prepared program, the engines and the inputs | the outputs | as often as needed |
 
+Prepare has to know what it is preparing for: which kind of engine runs
+each part, on which device, with which capabilities. It cannot always tell
+from the inputs (a graph may have no inputs, or move data between a CPU and
+a GPU), so the caller passes a description of the target engines. Every
+engine can produce such a description, `engine.target()`: an immutable value
+naming the provider, the device, the memory the engine can read and the
+operations it supports. It holds no threads, streams or memory.
+
 Prepare does the expensive checks and decisions once, so that run only
-checks that the inputs still match and that the engines it is given meet
-the prepared requirements. A prepared program does not hold an engine: any
-engine that meets its requirements may run it, so several callers can run
-one prepared program at the same time, each on its own engine.
+checks that the inputs still match (shapes, types, strides, alignment and
+memory domain, as today) and that the engines it is given match the
+prepared targets. A prepared program does not hold an engine: any engine
+whose description matches the target, with the same capabilities and
+compatible memory, may run it, so several callers can run one prepared
+program at the same time, each on its own engine.
 
 There is exactly one way to prepare and one way to run:
 
 ```rust
-let prepared = runtime.prepare(&compiled, &inputs)?;
+let prepared = runtime.prepare(&compiled, &inputs, &[engine.target()])?;
 let outputs = runtime.run(&mut [&mut engine], &prepared, &inputs)?;
 ```
 
@@ -346,8 +376,8 @@ no longer reads memory that the caller could change or free (for example,
 host data being uploaded). The GPU may still be computing. Outputs can be
 used right away by later operations on the same engine, because the stream
 runs work in order; reading them on the host, or calling
-`engine.synchronize()`, waits for the work. Handing outputs to another
-engine follows the rules of section 4.
+`engine.synchronize()`, waits for the work. Using inputs or outputs on
+another engine is safe without extra calls (section 4, rule 2).
 
 **What this replaces.** tenferro had several entry points for this: one-shot
 variants that entered preparation on every call, a variant that kept lazy
@@ -381,10 +411,10 @@ gives each task its own engine, and an engine is used by whoever holds it.
   whether the total thread count oversubscribes the machine, and whether
   workers are pinned to cores are the caller's decisions. tenferro does not
   check them.
-* **One pool, one active engine.** A Rayon pool backs at most one engine in
-  use at a time. Engines used at the same time need separate pools. (The
-  provider crates keep per-pool coordination state inside the engine, so two
-  engines on one pool would not see each other.)
+* **One pool per engine** is enforced by the type: the engine takes its pool
+  by value. (The provider crates keep per-pool coordination state inside the
+  engine, so two engines on one pool would not see each other; taking the
+  pool by value rules this out.)
 * **Exclusion between engines.** Inside one thread, `&mut` keeps an engine
   to one computation. Which of the caller's threads or tasks holds which
   engine, and that two of them never hold the same engine at once, is
@@ -468,28 +498,28 @@ gpu_a.synchronize()?;                            // wait for gpu_a's work and re
    can be read by another engine of the same device (the same `CudaDevice`
    value or its clones) without a copy. Engines from different devices need
    an explicit transfer, as today.
-2. **Handing a tensor to another engine is explicit.** Because two engines
-   have two streams, engine B may start reading a tensor before engine A has
-   finished writing it. Before B uses a tensor that A produced or changed,
-   the caller makes B wait for A (sketch: `gpu_b.wait_for(&gpu_a)`) or
-   synchronizes A. `wait_for` covers the work A was given before the call,
-   not later work. It makes the GPU wait rather than the program, although
-   handing A's queued work to the GPU first may briefly block on today's
-   CubeCL runtime. tenferro does not track this
-   automatically in the first version.
-3. **Before memory is written again, its earlier users must be done.** Two
-   cases, both arranged by the caller with the waits of rule 2:
-   * *Overwriting.* The engine that writes into an existing tensor waits for
-     every other engine that still reads or writes it.
-   * *Reuse after drop.* A dropped tensor's memory goes back to the engine
-     that allocated it, which reuses it in its own stream order. If other
-     engines used the tensor, the allocating engine waits for them before the
-     tensor is dropped.
+2. **Sharing tensors between engines is safe without extra calls.** Two
+   engines have two streams, so engine B could start reading a tensor before
+   engine A has finished writing it, or A could reuse memory that B is still
+   reading. tenferro prevents both by tracking use across engines:
+   * Each device tensor remembers the last engine that wrote it and the
+     engines that have read it since.
+   * When an engine uses a tensor last written by another engine, it first
+     makes its own stream wait for that write. When it writes a tensor that
+     other engines are reading, it first waits for those reads.
+   * When a tensor is dropped, its memory returns to the engine that
+     allocated it, together with the pending uses by other engines; that
+     engine reuses the memory only after they have finished. It checks
+     without blocking and takes other memory in the meantime.
 
-   For example, A allocates `x` and B reads it: `gpu_b.wait_for(&gpu_a)`
-   before B reads, and `gpu_a.wait_for(&gpu_b)` before `x` is dropped. If C
-   is then to overwrite `x` while B may still be reading, C waits for B
-   first.
+   Use within one engine costs nothing extra, because one stream already
+   runs in order. Use across engines costs one GPU event per hand-over. The
+   waits are GPU-side: the program does not block, although handing queued
+   work to the GPU first may briefly block on today's CubeCL runtime.
+3. **Paths outside this tracking are `unsafe`.** Code that reaches device
+   memory directly (raw CUDA pointers for a caller's own kernels or vendor
+   calls) takes the device memory through an `unsafe` function whose
+   contract states which stream may use it and until when.
 4. **Flush and synchronize are points in time.** `engine.flush()` hands queued
    work to the GPU; `engine.synchronize()` waits for the engine's stream and
    reports the errors the driver reports there. Neither needs a scope.
@@ -527,8 +557,8 @@ documented, not hidden:
 * An engine's stream is a *logical* stream. CubeCL maps logical streams onto
   a fixed set of physical streams, so two engines may share one physical
   stream and then run one after another instead of in parallel.
-* CubeCL orders reads only against the stream that allocated a buffer, which
-  is why rule 2 asks the caller to make the hand-off explicit.
+* CubeCL orders reads only against the stream that allocated a buffer, so
+  the tracking of rule 2 is tenferro's own and sits on top of CubeCL.
 
 **Direction.** tenferro takes ownership of the GPU runtime layer in stages:
 
@@ -539,8 +569,8 @@ documented, not hidden:
    CUDA driver API (through `cudarc`, which tenferro already uses for its
    vendor libraries): one real stream per engine, a stream-ordered memory
    pool per engine, events for hand-offs, and no device server thread. This
-   removes both consequences above, and lets tenferro track cross-stream use
-   automatically if that is then wanted. It also removes a blocking
+   removes the first consequence above and lets the tracking of rule 2 move
+   into tenferro's own allocator. It also removes a blocking
    hand-off to the server thread that every flush pays today.
 3. *Later.* Decide separately whether CubeCL stays as a kernel compiler only,
    and what happens to WebGPU, which runs only through CubeCL today.
@@ -580,13 +610,14 @@ may use its whole pool.
 
 ## 6. Costs we accept
 
-* Workspaces and execution caches are per engine, so memory use and warm up
-  grow with the number of engines. Each engine has its own retention limit
-  for recycled buffers.
+* Buffers and scratch are per engine, so memory use and warm up grow with
+  the number of engines. Each engine has its own retention limit for
+  recycled buffers and its own limit on memory held by unfinished work.
+  Plans are shared and are not multiplied.
 * A bad CPU layout shows up as lost performance, not as an error.
-* Handing a tensor from one GPU engine to another needs an explicit wait in
-  the first version, and two GPU engines may share a physical stream until
-  tenferro owns the GPU runtime layer (section 4).
+* Using a tensor on another GPU engine costs one GPU event per hand-over,
+  and two GPU engines may share a physical stream until tenferro owns the
+  GPU runtime layer (section 4).
 * Calling an engine from a worker of its own pool is still possible and is
   detected at run time.
 * Every execution names its engine, so code is more explicit than with a
@@ -630,7 +661,8 @@ single pull request when it is finished, not as a series of partial ones.
 2. *How should pinning behave on macOS?* tenferro does no pinning, so the
    question moves to whoever builds the pools.
 3. *Should tenferro keep a mode that builds its own pool?* No. One helper
-   presets the Rayon builder; the caller always builds the pool.
+   presets the Rayon builder; the caller always builds the pool and hands it
+   to the engine by value.
 4. *Should runtimes own their engine?* No. Engines are passed per call, and
    runtimes keep only what was prepared.
 
@@ -639,17 +671,19 @@ single pull request when it is finished, not as a series of partial ones.
    session is removed (see "One concept: the engine"). The word "backend"
    also leaves the public API: `CpuBackend` becomes `CpuEngine`.
 
-6. *How are tensors handed between GPU engines on one device?* Explicitly,
-   in the first version: the caller makes the receiving engine wait for the
-   producing one (section 4, rules 2 and 3). Automatic tracking waits until
-   tenferro owns the GPU runtime layer.
+6. *How are tensors handed between GPU engines on one device?* tenferro
+   tracks use across engines and inserts the GPU waits itself, so safe code
+   cannot race (section 4, rule 2). Direct device memory access is `unsafe`.
+7. *Where do plans live?* Plans are immutable and shared: in prepared
+   programs and in the runtime's plan cache. Engines keep only what
+   execution writes, plus plans tied to their own device handles.
+8. *How does prepare know where a program will run?* The caller passes
+   `engine.target()` descriptions; run checks that the engines it is given
+   match them.
 
 ## Open questions (to mature before implementation)
 
-1. *How does an engine prove it is compatible with a compiled
-   program?* Backend kind alone is too weak (CPU allocation domains, GPU
-   device and stream state). To be settled in tenferro-rs#2206.
-2. *What does a GPU engine cost per operation without a session scope?*
+1. *What does a GPU engine cost per operation without a session scope?*
    The session bound the device stream to the calling thread once per
    closure. An engine binds it per operation, or skips the binding when it
    can prove nothing changed; the thread alone is not enough proof, since
