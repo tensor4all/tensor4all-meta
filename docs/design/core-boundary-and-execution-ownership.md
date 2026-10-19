@@ -190,9 +190,11 @@ Rules:
    small work happens inside the providers, which already choose how many
    workers to wake from a work model, up to the budget they are given. A caller that
    wants fewer threads builds a smaller pool. An operation starts on the
-   calling thread and hands work to the pool only when a provider chooses
-   more than one worker, so a small operation on a parallel engine costs
-   about the same as on a serial engine.
+   calling thread and hands work to the pool only after a provider has
+   chosen more than one worker for it, so a small operation on a parallel
+   engine costs about the same as on a serial engine. (Some paths today
+   enter the pool before deciding, or give a single small item the whole
+   budget; they are changed to decide first.)
 4. **The engine hands out the provider token for its pool** (sketch:
    `engine.exec(budget) -> tcontract_exec::Exec<'_>`). The token is a
    borrowed permission to run provider code on the engine's pool and
@@ -527,10 +529,10 @@ their streams, but they never share tensors: using one engine's tensor on
 the other is rejected, and data moves between them only by an explicit
 transfer (rule 3).
 
-Sharing tensors between engines on one GPU waits for a real need. A request
-to share buffers between runtimes on one GPU, to submit many small block
-operations from several threads, is better served by launching all blocks
-at once (see "Downstream GPU kernels" below). If sharing is ever needed, it
+Sharing tensors between engines on one GPU waits for a real need. The one
+request so far, sharing buffers between runtimes on one GPU in order to
+submit many small block operations from several threads, is addressed by
+batching the blocks of each step (see "Downstream GPU kernels" below). If sharing is ever needed, it
 will be added together with tenferro's own GPU runtime layer (below), whose
 memory allocator can track which stream uses which memory.
 
@@ -575,43 +577,57 @@ memory allocator can track which stream uses which memory.
 WebGPU follows the same shape: each `WgpuEngine` has its own memory and one
 queue.
 
-### Downstream GPU kernels: many small blocks, one launch
+### Downstream GPU kernels: many small blocks, batched per step
 
 Block-structured algorithms (symmetric tensors, for example) produce
 hundreds to tens of thousands of small, independent matrix operations per
 step. Sending each one to the GPU separately is the wrong shape: each
 submission costs the host several microseconds, far more than the GPU needs
-for a small block, so the GPU waits for the host. More submitting threads or
-several engines sharing memory would not change that.
+for a small block, so the GPU waits for the host.
 
-The right shape is one launch per step for all blocks of that step: a
-grouped or batched vendor routine (for example `cublasGemmGroupedBatched`,
-batched cuSOLVER factorizations), or a kernel of the caller's own that reads
-a table of block descriptors. Blocks of very different sizes can be grouped
-by size. Such kernels are irregular batches and therefore belong to the
-downstream library (section 2), exactly as on the CPU.
+The right shape is to batch the blocks of a step: a grouped or batched
+vendor routine (for example `cublasGemmGroupedBatched`, batched cuSOLVER
+factorizations), or a kernel of the caller's own that reads a table of block
+descriptors. Blocks of very different sizes can be grouped by size, which
+gives a few calls per step instead of one per block. Such kernels are
+irregular batches and therefore belong to the downstream library
+(section 2), exactly as on the CPU.
 
 To run them on the same stream and memory as tenferro's own work, a GPU
-engine lends a raw execution token, the GPU counterpart of `engine.exec`:
+engine lends a raw execution scope, the GPU counterpart of `engine.exec`:
 
 ```rust
-let raw = unsafe { gpu.raw_exec() };   // borrows the engine (&mut) for the token's lifetime
-// raw.stream(), raw.cublas(), raw.device_ptr(&tensor) for pinned addresses, ...
-// launch a grouped cuBLAS call, a CUDA kernel, or a CubeCL kernel on raw.stream()
-drop(raw);                             // later work on `gpu` runs after it, in stream order
+unsafe {
+    gpu.with_raw(|raw| {
+        let a = raw.device_ptr(&tensor_a);  // pinned while the scope lasts
+        raw.cuda(|stream| { /* cuBLAS grouped call or own CUDA kernel on `stream` */ });
+        raw.cubecl(|client| { /* CubeCL kernel; needs the `cubecl-interop` feature */ });
+        raw.cuda(|stream| { /* may read what the CubeCL kernel wrote */ });
+    })?;
+}
+// later work on `gpu` runs after everything submitted in the scope
 ```
 
-* Taking the token hands queued work to the GPU first, so the downstream
-  kernel sees every earlier result; the token is meant to be taken once per
-  step, not once per block.
-* Addresses obtained from the token are pinned while the token lives and
-  invalid after it is returned.
-* Both CUDA and CubeCL kernels are allowed. A CUDA kernel or vendor call
-  depends only on the stream and addresses, so it is unaffected when tenferro
-  later replaces CubeCL's runtime layer. A CubeCL kernel is launched through
-  tenferro's own bindings (no CubeCL type in tenferro's public API) and
-  depends on CubeCL remaining tenferro's kernel compiler.
-* The token is `unsafe` because the kernel's reads and writes are outside
+* The scope is a closure on the calling thread, so its cleanup always runs:
+  the driver context is restored and queued work is handed to the GPU on
+  exit, including on a panic. It is not a separate object that could be
+  forgotten.
+* Work submitted through `raw.cubecl` is first queued by CubeCL. Every switch
+  from CubeCL work to CUDA work inside the scope (and the entry into the
+  scope) hands queued CubeCL work to the GPU first, so a CUDA call always
+  sees the results of earlier CubeCL kernels. The scope should be entered
+  once per step, not once per block.
+* Device addresses obtained in the scope are pinned until the scope ends.
+  Kernels launched in the scope are ordinary work on the engine's stream:
+  later operations on the engine run after them, and memory they used is
+  reused only in stream order.
+* CUDA kernels and vendor calls depend only on the stream and the
+  addresses, so they are unaffected when tenferro later replaces CubeCL's
+  runtime layer. CubeCL kernels need CubeCL's own launch types; they are
+  available only through the `cubecl-interop` feature, which is the one
+  place where CubeCL types appear and which changes when the runtime layer
+  is replaced.
+* The scope is `unsafe` because the kernels' reads and writes are outside
   tenferro's checks; its contract states the stream and the lifetime of each
   address.
 
@@ -757,11 +773,12 @@ single pull request when it is finished, not as a series of partial ones.
 9. *Who decides how a batch of independent items is split over threads?*
    The providers, within the budget the engine gives them, with a policy
    setting on the engine (default automatic) and a per-operation override.
-   A downstream kernel takes the same budget from `engine.exec`, so it
-   follows the same policy. Irregular batches (for example grouped GEMM over
+   `engine.exec` hands a downstream kernel both the budget and the engine's
+   batch policy, so it follows the same policy. Irregular batches (for example grouped GEMM over
    symmetry blocks) are downstream kernels, not core operations.
-10. *How do downstream GPU kernels run on an engine?* Through the raw
-   execution token, once per step, with CUDA or CubeCL kernels (section 4).
+10. *How do downstream GPU kernels run on an engine?* In a raw execution
+   scope (`with_raw`), entered once per step, with CUDA kernels, vendor
+   calls, or CubeCL kernels through the `cubecl-interop` feature (section 4).
 
 ## Open questions (to mature before implementation)
 
