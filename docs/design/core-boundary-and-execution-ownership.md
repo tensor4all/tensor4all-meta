@@ -172,26 +172,29 @@ Rules:
    **Unfinished work is bounded.** On a GPU, work may still be running after
    a call returns (see "When run returns"). The engine counts the memory
    that its unfinished work holds: temporaries, outputs being written, and
-   memory waiting for other engines to finish with it. This is separate from
+   memory waiting for transfers to finish with it. This is separate from
    tensors the caller still holds and from idle recycled memory. Before it
    submits new work, the engine checks whether the count plus what the new
    work will retain would exceed a limit the caller can set; if so, it first
-   waits for the work that holds memory, including other engines' work,
-   until the new work fits. A single operation that needs more than the limit by itself is
+   waits for the work that holds memory until the new work fits. A single operation that needs more than the limit by itself is
    rejected before it is submitted.
 
    **Broken engines and broken devices.** If an operation panics, the engine
    marks itself broken: later operations on it return an error, while
    waiting for and cleaning up its earlier work still happens. The caller
    replaces the engine. Some GPU errors (an illegal memory access, a failed
-   device assertion) break the whole device context, not one engine; then
-   every engine of that `CudaDevice` reports the error, and creating another
-   engine on the same device is not a recovery. Recovering from such an
-   error may need a new process.
+   device assertion) break the GPU's driver context itself; opening the same
+   GPU again in the same process is then not a recovery, and recovering may
+   need a new process.
 3. **Every operation may use the whole pool of its engine.** Throttling for
    small work happens inside the providers, which already choose how many
    workers to wake from a work model, up to the budget they are given. A caller that
-   wants fewer threads builds a smaller pool.
+   wants fewer threads builds a smaller pool. An operation starts on the
+   calling thread and hands work to the pool only after a provider has
+   chosen more than one worker for it, so a small operation on a parallel
+   engine costs about the same as on a serial engine. (Some paths today
+   enter the pool before deciding, or give a single small item the whole
+   budget; they are changed to decide first.)
 4. **The engine hands out the provider token for its pool** (sketch:
    `engine.exec(budget) -> tcontract_exec::Exec<'_>`). The token is a
    borrowed permission to run provider code on the engine's pool and
@@ -402,8 +405,9 @@ no longer reads memory that the caller could change or free (for example,
 host data being uploaded). The GPU may still be computing. Outputs can be
 used right away by later operations on the same engine, because the stream
 runs work in order; reading them on the host, or calling
-`engine.synchronize()`, waits for the work. Using inputs or outputs on
-another engine is safe without extra calls (section 4, rule 2).
+`engine.synchronize()`, waits for the work. Moving them to another engine
+(the CPU, or another opened GPU) is an explicit transfer, which orders
+itself (section 4).
 
 **What this replaces.** tenferro had several entry points for this: one-shot
 variants that entered preparation on every call, a variant that kept lazy
@@ -490,69 +494,70 @@ runtimes or opened as a session. This section explains what differs.
 ### Background: devices and streams
 
 * **Device.** One GPU. Opening it sets up a driver context and the memory
-  that tensors on that GPU live in. A `CudaDevice` is the caller's handle to
-  one opened GPU; cloning the handle is cheap and refers to the same GPU
-  state.
+  that tensors on that GPU live in.
 * **Stream.** A GPU does not run work when the program asks for it; the
   program puts work into a queue, the *stream*, and the GPU runs the queue in
-  order. Work in two different streams may run at the same time and in any
-  order relative to each other, unless one stream is told to wait for the
-  other.
-* **GPU engine.** A `CudaEngine` is made from a device and plays the role of
-  a `CpuEngine`: it has its own stream (the GPU counterpart of a thread
-  pool) and its own workspace (vendor library handles, plan caches,
-  scratch, queues of memory waiting to be released).
+  order.
+* **GPU engine.** A `CudaEngine` is one opened GPU together with one stream
+  and its workspace (vendor library handles, device-bound plans, scratch,
+  queues of memory waiting to be released). It plays the role of a
+  `CpuEngine`: the stream is the GPU counterpart of a thread pool.
 
 | CPU | GPU | role |
 | --- | --- | --- |
-| Rayon pool, built by the caller | `CudaDevice`, opened by the caller | the shared hardware |
-| `CpuEngine::new(pool)` | `CudaEngine::new(&device)` | what operations run on, used through `&mut` |
+| `CpuEngine::new(pool)` | `CudaEngine::open(ordinal)` | what operations run on, used through `&mut` |
 | workers of the pool | the engine's stream | where the work runs |
 
 ```rust
-let device = CudaDevice::open(0)?;              // GPU 0
-let mut gpu_a = CudaEngine::new(&device);       // two engines on one GPU,
-let mut gpu_b = CudaEngine::new(&device);       // each with its own stream
-
-let c = dot_general(&mut gpu_a, &a, &b, &dims)?; // queued on gpu_a's stream
-gpu_a.synchronize()?;                            // wait for gpu_a's work and report errors
+let mut gpu = CudaEngine::open(0)?;               // GPU 0, one stream
+let c = dot_general(&mut gpu, &a, &b, &dims)?;     // queued on the stream
+let d = dot_general(&mut gpu, &c, &b, &dims)?;     // runs after c, in stream order
+gpu.synchronize()?;                                // wait for the work and report errors
 ```
+
+### Engines do not share GPU memory
+
+In the first version each GPU engine has its own memory and one stream, and
+its tensors are used only by that engine. All work on that memory therefore
+goes through one stream, and a stream runs its work in order: nothing can
+read memory before it is written or reuse memory that is still being read.
+The order of the program is the order on the GPU, and no tracking is needed.
+
+Opening the same GPU twice gives two independent engines. Their work may run
+side by side or one after another, depending on how the GPU runtime maps
+their streams, but they never share tensors: using one engine's tensor on
+the other is rejected, and data moves between them only by an explicit
+transfer (rule 3).
+
+Sharing tensors between engines on one GPU waits for a real need. The one
+request so far, sharing buffers between runtimes on one GPU in order to
+submit many small block operations from several threads, is addressed by
+batching the blocks of each step (see "Downstream GPU kernels" below). If sharing is ever needed, it
+will be added together with tenferro's own GPU runtime layer (below), whose
+memory allocator can track which stream uses which memory.
 
 ### Rules
 
-1. **Engines from the same device share memory.** A tensor made by one engine
-   can be read by another engine of the same device (the same `CudaDevice`
-   value or its clones) without a copy. Engines from different devices need
-   an explicit transfer, as today.
-2. **Sharing tensors between engines is safe without extra calls.** Two
-   engines have two streams, so engine B could start reading a tensor before
-   engine A has finished writing it, or A could reuse memory that B is still
-   reading. tenferro prevents both by tracking use across engines:
-   * The record belongs to the memory allocation, not to a tensor object:
-     every tensor and view that shares one allocation shares one record. The
-     record holds the last write and the reads since then that have not yet
-     finished, and finished reads are removed from it.
-   * Before an engine reads, it makes its stream wait for the last write if
-     another engine made it. Before an engine writes, including writes into
-     an existing tensor, it waits for the last write and for every
-     unfinished read by other engines.
-   * The record lives as long as any of this work is unfinished, regardless
-     of what happens to the tensors, views or outputs: dropping or forgetting
-     them does not remove the protection.
-   * Memory is reused, evicted from a recycling pool, or released only after
-     every use in its record has finished, even if the engine that allocated
-     it has been dropped. If finishing cannot be confirmed (for example after
-     a device error), the memory is set aside and never reused.
-
-   Within one engine no GPU wait is added, because one stream already runs
-   in order; the bookkeeping itself has a small cost. Across engines, each
-   dependency is one GPU-side wait. The program does not block, although
-   handing queued work to the GPU before recording a wait may briefly block
-   on today's CubeCL runtime.
-3. **Paths outside this tracking are `unsafe`.** Code that reaches device
-   memory directly (raw CUDA pointers for a caller's own kernels or vendor
-   calls) takes the device memory through an `unsafe` function whose
-   contract states which stream may use it and until when.
+1. **One stream per engine; stream order is the safety rule.** Work queued on
+   an engine runs in order, and memory freed by a dropped tensor is reused
+   only by later work on the same stream. Memory is never reused while
+   unfinished work may still use it, even after the engine itself has been
+   dropped; if finishing cannot be confirmed (for example after a device
+   error), the memory is set aside and never reused.
+2. **A raw device address is valid only while it is pinned.** The GPU
+   runtime may move live memory to compact its pools unless the memory is
+   pinned for use. tenferro's own vendor calls pin every operand for as long
+   as they use its address and never keep an address after unpinning it.
+   Code that reaches device memory directly (raw CUDA pointers for a
+   caller's own kernels) does so through an `unsafe` function whose contract
+   states which stream may use the address and until when.
+3. **Transfers order both sides.** A transfer between two engines (or
+   between a CPU and a GPU) starts only after the source's earlier writes
+   have finished, and the source memory is neither overwritten nor reused
+   until the transfer has read it. The destination is used only after the
+   transfer has written it. A pending download keeps its destination and its
+   completion state until it finishes, even if the tensors or the engine
+   that started it are dropped.
 4. **Flush and synchronize are points in time.** `engine.flush()` hands queued
    work to the GPU; `engine.synchronize()` waits for the engine's stream and
    reports the errors the driver reports there. Neither needs a scope.
@@ -565,12 +570,66 @@ gpu_a.synchronize()?;                            // wait for gpu_a's work and re
 6. **Per operation, an engine only selects its stream.** Driver context
    switches and flushes happen only at the boundaries that need them: raw
    CUDA and vendor library calls (cuBLAS, cuSOLVER, cuFFT, cuTENSOR, a
-   caller's own kernels), and explicit submission, waiting and completion
-   points. Ordinary kernels pay neither.
+   caller's own kernels), the hand-over to a caller's own CubeCL kernels,
+   and explicit submission, waiting and completion points. Ordinary kernels
+   pay neither.
 
-WebGPU follows the same shape (`WgpuDevice`, `WgpuEngine`); its queues are
-not independent hardware queues, so two WebGPU engines on one device run one
-after another.
+WebGPU follows the same shape: each `WgpuEngine` has its own memory and one
+queue.
+
+### Downstream GPU kernels: many small blocks, batched per step
+
+Block-structured algorithms (symmetric tensors, for example) produce
+hundreds to tens of thousands of small, independent matrix operations per
+step. Sending each one to the GPU separately is the wrong shape: each
+submission costs the host several microseconds, far more than the GPU needs
+for a small block, so the GPU waits for the host.
+
+The right shape is to batch the blocks of a step: a grouped or batched
+vendor routine (for example `cublasGemmGroupedBatched`, batched cuSOLVER
+factorizations), or a kernel of the caller's own that reads a table of block
+descriptors. Blocks of very different sizes can be grouped by size, which
+gives a few calls per step instead of one per block. Such kernels are
+irregular batches and therefore belong to the downstream library
+(section 2), exactly as on the CPU.
+
+To run them on the same stream and memory as tenferro's own work, a GPU
+engine lends a raw execution scope, the GPU counterpart of `engine.exec`:
+
+```rust
+unsafe {
+    gpu.with_raw(|raw| {
+        let a = raw.device_ptr(&tensor_a);  // pinned while the scope lasts
+        raw.cuda(|stream| { /* cuBLAS grouped call or own CUDA kernel on `stream` */ });
+        raw.cubecl(|client| { /* CubeCL kernel; needs the `cubecl-interop` feature */ });
+        raw.cuda(|stream| { /* may read what the CubeCL kernel wrote */ });
+    })?;
+}
+// later work on `gpu` runs after everything submitted in the scope
+```
+
+* The scope is a closure on the calling thread, so its cleanup always runs:
+  the driver context is restored and queued work is handed to the GPU on
+  exit, including on a panic. It is not a separate object that could be
+  forgotten.
+* Work submitted through `raw.cubecl` is first queued by CubeCL. Every switch
+  from CubeCL work to CUDA work inside the scope (and the entry into the
+  scope) hands queued CubeCL work to the GPU first, so a CUDA call always
+  sees the results of earlier CubeCL kernels. The scope should be entered
+  once per step, not once per block.
+* Device addresses obtained in the scope are pinned until the scope ends.
+  Kernels launched in the scope are ordinary work on the engine's stream:
+  later operations on the engine run after them, and memory they used is
+  reused only in stream order.
+* CUDA kernels and vendor calls depend only on the stream and the
+  addresses, so they are unaffected when tenferro later replaces CubeCL's
+  runtime layer. CubeCL kernels need CubeCL's own launch types; they are
+  available only through the `cubecl-interop` feature, which is the one
+  place where CubeCL types appear and which changes when the runtime layer
+  is replaced.
+* The scope is `unsafe` because the kernels' reads and writes are outside
+  tenferro's checks; its contract states the stream and the lifetime of each
+  address.
 
 ### What is not yet under tenferro's ownership: CubeCL's runtime layer
 
@@ -584,27 +643,24 @@ tenferro's GPU kernels are built with [CubeCL](https://github.com/tracel-ai/cube
   pool.
 
 The runtime layer contradicts this design: it is a hidden per-device global
-with its own thread. Two consequences remain in the first version and are
-documented, not hidden:
-
-* An engine's stream is a *logical* stream. CubeCL maps logical streams onto
-  a fixed set of physical streams, so two engines may share one physical
-  stream and then run one after another instead of in parallel.
-* CubeCL orders reads only against the stream that allocated a buffer, so
-  the tracking of rule 2 is tenferro's own and sits on top of CubeCL.
+with its own thread. Because GPU engines do not share memory, this does not
+affect correctness in the first version, but the engine's stream is a CubeCL
+*logical* stream rather than one the engine owns, and every flush hands work
+to CubeCL's server thread.
 
 **Direction.** tenferro takes ownership of the GPU runtime layer in stages:
 
-1. *Now (tenferro-rs#2206).* No CubeCL type appears in the public API. A
-   `CudaEngine` is defined by what it owns (a stream, a workspace), so the
-   layer below can change without changing the API.
+1. *Now (tenferro-rs#2206).* No CubeCL type appears in the public API
+   outside the `cubecl-interop` feature. A `CudaEngine` is defined by what
+   it owns (a stream, a workspace), so the layer below can change without
+   changing that API; only the interop feature changes with it.
 2. *Next.* Replace CubeCL's runtime layer with tenferro's own, built on the
    CUDA driver API (through `cudarc`, which tenferro already uses for its
-   vendor libraries): one real stream per engine, a stream-ordered memory
-   pool per engine, events for hand-offs, and no device server thread. This
-   removes the first consequence above and lets the tracking of rule 2 move
-   into tenferro's own allocator. It also removes a blocking
-   hand-off to the server thread that every flush pays today.
+   vendor libraries): a real stream owned by the engine, a stream-ordered
+   memory pool, events, and no device server thread. This removes the
+   blocking hand-off to the server thread that every flush pays today, and
+   it is where sharing tensors between engines would be added if it is ever
+   needed.
 3. *Later.* Decide separately whether CubeCL stays as a kernel compiler only,
    and what happens to WebGPU, which runs only through CubeCL today.
 
@@ -632,7 +688,7 @@ execution state on behalf of its callers, and are removed:
   starts
 * the other ways to run a compiled graph (one-shot, lazy-output, scoped,
   caller-session and deferred variants); only `prepare` and `run` remain
-* on the GPU: `CudaBackend` (split into `CudaDevice` and `CudaEngine`), the
+* on the GPU: `CudaBackend` (replaced by `CudaEngine`), the
   scoped and held CUDA sessions with their reservation and statistics, the
   session thread-locals, the per-runtime table that maps streams to vendor
   handles, and backend clones kept by runtimes
@@ -648,9 +704,8 @@ may use its whole pool.
   recycled buffers and its own limit on memory held by unfinished work.
   Plans are shared when engines share prepared programs or a `PlanCache`.
 * A bad CPU layout shows up as lost performance, not as an error.
-* Using a tensor on another GPU engine adds GPU-side waits and some
-  bookkeeping, and two GPU engines may share a physical stream until
-  tenferro owns the GPU runtime layer (section 4).
+* In the first version GPU engines cannot share tensors; moving data between
+  two engines on one GPU is a copy (section 4).
 * Calling an engine from a worker of its own pool is still possible and is
   detected at run time.
 * Every execution names its engine, so code is more explicit than with a
@@ -704,15 +759,27 @@ single pull request when it is finished, not as a series of partial ones.
    session is removed (see "One concept: the engine"). The word "backend"
    also leaves the public API: `CpuBackend` becomes `CpuEngine`.
 
-6. *How are tensors handed between GPU engines on one device?* tenferro
-   tracks use across engines and inserts the GPU waits itself, so safe code
-   cannot race (section 4, rule 2). Direct device memory access is `unsafe`.
+6. *Can GPU engines share tensors?* Not in the first version: each engine's
+   memory is used only by its own stream, so stream order alone makes GPU
+   memory use safe (section 4). Sharing waits for a real need and for
+   tenferro's own GPU runtime layer. Direct device memory access is
+   `unsafe`.
 7. *Where do plans live?* In prepared programs, and in `PlanCache` values
    that engines refer to and may share. Engines keep what execution writes,
    plus plans tied to their own device handles.
 8. *How does prepare know where a program will run?* The caller passes
    `engine.target()` descriptions; run checks that the engines it is given
    match them.
+
+9. *Who decides how a batch of independent items is split over threads?*
+   The providers, within the budget the engine gives them, with a policy
+   setting on the engine (default automatic) and a per-operation override.
+   `engine.exec` hands a downstream kernel both the budget and the engine's
+   batch policy, so it follows the same policy. Irregular batches (for example grouped GEMM over
+   symmetry blocks) are downstream kernels, not core operations.
+10. *How do downstream GPU kernels run on an engine?* In a raw execution
+   scope (`with_raw`), entered once per step, with CUDA kernels, vendor
+   calls, or CubeCL kernels through the `cubecl-interop` feature (section 4).
 
 ## Open questions (to mature before implementation)
 
