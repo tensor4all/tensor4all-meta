@@ -607,6 +607,9 @@ may use its whole pool.
 Work proceeds from the bottom of the stack up. Downstream libraries are not
 changed until tenferro and the layers below it are finished.
 
+Each repository's part is developed on one working branch and opened as a
+single pull request when it is finished, not as a series of partial ones.
+
 1. Fix the layers below tenferro first: for example, a serial engine must
    not start Rayon's global pool, which needs a change in strided-rs.
 2. Implement sections 3 and 4 and the removals of section 5 in tenferro-rs
