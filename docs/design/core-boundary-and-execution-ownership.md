@@ -650,9 +650,10 @@ to CubeCL's server thread.
 
 **Direction.** tenferro takes ownership of the GPU runtime layer in stages:
 
-1. *Now (tenferro-rs#2206).* No CubeCL type appears in the public API. A
-   `CudaEngine` is defined by what it owns (a stream, a workspace), so the
-   layer below can change without changing the API.
+1. *Now (tenferro-rs#2206).* No CubeCL type appears in the public API
+   outside the `cubecl-interop` feature. A `CudaEngine` is defined by what
+   it owns (a stream, a workspace), so the layer below can change without
+   changing that API; only the interop feature changes with it.
 2. *Next.* Replace CubeCL's runtime layer with tenferro's own, built on the
    CUDA driver API (through `cudarc`, which tenferro already uses for its
    vendor libraries): a real stream owned by the engine, a stream-ordered
