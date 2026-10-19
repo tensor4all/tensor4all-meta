@@ -196,8 +196,8 @@ def operation():
     xs = [20, 250, 480, 710]
     boxes = [
         ("caller thread", ["not a worker", "of the engine's pool"], "neutral"),
-        ("CpuEngine", ["&mut, budget = whole pool", "rejects a caller",
-                       "inside its own pool"], "green"),
+        ("CpuEngine", ["&mut, budget = whole pool", "error if the caller is",
+                       "one of its own workers"], "green"),
         ("provider", ["tcontract, tlinalg, ...", "work model picks",
                       "how many workers"], "amber"),
         ("pool workers", ["only the chosen", "workers wake up"], "purple"),

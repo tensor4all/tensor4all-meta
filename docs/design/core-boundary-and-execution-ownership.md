@@ -156,9 +156,16 @@ Rules:
    workspace, and its budget is the largest number of workers that code may
    use. A downstream kernel that calls a provider directly passes this token,
    so it uses the same threads and the same budget as tenferro.
-5. **The caller of an operation must not be a worker of that engine's pool.**
-   tenferro checks this against the engine's own pool and reports an error
-   rather than silently running serially.
+5. **An operation must not be called from one of its engine's own workers.**
+   For example, `pool.install(|| dot_general(&mut engine, ...))`, where
+   `engine` was built from `pool`, is an error. The operation expects to use
+   all workers of the pool (rule 3), but the calling worker is busy waiting
+   for the result, so the work would run with one worker short, and provider
+   code that waits for every worker to join could hang. tenferro detects
+   this case at the start of the operation and returns an error instead of
+   silently running serially. Calling from a worker of a *different* pool
+   (the normal nested case) is fine, and a serial engine has no pool to
+   check.
 
 How one operation runs:
 
