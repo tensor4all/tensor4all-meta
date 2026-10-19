@@ -10,4 +10,4 @@ Repository-scoped design documents live in each implementation repository:
 
 | Document | Status | Summary |
 | --- | --- | --- |
-| [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) | Proposed (2026-10) | What the tenferro core contains, and why the caller owns CPU threads while every layer borrows them |
+| [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) | Proposed (2026-10) | What the tenferro core contains, and why the caller owns CPU threads and GPU streams while every layer borrows them |

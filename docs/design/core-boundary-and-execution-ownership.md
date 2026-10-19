@@ -1,4 +1,4 @@
-# tenferro core boundary and CPU execution ownership
+# tenferro core boundary and execution ownership
 
 **Status:** Proposed future design. Target: implementation starts around 2026-10-27.
 **Scope:** tenferro-rs, the provider crates (tcontract, cpueinsum, tlinalg, t4a-faer), hataori-rs, and downstream libraries that write their own kernels (symtn, tensor4all-rs).
@@ -6,7 +6,7 @@
 
 This document fixes three cross-repository decisions. The first is what belongs
 in the tenferro core and what users of tenferro build themselves. The second
-is who owns CPU threads. The third is who owns the mutable state used while
+is who owns CPU threads and GPU streams. The third is who owns the mutable state used while
 executing. Repository-internal details (type names, migration
 steps) belong in tenferro-rs issues and `docs/design/`.
 
@@ -113,7 +113,7 @@ let mut serial = CpuEngine::serial();              // no pool at all
 
 let c = dot_general(&mut engine, &a, &b, &dims)?;          // eager operation
 let grads = loss.backward_in(&mut engine)?;                // backward pass on the same engine
-let out = runtime.run_prepared(&mut engine, &program, &inputs)?; // compiled graph, same engine
+let out = runtime.run(&mut [&mut engine], &prepared, &inputs)?; // compiled graph, same engine
 let d = dot_general(&mut serial, &a, &b, &dims)?;          // same code, serial engine
 ```
 
@@ -159,17 +159,21 @@ Rules:
    borrowed permission to run provider code on the engine's pool and
    workspace, and its budget is the largest number of workers that code may
    use. A downstream kernel that calls a provider directly passes this token,
-   so it uses the same threads and the same budget as tenferro.
+   so it uses the same threads and the same budget as tenferro. Getting the
+   token takes `&mut engine` and applies the check of rule 5; what the kernel
+   then does with the token is that kernel's responsibility, as with any
+   direct provider call.
 5. **An operation must not be called from one of its engine's own workers.**
    For example, `pool.install(|| dot_general(&mut engine, ...))`, where
-   `engine` was built from `pool`, is an error. The operation expects to use
-   all workers of the pool (rule 3), but the calling worker is busy waiting
-   for the result, so the work would run with one worker short, and provider
-   code that waits for every worker to join could hang. tenferro detects
-   this case at the start of the operation and returns an error instead of
-   silently running serially. Calling from a worker of a *different* pool
-   (the normal nested case) is fine, and a serial engine has no pool to
-   check.
+   `engine` was built from `pool`, is an error. In that call the operation
+   runs on one of the pool's own workers, and some provider strategies
+   cannot start from there: a strategy that needs every worker of the pool
+   at once (a team that meets at a barrier) is refused, while others would
+   run with less parallelism than rule 3 promises. Rather than let the
+   outcome depend on which strategy a provider picks, tenferro checks this
+   case at the start of the operation and returns an error. Calling from a
+   worker of a *different* pool is allowed, with one caveat described under
+   "The calling thread" below, and a serial engine has no pool to check.
 
 How one operation runs:
 
@@ -186,7 +190,7 @@ backend-neutral trait that `CpuEngine` and the GPU engines implement.
 
 tenferro used to have a second concept, the session: a handle opened from a
 backend for the duration of a closure, through which every operation ran.
-The session existed to do work that this design removes:
+Its main reasons to exist are removed by this design:
 
 * admission against the process wide arbiter, and the reentry and
   contention errors that came with it;
@@ -213,6 +217,26 @@ Without those, a session would only repeat what the engine already gives:
   synchronizes. These are points in time, not a scope, so they need no
   closure.
 
+The session also did cleanup at the end of its scope, and that cleanup
+stays, attached to a narrower scope instead of a public object:
+
+* **Recovery after a panic.** Buffer accounting is restored when an
+  operation unwinds. This becomes a guard around each operation.
+* **Unfinished GPU work.** Work that a run queued but the GPU has not
+  finished, with the temporary memory and transfer buffers it still uses,
+  is kept by the engine until it completes, including after an error or a
+  panic. (There is no separate deferred-run object any more; see "Running a
+  compiled graph".)
+* **GPU context restoration.** Native GPU code that changes the device
+  context restores it on exit, including on unwind. This becomes a guard
+  around each such call.
+
+**GPU engine drop.** Dropping a GPU engine may block while its queued work
+is retired, and it cannot report an error; if retirement fails, the memory
+that might still be in use is kept rather than freed, as today. A caller
+that needs to know the work finished, or wants its error, calls
+`synchronize()` first.
+
 A run that needs several engines (CPU and GPU with transfers, rule 1)
 receives them as a set of borrowed engines for that one call. That set is
 an argument, not a stored object, and it is not called a session.
@@ -227,8 +251,9 @@ tasks above the engine. Parallelism above one operation is therefore
 expressed by holding more engines, and coordinating them is the caller's
 job (see "Responsibilities of the caller"). An example is at the end of this section.
 
-Using `k` engines at the same time takes `k` calling threads, one per
-engine, and none of them may be a worker of a compute pool it calls into
+Say the caller wants `k` computations at the same time, each on its own
+pool of `m` threads. Using `k` engines at the same time takes `k` calling
+threads, one per engine, and none of them may be a worker of a compute pool it calls into
 (rule 5). The calling threads are usually a pool of the caller's own, for
 example `k` threads that run the caller's tasks; that pool is separate from
 the `k` compute pools, and tenferro never sees it. The process then has `k`
@@ -266,7 +291,73 @@ runtime.
 
 The cost is that caches filled during execution are per engine: each engine
 warms up its own plan caches, and memory for them grows with the number of
-engines (see section 5).
+engines (see section 6).
+
+### Running a compiled graph: compile, prepare, run
+
+The traced runtime turns a recorded computation into something that can be
+run many times. This happens in three steps, and each step exists for a
+different reason:
+
+| Step | Input | Output | Done how often |
+| --- | --- | --- | --- |
+| **compile** | a recorded graph | a `CompiledGraph`: the computation in a hardware-independent form, keeping the shape constraints that were recorded (fixed sizes stay fixed; only symbolic sizes may vary) | once per computation |
+| **prepare** | a compiled graph and the inputs' shapes, types and kinds of memory | a prepared program: an execution plan for those inputs, including fusion chosen for the target hardware, and the requirements an engine must meet to run it (device, memory kind, supported operations) | once per input signature |
+| **run** | a prepared program, the engines and the inputs | the outputs | as often as needed |
+
+Prepare does the expensive checks and decisions once, so that run only
+checks that the inputs still match and that the engines it is given meet
+the prepared requirements. A prepared program does not hold an engine: any
+engine that meets its requirements may run it, so several callers can run
+one prepared program at the same time, each on its own engine.
+
+There is exactly one way to prepare and one way to run:
+
+```rust
+let prepared = runtime.prepare(&compiled, &inputs)?;
+let outputs = runtime.run(&mut [&mut engine], &prepared, &inputs)?;
+```
+
+`run` takes the engines as a list because a prepared program may span
+several of them, for example a CPU engine and a GPU engine with transfers
+between them; a program on one engine gets a list of one.
+
+**Inputs and outputs.** Inputs are borrowed views of tensors. Each output
+is one of two kinds:
+
+```rust
+enum Output<'a> {
+    Owned(Tensor),            // a new tensor, stored compactly
+    Borrowed(TensorView<'a>), // an input, or a view of one, without a copy
+}
+```
+
+An output computed by the graph is a new tensor with a compact layout: for
+`transpose(neg(x))` the result is materialized in its transposed order, not
+kept as a lazy view. An output that is just an input, or a view of one (for
+example `transpose(x)`), is returned as a view of that input instead of a
+copy; Rust's borrow rules then keep the input alive as long as the output
+is used. A caller that needs an owned tensor converts the output, which
+copies only in the borrowed case.
+
+**When run returns.** On the CPU, run returns when the work is done. On a
+GPU, run returns once the work is queued on the engine's stream and once it
+no longer reads memory that the caller could change or free (for example,
+host data being uploaded). The GPU may still be computing. Outputs can be
+used right away by later operations on the same engine, because the stream
+runs work in order; reading them on the host, or calling
+`engine.synchronize()`, waits for the work. Handing outputs to another
+engine follows the rules of section 4.
+
+**What this replaces.** tenferro had several entry points for this: one-shot
+variants that entered preparation on every call, a variant that kept lazy
+views in its outputs, a variant for borrowed inputs, a variant where the
+runtime opened sessions itself and one where the caller supplied a session,
+a deferred variant that batched runs and waited at the end, and a detached
+submission on a background thread. They differed in who owned the session,
+when completion was awaited and how outputs were returned. With engines
+passed per call, completion handled by the engine's stream, and one output
+type, those differences disappear.
 
 ### Why the caller, not tenferro, owns the threads
 
@@ -277,7 +368,7 @@ once and how the machine should be split between them. When tenferro also
 builds and arbitrates threads, two schedulers compete for the same cores, and
 tenferro has to rent workers back to the real scheduler under rules it can
 verify at run time. That is where the arbiter, the held sessions, the phase
-lease and the child tickets listed in section 4 came from. Each was a
+lease and the child tickets listed in section 5 came from. Each was a
 reasonable fix; together they are the cost of the ownership being upside
 down, not of numerical work.
 
@@ -302,6 +393,14 @@ gives each task its own engine, and an engine is used by whoever holds it.
 * **The calling thread.** Parts of an operation, including vendor BLAS and
   LAPACK calls, run on the thread that called it. Its CPU affinity and stack
   size are the caller's, exactly like the pool's.
+* **Calling threads that are Rayon workers.** When a worker of one Rayon
+  pool calls an operation on another pool's engine, Rayon lets that worker
+  run other jobs of its own pool while it waits. A second task can then
+  start on the same thread before the first operation returns. That is
+  harmless if each task carries its engine as an argument. It deadlocks if
+  tasks find their engine through a lock that the waiting task already
+  holds, and it fails if they look it up per thread. Plain threads, or a
+  scheduler that gives each task its engine explicitly, avoid this.
 * **Asynchronous execution.** tenferro does not start background threads to
   run work later. A caller that wants a computation in the background starts
   its own thread and runs it there.
@@ -326,7 +425,127 @@ Keeping the CPU sets disjoint, as drawn, is hataori's choice; tenferro
 neither enforces nor checks it. From tenferro's side this is simply `k`
 engines used at the same time by different threads.
 
-## 4. What this removes from tenferro
+## 4. GPU execution ownership
+
+The GPU side follows the same model: the caller creates and holds what runs
+the work, operations take `&mut` of an engine, and nothing is stored in
+runtimes or opened as a session. This section explains what differs.
+
+### Background: devices and streams
+
+* **Device.** One GPU. Opening it sets up a driver context and the memory
+  that tensors on that GPU live in. A `CudaDevice` is the caller's handle to
+  one opened GPU; cloning the handle is cheap and refers to the same GPU
+  state.
+* **Stream.** A GPU does not run work when the program asks for it; the
+  program puts work into a queue, the *stream*, and the GPU runs the queue in
+  order. Work in two different streams may run at the same time and in any
+  order relative to each other, unless one stream is told to wait for the
+  other.
+* **GPU engine.** A `CudaEngine` is made from a device and plays the role of
+  a `CpuEngine`: it has its own stream (the GPU counterpart of a thread
+  pool) and its own workspace (vendor library handles, plan caches,
+  scratch, queues of memory waiting to be released).
+
+| CPU | GPU | role |
+| --- | --- | --- |
+| Rayon pool, built by the caller | `CudaDevice`, opened by the caller | the shared hardware |
+| `CpuEngine::new(pool)` | `CudaEngine::new(&device)` | what operations run on, used through `&mut` |
+| workers of the pool | the engine's stream | where the work runs |
+
+```rust
+let device = CudaDevice::open(0)?;              // GPU 0
+let mut gpu_a = CudaEngine::new(&device);       // two engines on one GPU,
+let mut gpu_b = CudaEngine::new(&device);       // each with its own stream
+
+let c = dot_general(&mut gpu_a, &a, &b, &dims)?; // queued on gpu_a's stream
+gpu_a.synchronize()?;                            // wait for gpu_a's work and report errors
+```
+
+### Rules
+
+1. **Engines from the same device share memory.** A tensor made by one engine
+   can be read by another engine of the same device (the same `CudaDevice`
+   value or its clones) without a copy. Engines from different devices need
+   an explicit transfer, as today.
+2. **Handing a tensor to another engine is explicit.** Because two engines
+   have two streams, engine B may start reading a tensor before engine A has
+   finished writing it. Before B uses a tensor that A produced or changed,
+   the caller makes B wait for A (sketch: `gpu_b.wait_for(&gpu_a)`) or
+   synchronizes A. `wait_for` covers the work A was given before the call,
+   not later work. It makes the GPU wait rather than the program, although
+   handing A's queued work to the GPU first may briefly block on today's
+   CubeCL runtime. tenferro does not track this
+   automatically in the first version.
+3. **Before memory is written again, its earlier users must be done.** Two
+   cases, both arranged by the caller with the waits of rule 2:
+   * *Overwriting.* The engine that writes into an existing tensor waits for
+     every other engine that still reads or writes it.
+   * *Reuse after drop.* A dropped tensor's memory goes back to the engine
+     that allocated it, which reuses it in its own stream order. If other
+     engines used the tensor, the allocating engine waits for them before the
+     tensor is dropped.
+
+   For example, A allocates `x` and B reads it: `gpu_b.wait_for(&gpu_a)`
+   before B reads, and `gpu_a.wait_for(&gpu_b)` before `x` is dropped. If C
+   is then to overwrite `x` while B may still be reading, C waits for B
+   first.
+4. **Flush and synchronize are points in time.** `engine.flush()` hands queued
+   work to the GPU; `engine.synchronize()` waits for the engine's stream and
+   reports the errors the driver reports there. Neither needs a scope.
+   Errors that belong to a particular output buffer still surface when that
+   buffer is read.
+5. **Dropping an engine waits for its work, best effort.** It may block, it
+   cannot report errors, and memory whose completion cannot be proven is kept
+   rather than freed. Pending transfers keep their own completion state, so
+   a transfer may outlive the engine that started it.
+6. **Per operation, an engine only selects its stream.** Driver context
+   switches and flushes happen only at the boundaries that need them: raw
+   CUDA and vendor library calls (cuBLAS, cuSOLVER, cuFFT, cuTENSOR, a
+   caller's own kernels), and explicit submission, waiting and completion
+   points. Ordinary kernels pay neither.
+
+WebGPU follows the same shape (`WgpuDevice`, `WgpuEngine`); its queues are
+not independent hardware queues, so two WebGPU engines on one device run one
+after another.
+
+### What is not yet under tenferro's ownership: CubeCL's runtime layer
+
+tenferro's GPU kernels are built with [CubeCL](https://github.com/tracel-ai/cubecl)
+(through the `t4a-cubecl` fork). CubeCL has two layers:
+
+* a **code generation layer** that turns `#[cube]` Rust functions into GPU
+  kernels, and
+* a **runtime layer** that keeps one process wide server per GPU with its own
+  thread, chooses streams by thread-local state, and owns the device memory
+  pool.
+
+The runtime layer contradicts this design: it is a hidden per-device global
+with its own thread. Two consequences remain in the first version and are
+documented, not hidden:
+
+* An engine's stream is a *logical* stream. CubeCL maps logical streams onto
+  a fixed set of physical streams, so two engines may share one physical
+  stream and then run one after another instead of in parallel.
+* CubeCL orders reads only against the stream that allocated a buffer, which
+  is why rule 2 asks the caller to make the hand-off explicit.
+
+**Direction.** tenferro takes ownership of the GPU runtime layer in stages:
+
+1. *Now (tenferro-rs#2206).* No CubeCL type appears in the public API. A
+   `CudaEngine` is defined by what it owns (a stream, a workspace), so the
+   layer below can change without changing the API.
+2. *Next.* Replace CubeCL's runtime layer with tenferro's own, built on the
+   CUDA driver API (through `cudarc`, which tenferro already uses for its
+   vendor libraries): one real stream per engine, a stream-ordered memory
+   pool per engine, events for hand-offs, and no device server thread. This
+   removes both consequences above, and lets tenferro track cross-stream use
+   automatically if that is then wanted. It also removes a blocking
+   hand-off to the server thread that every flush pays today.
+3. *Later.* Decide separately whether CubeCL stays as a kernel compiler only,
+   and what happens to WebGPU, which runs only through CubeCL today.
+
+## 5. What this removes from tenferro
 
 The following exist only to let tenferro own, subdivide or hide threads and
 execution state on behalf of its callers, and are removed:
@@ -348,24 +567,33 @@ execution state on behalf of its callers, and are removed:
   serialize execution on one runtime
 * the detached submission API that runs a compiled graph on a thread tenferro
   starts
+* the other ways to run a compiled graph (one-shot, lazy-output, scoped,
+  caller-session and deferred variants); only `prepare` and `run` remain
+* on the GPU: `CudaBackend` (split into `CudaDevice` and `CudaEngine`), the
+  scoped and held CUDA sessions with their reservation and statistics, the
+  session thread-locals, the per-runtime table that maps streams to vendor
+  handles, and backend clones kept by runtimes
 
 The work these served moves to the caller: a scheduler that runs work in
 parallel builds one pool and one engine for each parallel part, and each part
 may use its whole pool.
 
-## 5. Costs we accept
+## 6. Costs we accept
 
 * Workspaces and execution caches are per engine, so memory use and warm up
   grow with the number of engines. Each engine has its own retention limit
   for recycled buffers.
 * A bad CPU layout shows up as lost performance, not as an error.
+* Handing a tensor from one GPU engine to another needs an explicit wait in
+  the first version, and two GPU engines may share a physical stream until
+  tenferro owns the GPU runtime layer (section 4).
 * Calling an engine from a worker of its own pool is still possible and is
   detected at run time.
 * Every execution names its engine, so code is more explicit than with a
   runtime that hides its backend. This is intended: the engine in the call is
   exactly what decides where the work runs.
 
-## 6. Consistency with other documents
+## 7. Consistency with other documents
 
 * The [backend developer guide](https://tensor4all.org/tensor4all-meta/stack/backend.html)
   already describes hataori passing each task the pool it may use. This
@@ -374,18 +602,26 @@ may use its whole pool.
   child ticket and the shared execution scope are superseded by this document
   and should be retired when the implementation lands.
 
-## 7. Plan
+## 8. Plan
 
-1. Implement section 3 and the removals of section 4 in tenferro-rs
+Work proceeds from the bottom of the stack up. Downstream libraries are not
+changed until tenferro and the layers below it are finished.
+
+Each repository's part is developed on one working branch and opened as a
+single pull request when it is finished, not as a series of partial ones.
+
+1. Fix the layers below tenferro first: for example, a serial engine must
+   not start Rayon's global pool, which needs a change in strided-rs.
+2. Implement sections 3 and 4 and the removals of section 5 in tenferro-rs
    ([tenferro-rs#2206](https://github.com/tensor4all/tenferro-rs/issues/2206)),
    without a compatibility layer. Internal details (how an engine proves it
-   is compatible with a compiled program, the exact public names) are settled
+   is compatible with a prepared program, the exact public names) are settled
    there.
-2. Port the downstream users to engines built from their own pools, each in
-   its own change:
-   tensor4all-rs (adaptive interpolation, tests, the C API's default engine),
-   the hataori tenferro adapter, tenferro-benchmark, gaugefields-rs.
-3. Update the backend guide and retire the superseded tenferro design notes.
+3. Only then port the downstream users to engines built from their own
+   pools, each in its own change: tensor4all-rs (adaptive interpolation,
+   tests, the C API's default engine), the hataori tenferro adapter,
+   tenferro-benchmark, gaugefields-rs.
+4. Update the backend guide and retire the superseded tenferro design notes.
 
 ## Settled questions
 
@@ -403,16 +639,22 @@ may use its whole pool.
    session is removed (see "One concept: the engine"). The word "backend"
    also leaves the public API: `CpuBackend` becomes `CpuEngine`.
 
+6. *How are tensors handed between GPU engines on one device?* Explicitly,
+   in the first version: the caller makes the receiving engine wait for the
+   producing one (section 4, rules 2 and 3). Automatic tracking waits until
+   tenferro owns the GPU runtime layer.
+
 ## Open questions (to mature before implementation)
 
 1. *How does an engine prove it is compatible with a compiled
    program?* Backend kind alone is too weak (CPU allocation domains, GPU
-   device and stream state). Settled in tenferro-rs#2206.
+   device and stream state). To be settled in tenferro-rs#2206.
 2. *What does a GPU engine cost per operation without a session scope?*
    The session bound the device stream to the calling thread once per
-   closure. An engine binds it per operation, or remembers which thread it
-   is bound to and skips the binding when nothing changed. Measure before
-   choosing.
+   closure. An engine binds it per operation, or skips the binding when it
+   can prove nothing changed; the thread alone is not enough proof, since
+   another engine or stream may have been bound on the same thread in
+   between. Measure before choosing.
 
 The figures are generated by `figures/make_figures.py` (standard library
 Python). Edit the script and rerun it rather than editing the SVG files.
