@@ -52,8 +52,9 @@ blocks) are out of scope for the core.
 
 ### Principle
 
-Threads and scratch memory come from objects the caller creates and holds.
-No layer starts a hidden global pool, keeps a process wide registry of
+tenferro is handed a thread pool and computes on it; that is the whole
+model. Threads and scratch memory come from objects the caller creates and
+holds. No layer starts a hidden global pool, keeps a process wide registry of
 engines, or arbitrates between callers. This is the rule the provider crates
 already follow, extended to tenferro.
 
@@ -95,23 +96,26 @@ it, and a kitchen whose staff were hired and assigned by the recipe book
 would leave the restaurant owner unable to decide how many cooks work where.
 Today tenferro does both; this design undoes both.
 
-### Why the caller, not tenferro, owns the threads
+### One engine
 
-The programs that use tenferro already have a scheduler: hataori distributes
-work over MPI ranks and over parallel tasks inside a rank, and tensor4all-rs fans out
-over patches and tree nodes. Only that scheduler knows how many tasks run at
-once and how the machine should be split between them. When tenferro also
-builds and arbitrates threads, two schedulers compete for the same cores, and
-tenferro has to rent workers back to the real scheduler under rules it can
-verify at run time. That is where the arbiter, the held sessions, the phase
-lease and the child tickets listed in section 4 came from. Each was a
-reasonable fix; together they are the cost of the ownership being upside
-down, not of numerical work.
+The basic case is one pool and one engine, and it is simple: the caller
+builds a Rayon thread pool and hands it to tenferro, tenferro wraps it into
+a `CpuEngine`, and every operation on that engine computes on that pool.
+tenferro does not create the threads, choose their number, or decide who
+else may use them. Everything else in this section builds on this case.
 
-When the caller owns the threads, none of those rules are needed: the caller
-gives each task its own engine, and an engine is used by whoever holds it.
+Sketch (names are not final):
 
-### The CPU engine
+```rust
+let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
+let mut engine = CpuEngine::new(Arc::new(pool));   // parallel, uses all 4 threads
+let mut serial = CpuEngine::serial();              // no pool at all
+
+let c = dot_general(&mut engine, &a, &b, &dims)?;          // eager operation
+let grads = loss.backward_in(&mut engine)?;                // backward pass on the same engine
+let out = runtime.run_prepared(&mut engine, &program, &inputs)?; // compiled graph, same engine
+let d = dot_general(&mut serial, &a, &b, &dims)?;          // same code, serial engine
+```
 
 A `CpuEngine` is a plain value:
 
@@ -174,19 +178,6 @@ How one operation runs:
 A downstream kernel takes the same path from the third step on, by calling
 `engine.exec(budget)` itself.
 
-Sketch (names are not final):
-
-```rust
-let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
-let mut engine = CpuEngine::new(Arc::new(pool));   // parallel, uses all 4 threads
-let mut serial = CpuEngine::serial();              // no pool at all
-
-let c = dot_general(&mut engine, &a, &b, &dims)?;          // eager operation
-let grads = loss.backward_in(&mut engine)?;                // backward pass on the same engine
-let out = runtime.run_prepared(&mut engine, &program, &inputs)?; // compiled graph, same engine
-let d = dot_general(&mut serial, &a, &b, &dims)?;          // same code, serial engine
-```
-
 ### One concept: the engine
 
 Code that runs work names exactly one kind of object, the engine. Generic
@@ -226,6 +217,25 @@ A run that needs several engines (CPU and GPU with transfers, rule 1)
 receives them as a set of borrowed engines for that one call. That set is
 an argument, not a stored object, and it is not called a session.
 
+### Several engines
+
+tenferro makes one engine from one pool it is given. A caller with several
+pools makes several engines, one from each. tenferro does not know how many
+engines exist, how the caller distributes work over them, or which thread
+uses which engine; it never subdivides a pool and has no notion of parallel
+tasks above the engine. Parallelism above one operation is therefore
+expressed by holding more engines, and coordinating them is the caller's
+job (see "Responsibilities of the caller"). An example is at the end of this section.
+
+Using `k` engines at the same time takes `k` calling threads, one per
+engine, and none of them may be a worker of a compute pool it calls into
+(rule 5). The calling threads are usually a pool of the caller's own, for
+example `k` threads that run the caller's tasks; that pool is separate from
+the `k` compute pools, and tenferro never sees it. The process then has `k`
+calling threads plus `k * m` workers. A calling thread mostly waits while its
+operation runs on the workers, but it does run the serial parts of an
+operation (see "The calling thread" below).
+
 ### Runtimes hold what was prepared, engines hold what is mutable
 
 ![Runtimes are shared; each concurrent run brings its own engine](figures/runtime_split.svg)
@@ -258,24 +268,21 @@ The cost is that caches filled during execution are per engine: each engine
 warms up its own plan caches, and memory for them grows with the number of
 engines (see section 5).
 
-### Several engines
+### Why the caller, not tenferro, owns the threads
 
-tenferro makes one engine from one pool it is given. A caller with several
-pools makes several engines, one from each. tenferro does not know how many
-engines exist, how the caller distributes work over them, or which thread
-uses which engine; it never subdivides a pool and has no notion of parallel
-tasks above the engine. Parallelism above one operation is therefore
-expressed by holding more engines, and coordinating them is the caller's
-job (next section). An example is at the end of this section.
+The programs that use tenferro already have a scheduler: hataori distributes
+work over MPI ranks and over parallel tasks inside a rank, and tensor4all-rs fans out
+over patches and tree nodes. Only that scheduler knows how many tasks run at
+once and how the machine should be split between them. When tenferro also
+builds and arbitrates threads, two schedulers compete for the same cores, and
+tenferro has to rent workers back to the real scheduler under rules it can
+verify at run time. That is where the arbiter, the held sessions, the phase
+lease and the child tickets listed in section 4 came from. Each was a
+reasonable fix; together they are the cost of the ownership being upside
+down, not of numerical work.
 
-Using `k` engines at the same time takes `k` calling threads, one per
-engine, and none of them may be a worker of a compute pool it calls into
-(rule 5). The calling threads are usually a pool of the caller's own, for
-example `k` threads that run the caller's tasks; that pool is separate from
-the `k` compute pools, and tenferro never sees it. The process then has `k`
-calling threads plus `k * m` workers. A calling thread mostly waits while its
-operation runs on the workers, but it does run the serial parts of an
-operation (see "The calling thread" below).
+When the caller owns the threads, none of those rules are needed: the caller
+gives each task its own engine, and an engine is used by whoever holds it.
 
 ### Responsibilities of the caller
 
