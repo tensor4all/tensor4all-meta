@@ -52,8 +52,9 @@ blocks) are out of scope for the core.
 
 ### Principle
 
-Threads and scratch memory come from objects the caller creates and holds.
-No layer starts a hidden global pool, keeps a process wide registry of
+tenferro is handed a thread pool and computes on it; that is the whole
+model. Threads and scratch memory come from objects the caller creates and
+holds. No layer starts a hidden global pool, keeps a process wide registry of
 engines, or arbitrates between callers. This is the rule the provider crates
 already follow, extended to tenferro.
 
@@ -68,7 +69,8 @@ the engine uses its pool.
 This section explains the words used below without assuming knowledge of
 tenferro's internals.
 
-* **Thread pool.** A fixed set of worker threads that wait for parallel work.
+* **Thread pool and worker.** A thread pool is a fixed set of threads, its
+  *workers*, that wait for parallel work.
   tensor4all uses [Rayon](https://docs.rs/rayon) pools. Creating a pool is
   cheap compared with a large computation but not free, and how many pools
   exist and on which CPU cores they run decides how the machine is shared.
@@ -81,11 +83,6 @@ tenferro's internals.
   it is what every operation takes as its argument. A GPU engine bundles a
   device stream with its memory pools in the same way. There is no separate
   session object (see "One concept: the engine" below).
-* **Task lane and worker.** A *task lane* is one stream of work in the
-  caller's scheduler, for example one of the `k` parallel tasks hataori runs.
-  A *worker* is one thread of an engine's pool. Each task lane gets its own
-  engine, and inside that lane an operation may use the `m` workers of that
-  engine's pool.
 * **Runtime.** tenferro's eager runtime (immediate execution with automatic
   differentiation) and its traced runtime (record a graph, compile it once,
   run it many times). A runtime stores what was *prepared*: graphs, compiled
@@ -99,23 +96,26 @@ it, and a kitchen whose staff were hired and assigned by the recipe book
 would leave the restaurant owner unable to decide how many cooks work where.
 Today tenferro does both; this design undoes both.
 
-### Why the caller, not tenferro, owns the threads
+### One engine
 
-The programs that use tenferro already have a scheduler: hataori distributes
-work over MPI ranks and over lanes inside a rank, and tensor4all-rs fans out
-over patches and tree nodes. Only that scheduler knows how many tasks run at
-once and how the machine should be split between them. When tenferro also
-builds and arbitrates threads, two schedulers compete for the same cores, and
-tenferro has to rent workers back to the real scheduler under rules it can
-verify at run time. That is where the arbiter, the held sessions, the phase
-lease and the child tickets listed in section 4 came from. Each was a
-reasonable fix; together they are the cost of the ownership being upside
-down, not of numerical work.
+The basic case is one pool and one engine, and it is simple: the caller
+builds a Rayon thread pool and hands it to tenferro, tenferro wraps it into
+a `CpuEngine`, and every operation on that engine computes on that pool.
+tenferro does not create the threads, choose their number, or decide who
+else may use them. Everything else in this section builds on this case.
 
-When the caller owns the threads, none of those rules are needed: the caller
-gives each task its own engine, and an engine is used by whoever holds it.
+Sketch (names are not final):
 
-### The CPU engine
+```rust
+let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
+let mut engine = CpuEngine::new(Arc::new(pool));   // parallel, uses all 4 threads
+let mut serial = CpuEngine::serial();              // no pool at all
+
+let c = dot_general(&mut engine, &a, &b, &dims)?;          // eager operation
+let grads = loss.backward_in(&mut engine)?;                // backward pass on the same engine
+let out = runtime.run_prepared(&mut engine, &program, &inputs)?; // compiled graph, same engine
+let d = dot_general(&mut serial, &a, &b, &dims)?;          // same code, serial engine
+```
 
 A `CpuEngine` is a plain value:
 
@@ -160,9 +160,16 @@ Rules:
    workspace, and its budget is the largest number of workers that code may
    use. A downstream kernel that calls a provider directly passes this token,
    so it uses the same threads and the same budget as tenferro.
-5. **The caller of an operation must not be a worker of that engine's pool.**
-   tenferro checks this against the engine's own pool and reports an error
-   rather than silently running serially.
+5. **An operation must not be called from one of its engine's own workers.**
+   For example, `pool.install(|| dot_general(&mut engine, ...))`, where
+   `engine` was built from `pool`, is an error. The operation expects to use
+   all workers of the pool (rule 3), but the calling worker is busy waiting
+   for the result, so the work would run with one worker short, and provider
+   code that waits for every worker to join could hang. tenferro detects
+   this case at the start of the operation and returns an error instead of
+   silently running serially. Calling from a worker of a *different* pool
+   (the normal nested case) is fine, and a serial engine has no pool to
+   check.
 
 How one operation runs:
 
@@ -170,19 +177,6 @@ How one operation runs:
 
 A downstream kernel takes the same path from the third step on, by calling
 `engine.exec(budget)` itself.
-
-Sketch (names are not final):
-
-```rust
-let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
-let mut engine = CpuEngine::new(Arc::new(pool));   // parallel, uses all 4 threads
-let mut serial = CpuEngine::serial();              // no pool at all
-
-let c = dot_general(&mut engine, &a, &b, &dims)?;          // eager operation
-let grads = loss.backward_in(&mut engine)?;                // backward pass on the same engine
-let out = runtime.run_prepared(&mut engine, &program, &inputs)?; // compiled graph, same engine
-let d = dot_general(&mut serial, &a, &b, &dims)?;          // same code, serial engine
-```
 
 ### One concept: the engine
 
@@ -223,12 +217,31 @@ A run that needs several engines (CPU and GPU with transfers, rule 1)
 receives them as a set of borrowed engines for that one call. That set is
 an argument, not a stored object, and it is not called a session.
 
+### Several engines
+
+tenferro makes one engine from one pool it is given. A caller with several
+pools makes several engines, one from each. tenferro does not know how many
+engines exist, how the caller distributes work over them, or which thread
+uses which engine; it never subdivides a pool and has no notion of parallel
+tasks above the engine. Parallelism above one operation is therefore
+expressed by holding more engines, and coordinating them is the caller's
+job (see "Responsibilities of the caller"). An example is at the end of this section.
+
+Using `k` engines at the same time takes `k` calling threads, one per
+engine, and none of them may be a worker of a compute pool it calls into
+(rule 5). The calling threads are usually a pool of the caller's own, for
+example `k` threads that run the caller's tasks; that pool is separate from
+the `k` compute pools, and tenferro never sees it. The process then has `k`
+calling threads plus `k * m` workers. A calling thread mostly waits while its
+operation runs on the workers, but it does run the serial parts of an
+operation (see "The calling thread" below).
+
 ### Runtimes hold what was prepared, engines hold what is mutable
 
-![Runtimes are shared; each lane brings its own engine](figures/runtime_split.svg)
+![Runtimes are shared; each concurrent run brings its own engine](figures/runtime_split.svg)
 
 Compiling a traced graph or setting up automatic differentiation is expensive
-and gives the same result for every lane, so it should happen once and be
+and gives the same result for every engine, so it should happen once and be
 shared. Executing needs scratch memory and caches that change on every run,
 so those must not be shared. The design therefore splits every runtime into
 two parts:
@@ -244,30 +257,32 @@ two parts:
   analysis caches, extension plan caches (for example FFT plans), and the
   scratch slots a compiled graph uses while it runs.
 
-With this split, `k` task lanes run the same compiled program at the same
+With this split, several callers run the same compiled program at the same
 time, each on its own engine, and the program is compiled once. Today a
 runtime keeps one copy of the execution resources behind a lock, so runs on
 one runtime cannot overlap: a second run either waits or is rejected as busy.
-Task lanes that want to run in parallel must each build and compile their own
+Callers that want to run in parallel must each build and compile their own
 runtime.
 
-The cost is that caches filled during execution are per engine: each lane
+The cost is that caches filled during execution are per engine: each engine
 warms up its own plan caches, and memory for them grows with the number of
 engines (see section 5).
 
-### Nesting
+### Why the caller, not tenferro, owns the threads
 
-Nested parallelism is expressed by creating several engines, not by
-splitting one. hataori (or any other scheduler) builds `k` pools of `m`
-threads, wraps each in an engine, and gives one engine to each task lane.
-The lane thread is not a worker of its engine's pool, so the operations
-inside the lane are free to use that pool in full.
+The programs that use tenferro already have a scheduler: hataori distributes
+work over MPI ranks and over parallel tasks inside a rank, and tensor4all-rs fans out
+over patches and tree nodes. Only that scheduler knows how many tasks run at
+once and how the machine should be split between them. When tenferro also
+builds and arbitrates threads, two schedulers compete for the same cores, and
+tenferro has to rent workers back to the real scheduler under rules it can
+verify at run time. That is where the arbiter, the held sessions, the phase
+lease and the child tickets listed in section 4 came from. Each was a
+reasonable fix; together they are the cost of the ownership being upside
+down, not of numerical work.
 
-![Nesting: k lanes, one CpuEngine of m threads each](figures/nesting.svg)
-
-Each lane runs its operations on its own `m` threads. Keeping the CPU sets
-disjoint, as drawn, is the caller's choice; tenferro neither enforces nor
-checks it.
+When the caller owns the threads, none of those rules are needed: the caller
+gives each task its own engine, and an engine is used by whoever holds it.
 
 ### Responsibilities of the caller
 
@@ -276,9 +291,14 @@ checks it.
   workers are pinned to cores are the caller's decisions. tenferro does not
   check them.
 * **One pool, one active engine.** A Rayon pool backs at most one engine in
-  use at a time. Lanes that run at the same time need separate pools. (The
+  use at a time. Engines used at the same time need separate pools. (The
   provider crates keep per-pool coordination state inside the engine, so two
   engines on one pool would not see each other.)
+* **Exclusion between engines.** Inside one thread, `&mut` keeps an engine
+  to one computation. Which of the caller's threads or tasks holds which
+  engine, and that two of them never hold the same engine at once, is
+  decided by the caller's scheduler. A caller that shares an engine between
+  threads wraps it in its own lock.
 * **The calling thread.** Parts of an operation, including vendor BLAS and
   LAPACK calls, run on the thread that called it. Its CPU affinity and stack
   size are the caller's, exactly like the pool's.
@@ -287,6 +307,24 @@ checks it.
   its own thread and runs it there.
 * Threads started by a vendor BLAS or LAPACK are outside tenferro's control,
   as before.
+
+### Example: nested parallelism in hataori
+
+This example uses hataori's vocabulary, which tenferro does not share. A
+hataori *lane* is one of the `k` streams in which hataori runs its tasks,
+one task after another; tasks are its units of work, such as one patch.
+hataori runs its lanes on `k` threads of its own, separate from the
+compute pools. It builds `k` compute pools of `m` threads, makes one engine
+from each, and gives each lane thread its own engine for the whole run. An
+operation inside a task is called from the lane thread and may use all `m`
+workers of that lane's engine. The lane thread is not a worker of that
+pool, so rule 5 holds.
+
+![Nesting in hataori: k lanes, one CpuEngine of m threads each](figures/nesting.svg)
+
+Keeping the CPU sets disjoint, as drawn, is hataori's choice; tenferro
+neither enforces nor checks it. From tenferro's side this is simply `k`
+engines used at the same time by different threads.
 
 ## 4. What this removes from tenferro
 
@@ -311,8 +349,9 @@ execution state on behalf of its callers, and are removed:
 * the detached submission API that runs a compiled graph on a thread tenferro
   starts
 
-The work these served moves to the caller: per lane execution becomes one
-engine per lane, and lanes are no longer forced to run serially inside.
+The work these served moves to the caller: a scheduler that runs work in
+parallel builds one pool and one engine for each parallel part, and each part
+may use its whole pool.
 
 ## 5. Costs we accept
 
@@ -342,7 +381,8 @@ engine per lane, and lanes are no longer forced to run serially inside.
    without a compatibility layer. Internal details (how an engine proves it
    is compatible with a compiled program, the exact public names) are settled
    there.
-2. Port the downstream users to one engine per lane, each in its own change:
+2. Port the downstream users to engines built from their own pools, each in
+   its own change:
    tensor4all-rs (adaptive interpolation, tests, the C API's default engine),
    the hataori tenferro adapter, tenferro-benchmark, gaugefields-rs.
 3. Update the backend guide and retire the superseded tenferro design notes.
