@@ -32,7 +32,7 @@
 <text x="610.0" y="278.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">built by the caller</text>
 <rect x="470" y="295" width="280" height="45" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
 <text x="610.0" y="312.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">Workspace</text>
-<text x="610.0" y="333.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">buffers, plan caches, run scratch</text>
+<text x="610.0" y="333.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">buffers, run scratch</text>
 <path d="M 610 115 L 610 180" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
 <rect x="547.8" y="136.0" width="124.4" height="24" rx="4" fill="#FFFFFF"/>
 <text x="610" y="153.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">builds and holds</text>
