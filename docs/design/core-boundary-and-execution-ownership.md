@@ -173,10 +173,11 @@ Rules:
    a call returns (see "When run returns"). The engine counts the memory
    that its unfinished work holds: temporaries, outputs being written, and
    memory waiting for other engines to finish with it. This is separate from
-   tensors the caller still holds and from idle recycled memory. When the
-   count passes a limit the caller can set, the engine waits for the work
-   that holds that memory, including other engines' work, before submitting
-   more. A single operation that needs more than the limit by itself is
+   tensors the caller still holds and from idle recycled memory. Before it
+   submits new work, the engine checks whether the count plus what the new
+   work will retain would exceed a limit the caller can set; if so, it first
+   waits for the work that holds memory, including other engines' work,
+   until the new work fits. A single operation that needs more than the limit by itself is
    rejected before it is submitted.
 
    **Broken engines and broken devices.** If an operation panics, the engine
@@ -340,7 +341,7 @@ different reason:
 | Step | Input | Output | Done how often |
 | --- | --- | --- | --- |
 | **compile** | a recorded graph | a `CompiledGraph`: the computation in a hardware-independent form, keeping the shape constraints that were recorded (fixed sizes stay fixed; only symbolic sizes may vary) | once per computation |
-| **prepare** | a compiled graph, the inputs' shapes, types, layouts and kinds of memory, and a description of the engines it will run on | a prepared program: an execution plan for those inputs, including fusion chosen for the target hardware, and the requirements an engine must meet to run it (device, memory kind, supported operations) | once per input signature |
+| **prepare** | a compiled graph, the inputs' shapes, types, layouts and kinds of memory, and a description of the engines it will run on | a prepared program: an execution plan for those inputs, including fusion chosen for the target hardware, and the requirements an engine must meet to run it (device, memory kind, supported operations) | once per input signature and set of targets |
 | **run** | a prepared program, the engines and the inputs | the outputs | as often as needed |
 
 Prepare has to know what it is preparing for: which kind of engine runs
