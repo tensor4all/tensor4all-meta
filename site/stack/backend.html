@@ -78,7 +78,7 @@
     <li><strong>Conventions.</strong> Storage is column-major, matching LAPACK, Fortran and Julia. There is no facade crate: depend on <code>tenferro-runtime</code>, a backend such as <code>tenferro-cpu</code>, and the operation crates you use. Operations take an explicit backend; create it once and reuse it, since it carries the buffer pool.</li>
     <li><strong>Providers.</strong> On the CPU, <code>tenferro-einsum</code> and <code>tenferro-cpu</code> execute through cpueinsum (and so tcontract), and <code>tenferro-linalg</code> adapts tlinalg and tlinalg-blas to an interface tenferro defines. The providers do not depend on tenferro.</li>
   </ul>
-  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts. Version 0.7.1 is on crates.io; the main branch already builds on the unpublished providers described below.</p>
+  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts. A release is on crates.io; the main branch already builds on the unpublished providers described below.</p>
 
   <h2 id="cpueinsum">cpueinsum: N-ary einsum in a given order</h2>
   <p><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> runs an einsum over integer labels with a contraction order supplied by the caller in SSA form. For each binary step it plans a tcontract call. On top it decides which labels every intermediate must keep (those in the output or needed later; everything else is summed as early as possible) and places all intermediates in one reusable scratch buffer.</p>
@@ -172,7 +172,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
 
   <h2 id="strided">strided-rs: the shared vocabulary</h2>
   <p><a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines <code>StridedView</code>, <code>StridedViewMut</code> and the raw descriptors that every CPU layer passes across crate boundaries, plus fast permutation and elementwise kernels. Arbitrary strides are allowed, including negative and zero (broadcast).</p>
-  <p>Because these types cross crate boundaries, every crate in a build must resolve to the same strided-rs release, currently 0.4.8; two copies would produce two incompatible view types. To make this cheap for downstream users, the plan is to version the core types and traits separately from the permutation engine and stabilize them toward 1.0 (<a href="https://github.com/tensor4all/strided-rs/issues/296">strided-rs#296</a>). A longer term direction is to make strided-rs embeddable from other languages through its own C API (<a href="https://github.com/tensor4all/strided-rs/issues/234">strided-rs#234</a>).</p>
+  <p>Because these types cross crate boundaries, every crate in a build must resolve to the same strided-rs release; two copies would produce two incompatible view types. To make this cheap for downstream users, the plan is to version the core types and traits separately from the permutation engine and stabilize them toward 1.0 (<a href="https://github.com/tensor4all/strided-rs/issues/296">strided-rs#296</a>). A longer term direction is to make strided-rs embeddable from other languages through its own C API (<a href="https://github.com/tensor4all/strided-rs/issues/234">strided-rs#234</a>).</p>
 
   <h3>The faer fork</h3>
   <p>The pure Rust dense kernels come from <a href="https://github.com/tensor4all/faer">tensor4all/faer</a>, a fork of <a href="https://codeberg.org/sarah-quinones/faer">faer</a> developed independently and published as the <code>t4a-faer</code> crates. It is where workload specific changes are tried quickly: strided and batched entry points, uninitialized output destinations, caller-owned workspaces, an explicit thread policy, and numerical fixes such as the unpivoted QR fix that tlinalg relies on. Many of these are not in upstream faer. Every change is recorded in <a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a>; the fork keeps upstream's license and attribution, and consumers pin a revision or a published <code>t4a-faer</code> version.</p>
@@ -211,12 +211,12 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
   <div class="table-wrap"><table>
     <thead><tr><th>Component</th><th>State</th></tr></thead>
     <tbody>
-      <tr><td>tenferro-rs</td><td><span class="pill ok">crates.io 0.7.1</span> main depends on the unpublished providers</td></tr>
+      <tr><td>tenferro-rs</td><td><span class="pill ok">crates.io</span> main depends on the unpublished providers</td></tr>
       <tr><td>cpueinsum, tcontract</td><td><span class="pill wip">git only</span> early, interfaces settling</td></tr>
       <tr><td>tlinalg, tlinalg-blas</td><td><span class="pill wip">git only</span> extraction from tenferro in progress</td></tr>
-      <tr><td>strided-rs</td><td><span class="pill ok">crates.io 0.4.8</span> core versioning split planned</td></tr>
-      <tr><td>faer fork</td><td><span class="pill ok">crates.io t4a-faer 0.24.4</span> independent of upstream, no compatibility promise</td></tr>
-      <tr><td>computegraph</td><td><span class="pill ok">crates.io 0.1.0</span></td></tr>
+      <tr><td>strided-rs</td><td><span class="pill ok">crates.io</span> core versioning split planned</td></tr>
+      <tr><td>faer fork</td><td><span class="pill ok">crates.io (t4a-faer)</span> independent of upstream, no compatibility promise</td></tr>
+      <tr><td>computegraph</td><td><span class="pill ok">crates.io</span></td></tr>
       <tr><td>hataori</td><td><span class="pill wip">git only</span> synchronous API usable, runtime in development</td></tr>
     </tbody>
   </table></div>
