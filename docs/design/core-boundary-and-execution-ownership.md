@@ -467,6 +467,57 @@ gives each task its own engine, and an engine is used by whoever holds it.
 * Threads started by a vendor BLAS or LAPACK are outside tenferro's control,
   as before.
 
+### Where placement is decided
+
+One borrowed token decides where CPU work runs: `strided_exec::Exec`, a pool
+reference plus a non-zero thread budget, with two entries. `install` clamps to
+the pool width, runs inline when the caller is already a worker of that pool,
+and enters the pool otherwise. `broadcast` is the co-scheduling entry for
+barrier-bearing kernels: every `t < width` runs concurrently on a distinct
+worker, or the call is refused before anything runs
+(`Unavailable`, `WidthExceedsPool`, `WidthExceedsBudget`). The rules below are
+what makes the ownership in this section checkable instead of merely
+documented.
+
+1. **One placement decision.** The clamp, the same-pool re-entry test and the
+   SPMD refusal live in one crate. A wrapper type that owns resources and
+   delegates to it is fine; a second `pool.install`, a second clamp, a
+   thread-local placement scope, or a raw Rayon fan-out outside it is a defect.
+   The check is the duplicated *decision*, not the number of `fn install`
+   symbols; CI greps for the calls that bypass the token.
+2. **No implicit global pool.** A token without a pool is serial and runs on the
+   calling thread; there is no ambient variant. Each consumer keeps a
+   regression test asserting that `rayon::ThreadPoolBuilder::build_global()` is
+   still unset after its operations, in its own process.
+3. **Lazy entry.** Nothing enters a pool until an operation concludes that more
+   than one worker is worth it. A 1 KiB elementwise call stays near 40 ns; an
+   eager `install` costs 4–14 µs on the same machine.
+4. **Budget clamped once**, in the token's constructor, never re-derived by a
+   callee.
+5. **Per call.** Plans, caches and prepared kernels never store the token.
+6. **Resources and policy stay with their owner.** Pool ownership, arena and
+   scratch, `WorkModel` and `BatchPolicy` live in the provider crate
+   (`tcontract_exec`); placement carries no numerical policy, and policy carries
+   no second install.
+7. **A lane receives a width, not the token.** Splitting happens once, on the
+   token of the pool the work should run on, so a nested lane cannot re-enter a
+   pool that its caller did not choose.
+8. **Vendor BLAS and LAPACK** keep their own worker teams. An adapter that calls
+   them takes the token and installs before the call, so the vendor receives a
+   width and never an ambient assumption about placement.
+9. **A width is a real bound.** A barrier-free split partitions the work into at
+   most the granted width; handing a `Par` to unbounded Rayon recursion is not a
+   bounded fan-out. Barrier-bearing work uses the co-scheduling entry, where a
+   shortfall is an error and never a silent clamp of the participant count; a
+   barrier-bearing callback must not panic.
+10. **Verification measures the real thing.** Maximum concurrency is counted at
+    the kernel's own boundaries, not through a counter in the common layer, and
+    the "global pool still unset" assertion runs in its own process. A worker
+    index is not evidence of a budget.
+11. **Every migration records its target**: repository, revision, crate versions
+    and features, so a claim about what changed can be rechecked against the
+    tree it was measured on.
+
 ### Example: nested parallelism in hataori
 
 This example uses hataori's vocabulary, which tenferro does not share. A
