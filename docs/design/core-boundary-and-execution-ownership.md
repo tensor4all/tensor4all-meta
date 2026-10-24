@@ -554,10 +554,12 @@ of merely documented. Each rule names its mechanical check.
    the parent's budget.
 5. **Per call.** Plans, caches and prepared kernels never store the token. The
    token is not `Clone`, so a stored token could be used only once anyway.
-6. **Resources and policy stay with their owner.** Pool ownership, arena and
-   scratch, `WorkModel` and `BatchPolicy` live in the provider crate
-   (`tcontract_exec`). Placement carries no numerical policy, and policy starts
-   no tasks.
+6. **Resources and policy stay with their owner.** The `Pool` and `PoolBuilder`
+   *types* live in `strided-exec`, so one builder makes every pool and no caller
+   names Rayon; a pool *instance*, its lifetime, the arena and scratch, and the
+   numerical policy (`WorkModel`, `BatchPolicy`) stay with the provider crate
+   (`tcontract_exec`) or the engine. Placement carries no numerical policy, and
+   policy starts no tasks.
 7. **A child receives a child token, never a pool.** A child token points at its
    parent's pool, so a nested job can parallelize further within its share and
    cannot reach a pool its caller did not choose. No API turns a token into a
@@ -577,8 +579,8 @@ of merely documented. Each rule names its mechanical check.
     `strided-exec` keeps a ledger per root token: the number of live tasks and
     its maximum, and every test asserts that the maximum stays within the
     budget. Rule 1 makes `strided-exec` the only place tasks start, so this
-    counter covers all tensor4all code; inside faer, concurrency is still
-    measured at the kernel's own boundary. A compile-fail doctest checks that
+    counter covers all tensor4all code. What it does not cover is a leaf: see
+    "What the token does not bound" below. A compile-fail doctest checks that
     `Exec` is neither `Clone` nor `Copy`. The "global pool still unset"
     assertion runs in its own process. A worker index is not evidence of a
     budget.
@@ -591,6 +593,23 @@ of merely documented. Each rule names its mechanical check.
     `tcontract-exec` and `tenferro-cpu`, and its output must not contain
     `rayon::`. The scheduler behind `Pool` can then be replaced inside
     `strided-exec` alone.
+
+**What the token does not bound.** The ledger counts the tasks the token
+starts, and nothing more. Two consequences follow, and both are documented
+rather than defended against.
+
+* A call into faer or a vendor BLAS is a leaf. Its internal concurrency belongs
+  to that library; the token's budget is not a claim about the leaf's task count.
+  What the caller can rely on is the width handed over at the boundary and the
+  pool the library runs in, which is the caller's. Vendor BLAS keeps its own
+  worker team, as before; for faer the width is passed through `Exec::faer`.
+* Within one pool there is no reservation. A task's children spread over every
+  worker of that pool, so a lane's share bounds the tasks the lane starts, not
+  the workers it occupies. A lane that calls faer can therefore keep more workers
+  busy than its share, at the expense of its siblings. Results stay correct and
+  the slot arithmetic still holds for the tasks we start; only the effective
+  worker count per lane is unpinned. When isolation is required, use separate
+  pools.
 
 ### Example: nested parallelism in hataori
 
