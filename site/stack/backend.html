@@ -42,7 +42,7 @@
     <p class="eyebrow">Guide B</p>
     <h1>The stack for backend developers</h1>
     <p class="lead">What happens below the tensor network algorithms: a tensor runtime with automatic differentiation, and underneath it small, tensor-free libraries for strided contraction and batched linear algebra that you can use on their own, from Rust or from C. If you maintain a quantum chemistry or many-body code and need fast contractions without transposes, the middle of this page is for you.</p>
-    <p class="asof">Status as of 2026-10-13. Several crates described here are not on crates.io yet; this page says so where it matters.</p>
+    <p class="asof">Each repository's README is the source of truth for release status.</p>
   </section>
 
   <figure class="figure">
@@ -78,7 +78,7 @@
     <li><strong>Conventions.</strong> Storage is column-major, matching LAPACK, Fortran and Julia. There is no facade crate: depend on <code>tenferro-runtime</code>, a backend such as <code>tenferro-cpu</code>, and the operation crates you use. Operations take an explicit backend; create it once and reuse it, since it carries the buffer pool.</li>
     <li><strong>Providers.</strong> On the CPU, <code>tenferro-einsum</code> and <code>tenferro-cpu</code> execute through cpueinsum (and so tcontract), and <code>tenferro-linalg</code> adapts tlinalg and tlinalg-blas to an interface tenferro defines. The providers do not depend on tenferro.</li>
   </ul>
-  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts. A release is on crates.io; the main branch already builds on the unpublished providers described below.</p>
+  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts.</p>
 
   <h2 id="cpueinsum">cpueinsum: N-ary einsum in a given order</h2>
   <p><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> runs an einsum over integer labels with a contraction order supplied by the caller in SSA form. For each binary step it plans a tcontract call. On top it decides which labels every intermediate must keep (those in the output or needed later; everything else is summed as early as possible) and places all intermediates in one reusable scratch buffer.</p>
@@ -194,7 +194,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
     <li><strong>From Rust:</strong> depend on <code>tcontract</code> directly for binary contractions, on <code>cpueinsum</code> if you already have a contraction order for a multi-tensor expression, and on <code>tlinalg</code> for batched factorizations of the resulting matrices. None of them require tenferro.</li>
     <li><strong>Threads:</strong> pass your own pool. Nothing in these libraries competes with OpenMP or MPI in your code behind your back.</li>
   </ul>
-  <div class="note warm"><p>None of tcontract, cpueinsum and tlinalg is on crates.io yet, and their interfaces may still change. Pin a git revision. If you are evaluating them for a production code, opening an issue with your typical tensor shapes is the most useful thing you can do: it feeds directly into the benchmark campaigns below.</p></div>
+  <div class="note warm"><p>The interfaces of tcontract, cpueinsum and tlinalg may still change between releases. If you are evaluating them for a production code, opening an issue with your typical tensor shapes is the most useful thing you can do: it feeds directly into the benchmark campaigns below.</p></div>
 
   <h2 id="bench">Benchmarks</h2>
   <div class="table-wrap"><table>
@@ -211,10 +211,10 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
   <div class="table-wrap"><table>
     <thead><tr><th>Component</th><th>State</th></tr></thead>
     <tbody>
-      <tr><td>tenferro-rs</td><td><span class="pill ok">crates.io</span> main depends on the unpublished providers</td></tr>
-      <tr><td>cpueinsum, tcontract</td><td><span class="pill wip">git only</span> early, interfaces settling</td></tr>
-      <tr><td>tlinalg, tlinalg-blas</td><td><span class="pill wip">git only</span> extraction from tenferro in progress</td></tr>
-      <tr><td>strided-rs</td><td><span class="pill ok">crates.io</span> core versioning split planned</td></tr>
+      <tr><td>tenferro-rs</td><td><span class="pill ok">crates.io</span></td></tr>
+      <tr><td>cpueinsum, tcontract</td><td><span class="pill ok">crates.io</span> interfaces still settling</td></tr>
+      <tr><td>tlinalg, tlinalg-blas</td><td><span class="pill ok">crates.io</span></td></tr>
+      <tr><td>strided-rs</td><td><span class="pill ok">crates.io</span></td></tr>
       <tr><td>faer fork</td><td><span class="pill ok">crates.io (t4a-faer)</span> independent of upstream, no compatibility promise</td></tr>
       <tr><td>computegraph</td><td><span class="pill ok">crates.io</span></td></tr>
       <tr><td>hataori</td><td><span class="pill wip">git only</span> synchronous API usable, runtime in development</td></tr>
