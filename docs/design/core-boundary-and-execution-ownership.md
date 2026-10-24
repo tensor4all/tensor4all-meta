@@ -469,51 +469,115 @@ gives each task its own engine, and an engine is used by whoever holds it.
 
 ### Where placement is decided
 
-One borrowed token decides where CPU work runs: `strided_exec::Exec`, a pool
-reference plus a non-zero thread budget, with two entries. `install` clamps to
-the pool width, runs inline when the caller is already a worker of that pool,
-and enters the pool otherwise. `broadcast` is the co-scheduling entry for
-barrier-bearing kernels: every `t < width` runs concurrently on a distinct
-worker, or the call is refused before anything runs
-(`Unavailable`, `WidthExceedsPool`, `WidthExceedsBudget`). The rules below are
-what makes the ownership in this section checkable instead of merely
-documented.
+One borrowed token decides where CPU work runs and how many tasks may run at
+once: `strided_exec::Exec`, a pool reference plus a non-zero thread budget.
+Holding an `Exec` with budget `b` means holding `b` slots of that pool. The
+token cannot be copied, every entry that runs work in parallel consumes it, and
+a split gives each child a token on the same pool whose budgets add up to the
+parent's. The number of tasks that run at once under one token is therefore
+bounded by its budget by construction, at every nesting depth, instead of by a
+convention that each layer has to follow.
 
-1. **One placement decision.** The clamp, the same-pool re-entry test and the
-   SPMD refusal live in one crate. A wrapper type that owns resources and
-   delegates to it is fine; a second `pool.install`, a second clamp, a
-   thread-local placement scope, or a raw Rayon fan-out outside it is a defect.
-   The check is the duplicated *decision*, not the number of `fn install`
-   symbols; CI greps for the calls that bypass the token.
+```rust
+pub struct Exec<'p> { /* pool: Option<&'p ThreadPool>, budget: NonZeroUsize */ }
+// Exec is neither Clone nor Copy, and exposes no pool reference.
+
+impl<'p> Exec<'p> {
+    pub const fn serial() -> Exec<'static>;
+    pub fn new(pool: &'p ThreadPool, budget: usize) -> Result<Self>; // clamps once
+    pub fn budget(&self) -> NonZeroUsize;                             // read only, for policy
+
+    // The parallel entries. Each one consumes the token.
+    pub fn fork(self, jobs: usize, f: impl Fn(usize, Exec<'_>) + Sync);
+    pub fn for_ranges(self, len: usize, grain: NonZeroUsize, f: impl Fn(Range<usize>) + Sync);
+    pub fn faer<R: Send>(self, f: impl FnOnce(faer::Par) -> R + Send) -> R;
+    pub fn broadcast(self, f: impl Fn(usize) + Sync) -> Result<(), Refused>;
+}
+```
+
+* `fork` runs `jobs` jobs on `t = min(jobs, budget)` tasks. The budget is
+  divided among the tasks in shares that differ by at most one and add up to
+  the budget; each job receives a child token holding its task's share and may
+  call any operation that takes an `Exec`, including another `fork`. When
+  `jobs > budget`, the `t` tasks take job indices from a shared counter, so the
+  bound holds and the load still balances. Results go into caller-owned
+  disjoint outputs; `fork` itself allocates nothing per job.
+* `for_ranges` is the data-parallel loop: `0..len` is cut into ranges of at
+  least `grain` elements, and at most `budget` tasks take ranges from a shared
+  counter. Each range runs sequentially.
+* `faer` is the only place where a bare width exists. It consumes the token,
+  enters the pool, and hands faer a `Par` derived from the budget (rule 8).
+* `broadcast` is the co-scheduling entry for barrier-bearing kernels: every
+  `t < budget` runs concurrently on a distinct worker, or the call is refused
+  before anything runs (`Unavailable`, `WidthExceedsPool`,
+  `WidthExceedsBudget`).
+* A serial token, a budget of one, or `t == 1` runs inline on the calling
+  thread and enters no pool. Otherwise an entry runs inline when the caller is
+  already a worker of the token's pool, and enters the pool once when it is
+  not.
+
+**Why the bound holds.** Slots are created only by `new`, which needs the pool
+itself, so only the pool's owner (the engine) can create them; a token never
+gives its pool back out. Each parallel entry consumes its token, starts at most
+`budget` tasks, and gives each task a share of the parent's slots and never
+more. A parent that waits for its children keeps no slot of its own. Rayon may
+let that waiting thread run one of the children, but that child is one of the
+tasks already counted. Because no other code can start tasks on the pool
+(rule 1), at most `budget` tasks of one token run at any moment.
+
+The rules below are what makes the ownership in this section checkable instead
+of merely documented. Each rule names its mechanical check.
+
+1. **One crate starts tasks.** Among tensor4all crates only `strided-exec`
+   depends on Rayon directly. Each consumer enforces this with `cargo deny`:
+   `rayon` is denied with `wrappers` listing `strided-exec` and the vendor
+   crates that need it (faer, gemm). A crate that cannot name `rayon` cannot
+   call `rayon::scope`, `join`, `par_iter` or `ThreadPool::install`. In kernel
+   crates, clippy `disallowed-methods` lists `std::thread::spawn` and
+   `std::thread::scope`. A resource wrapper (`tcontract_exec::Exec`) may own a
+   pool and hand out tokens; it starts no tasks itself.
 2. **No implicit global pool.** A token without a pool is serial and runs on the
    calling thread; there is no ambient variant. Each consumer keeps a
    regression test asserting that `rayon::ThreadPoolBuilder::build_global()` is
    still unset after its operations, in its own process.
 3. **Lazy entry.** Nothing enters a pool until an operation concludes that more
-   than one worker is worth it. A 1 KiB elementwise call stays near 40 ns; an
-   eager `install` costs 4–14 µs on the same machine.
-4. **Budget clamped once**, in the token's constructor, never re-derived by a
-   callee.
-5. **Per call.** Plans, caches and prepared kernels never store the token.
+   than one task is worth it. Policy chooses `jobs` and `grain` from
+   `budget()`; it does not enter the pool to find out. A 1 KiB elementwise call
+   stays near 40 ns; an eager `install` costs 4 to 14 µs on the same machine.
+4. **Budgets only shrink.** The constructor clamps the budget to the pool width
+   once. After that a budget is only divided: no callee re-derives, raises or
+   re-clamps it. A unit test asserts that the shares of every split add up to
+   the parent's budget.
+5. **Per call.** Plans, caches and prepared kernels never store the token. The
+   token is not `Clone`, so a stored token could be used only once anyway.
 6. **Resources and policy stay with their owner.** Pool ownership, arena and
    scratch, `WorkModel` and `BatchPolicy` live in the provider crate
-   (`tcontract_exec`); placement carries no numerical policy, and policy carries
-   no second install.
-7. **A lane receives a width, not the token.** Splitting happens once, on the
-   token of the pool the work should run on, so a nested lane cannot re-enter a
-   pool that its caller did not choose.
-8. **Vendor BLAS and LAPACK** keep their own worker teams. An adapter that calls
-   them takes the token and installs before the call, so the vendor receives a
-   width and never an ambient assumption about placement.
-9. **A width is a real bound.** A barrier-free split partitions the work into at
-   most the granted width; handing a `Par` to unbounded Rayon recursion is not a
-   bounded fan-out. Barrier-bearing work uses the co-scheduling entry, where a
-   shortfall is an error and never a silent clamp of the participant count; a
-   barrier-bearing callback must not panic.
-10. **Verification measures the real thing.** Maximum concurrency is counted at
-    the kernel's own boundaries, not through a counter in the common layer, and
-    the "global pool still unset" assertion runs in its own process. A worker
-    index is not evidence of a budget.
+   (`tcontract_exec`). Placement carries no numerical policy, and policy starts
+   no tasks.
+7. **A child receives a child token, never a pool.** A child token points at its
+   parent's pool, so a nested job can parallelize further within its share and
+   cannot reach a pool its caller did not choose. No API turns a token into a
+   pool reference.
+8. **Vendor libraries receive a width only through the token.** faer gets its
+   `Par` from `Exec::faer`, which consumes the token. faer's own `join` gives
+   each half `n - n/2` threads, so for an `n` that is not a power of two the
+   number of leaves can reach the next power of two (faer 618b567,
+   `faer/src/utils/mod.rs:30`); the adapter therefore passes the largest power
+   of two not above the budget. Vendor BLAS and LAPACK keep their own worker
+   teams, outside the budget; their adapter also takes the token and installs
+   before the call.
+9. **Barrier-bearing work never runs short.** `broadcast` refuses a shortfall
+   instead of clamping the participant count, and a barrier-bearing callback
+   must not panic.
+10. **Verification measures the real thing.** Under a test feature,
+    `strided-exec` keeps a ledger per root token: the number of live tasks and
+    its maximum, and every test asserts that the maximum stays within the
+    budget. Rule 1 makes `strided-exec` the only place tasks start, so this
+    counter covers all tensor4all code; inside faer, concurrency is still
+    measured at the kernel's own boundary. A compile-fail doctest checks that
+    `Exec` is neither `Clone` nor `Copy`. The "global pool still unset"
+    assertion runs in its own process. A worker index is not evidence of a
+    budget.
 11. **Every migration records its target**: repository, revision, crate versions
     and features, so a claim about what changed can be rechecked against the
     tree it was measured on.
@@ -528,13 +592,22 @@ compute pools. It builds `k` compute pools of `m` threads, makes one engine
 from each, and gives each lane thread its own engine for the whole run. An
 operation inside a task is called from the lane thread and may use all `m`
 workers of that lane's engine. The lane thread is not a worker of that
-pool, so rule 5 holds.
+pool, so the caveat above about calling threads that are Rayon workers does
+not apply.
 
 ![Nesting in hataori: k lanes, one CpuEngine of m threads each](figures/nesting.svg)
 
 Keeping the CPU sets disjoint, as drawn, is hataori's choice; tenferro
 neither enforces nor checks it. From tenferro's side this is simply `k`
 engines used at the same time by different threads.
+
+Splitting at this level, across tasks, is done with pools because each lane
+needs its own engine. Splitting inside one operation does not need new pools:
+an operation that has independent parts, for example two branches of a graph
+or the items of a batch, calls `exec.fork(2, ...)` on its token, and each part
+receives a child token with half of the budget that it can pass on to any
+kernel. The bound in "Where placement is decided" holds at every depth of such
+nesting.
 
 ## 4. GPU execution ownership
 
