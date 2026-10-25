@@ -986,7 +986,13 @@ stage 2; adoption is decided once, after stage 2, with the stage 1 data.
    feature that calls the product directly is added; the default stays.
 2. **Stage 2, a later campaign.** This measures the modified t4a-faer
    described below, as an ordinary candidate pair against the baseline fork.
-   Its results, read together with stage 1, decide adoption.
+   Its results, read together with stage 1, decide adoption. Its workloads
+   include many small matrix operations: sequences of small GEMMs, batched
+   small LU and QR, and chains resembling tenferro contractions. A section on
+   a held team costs sub-microsecond, against microseconds to enter a Rayon
+   pool, which lowers the size at which parallel execution pays. The serial
+   thresholds (`MINTHREADLENGTH`, `width_for`) would be recalibrated on
+   adoption.
 
 Tracking: [tensor4all/tensor4all-meta#47](https://github.com/tensor4all/tensor4all-meta/issues/47)
 (this document), [tensor4all/faer#59](https://github.com/tensor4all/faer/issues/59)
@@ -1006,19 +1012,30 @@ LU 1024 in 6.3 ms
 against 14.7 ms, and QR 1024 in 11.9 ms against 12.1 ms. A dispatch of four
 jobs to the team cost about 0.1 µs.
 
+**The engine holds its team for its lifetime.** The engine that owns a pool
+holds one reservation for the whole of its lifetime. tenferro's `CpuEngine`
+owns its `Pool` exclusively, so the reserved workers serve no one else.
+Acquisition is paid once, at engine construction; every operation, eager or
+graph, dispatches its sections to the held team. The calling thread leads each
+section, so concurrent callers that mint tokens from one engine's team
+serialize on it.
+
 * `PoolBuilder` sets two independent defaults: whether unreserved idle members
   may run Rayon jobs, and how long they spin before returning to Rayon.
   Native team execution defaults to no Rayon job execution; the stage-1
   compatibility mode explicitly enables it. The proposed spin time is 200 ms,
-  configurable down to zero for immediate release. It is a policy to measure,
+  configurable down to zero. An idle member of a held reservation spins for
+  that time, then parks while staying reserved; it does not return to Rayon.
+  The next dispatch wakes it, so only the first dispatch after an idle period
+  pays the wake-up. It is a policy to measure,
   inspired by `KMP_BLOCKTIME`, not a correctness requirement or a promise of
   bounded dispatch latency when Rayon jobs are enabled.
 * A downstream caller may override either setting for an operation without
   mutating pool-wide settings. Children inherit the effective policy and may
   override it for their scope. An override cannot weaken a reservation:
   reserved members neither run unrelated Rayon jobs nor return to Rayon on a
-  timeout. Idle time means time with no live reservation, not time since the
-  member last computed. A child finishing returns its members to its parent;
+  timeout. Idle time means time since the member last received a section, not
+  time since it last computed. A child finishing returns its members to its parent;
   its timeout cannot release the parent's members. The operation's effective
   waiting policy governs the idle interval after its root reservation ends;
   a child override expires when that child returns.
@@ -1030,6 +1047,13 @@ jobs to the team cost about 0.1 µs.
   several engines as well as one.
 * The team and its loop live in the scheduler module of `threadteam`. Members
   hold no thread-local state, since they also run other Rayon jobs.
+* **One token for kernels.** Tokens minted from an engine's team are ordinary
+  `Exec` values carrying team authority. `fork` and `for_ranges` on them
+  dispatch as team sections, `broadcast` runs on the reserved members, and
+  `exec.team(..)` returns a subteam without acquisition. Kernels keep one code
+  path; a token without a team behaves as before. Per-call acquisition remains
+  for pools that no single engine owns, and it shares the same section
+  implementation.
 
 **One exec crate, used by t4a-faer as well.** `threadteam` is the same crate
 as `strided-exec`, evolved into an independent small crate named after
