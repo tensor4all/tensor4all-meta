@@ -987,24 +987,41 @@ Tracking: [tensor4all/tensor4all-meta#47](https://github.com/tensor4all/tensor4a
 (t4a-faer), [tensor4all/faer#56](https://github.com/tensor4all/faer/issues/56)
 (the aarch64 product).
 
-**An awake team instead of spindle regions.** A `Pool` borrows `budget - 1`
-of its Rayon workers as a team and keeps them awake. An idle member first
-checks the team's own dispatch slot, then runs one pending Rayon job
-(`rayon::yield_now()`), and otherwise spins. Rayon work issued inside the
-team, such as a faer fork/join or the `gemm` crate's product, is therefore
-picked up at once instead of starving. A standalone scan on an M5 Max (faer
-0.24.4, 4 threads, not a paired campaign) showed this: the 1024 product ran in
-9.2 ms in the team against 36.6 ms in a spindle region, LU 1024 in 6.3 ms
+**An awake team instead of spindle regions.** A `Pool` borrows workers and
+keeps them awake across operations. In the final form, `budget - 1` workers
+and the calling thread form the team. Stage 1 instead keeps its leader in
+Rayon and lets idle members call `rayon::yield_now()` to serve faer and
+`gemm` work. This compatibility mode promises no reserved team for
+barrier-bearing kernels: `yield_now()` runs the job it takes to completion,
+including nested work, before returning to the dispatch loop. A standalone
+scan on an M5 Max (faer 0.24.4, 4 threads, not a paired campaign) showed this:
+the 1024 product ran in 9.2 ms in the team against 36.6 ms in a spindle region,
+LU 1024 in 6.3 ms
 against 14.7 ms, and QR 1024 in 11.9 ms against 12.1 ms. A dispatch of four
 jobs to the team cost about 0.1 µs.
 
-* The team belongs to the `Pool`, so it stays awake across operations. A
-  member returns to Rayon after an idle time, 200 ms by default as OpenMP's
-  `KMP_BLOCKTIME`, set through `PoolBuilder`, and the pool can be told to
-  release its team at once, as OpenMP's `omp_pause_resource`. The next
-  parallel section borrows it again. Spinning on one's own pool is acceptable
-  under the ownership of this section, where the caller owns the pool and its
-  cores.
+* `PoolBuilder` sets two independent defaults: whether unreserved idle members
+  may run Rayon jobs, and how long they spin before returning to Rayon.
+  Native team execution defaults to no Rayon job execution; the stage-1
+  compatibility mode explicitly enables it. The proposed spin time is 200 ms,
+  configurable down to zero for immediate release. It is a policy to measure,
+  inspired by `KMP_BLOCKTIME`, not a correctness requirement or a promise of
+  bounded dispatch latency when Rayon jobs are enabled.
+* A downstream caller may override either setting for an operation without
+  mutating pool-wide settings. Children inherit the effective policy and may
+  override it for their scope. An override cannot weaken a reservation:
+  reserved members neither run unrelated Rayon jobs nor return to Rayon on a
+  timeout. Idle time means time with no live reservation, not time since the
+  member last computed. A child finishing returns its members to its parent;
+  its timeout cannot release the parent's members. The operation's effective
+  waiting policy governs the idle interval after its root reservation ends;
+  a child override expires when that child returns.
+* An explicit release request takes effect after reservations and outstanding
+  dispatches finish; it never revokes a live token. A request made inside a
+  reservation must not synchronously wait for that same reservation to end.
+  The next parallel section reacquires the required members before starting.
+  Spinning on one's own pool is a caller-controlled cost, measured with
+  several engines as well as one.
 * The team and its loop live in `strided-exec`'s scheduler module. Members
   hold no thread-local state, since they also run other Rayon jobs.
 
@@ -1013,11 +1030,26 @@ independent small crate named `threadteam`, after OpenMP's team of threads,
 and meant for use outside tensor4all as well. t4a-faer is not merged
 upstream, so it may depend on it.
 
-* faer's `Par` gains one variant, `Par::Team(handle)`, a `Copy` handle with a
-  width; every other signature stays. `join_raw` and `for_each` dispatch a
-  `Team` parallelism to the crate's `fork` and `for_ranges`, so the budget
-  bounds faer's own splits. The handle's lifetime is erased inside that shim,
-  under one `unsafe` block.
+* faer's parallelism becomes `Par<'team>`, with a
+  `Team(TeamExec<'team>)` variant. Neither `Par` nor `TeamExec` is `Clone` or
+  `Copy`. The lifetime covers the reservation of that member set, not merely
+  the lifetime of the pool: a child reservation ends when its fork joins,
+  even though the pool lives on. The adapter borrows or consumes the caller's
+  execution token; it never reconstructs execution authority from a width.
+* Parallel entries consume their token. `reborrow(&mut self)` lends one for
+  successive phases while preventing use of the parent; `fork` consumes the
+  parent and lends disjoint child tokens through callbacks quantified over
+  a fresh child lifetime (`for<'child>`). A child cannot escape its callback
+  or be dispatched twice concurrently. `join_raw` and `for_each` use these
+  entries, so faer's own splits obey both the budget and the reservations.
+* The lifetime and exclusive execution authority reach public callbacks as
+  well as internal helpers, including `LinOp::apply(..., par: Par<'_>, ...)`.
+  Auditing only faer's internal storage is insufficient: a user-defined
+  operator can otherwise save a `Par` and reuse it after the call. There is
+  no lifetime-erasing shim and no promise to preserve existing signatures.
+  Global parallelism settings accept only owned sequential/width policy,
+  never a borrowed team token. Scratch queries borrow policy or read a width
+  without acquiring an execution token they could retain.
 * `Par::Team` makes the fork incompatible with upstream faer, so t4a-faer is
   renamed `taer` (packages `taer` and `taer-traits`, library name `taer`) in
   the same change; until then it stays `t4a-faer`. The MIT notice, Sarah
@@ -1045,29 +1077,66 @@ members whose size equals its share.
   is the parent's leader itself, so nothing is handed over. A share of one runs
   sequentially on its thread.
 * A share therefore becomes a reservation: a child's members do not work for
-  its siblings. A barrier-bearing kernel can run inside a child, because the
-  child's members are guaranteed to be awake for it. Cutting the first split
-  at cache-domain boundaries gives the per-domain layout above inside one
-  pool.
+  its siblings. Before publishing any barrier-bearing work, the scheduler
+  must hold an exclusive reservation and receive acknowledgements from all
+  participants on distinct threads, including the leader. A member already
+  executing a Rayon job is unavailable until it returns; a queued worker job
+  or an awake flag alone is not an acknowledgement. From acknowledgement
+  until release, members service only their reserved dispatch tree. This
+  excludes unrelated Rayon work even between sections or while the leader
+  runs a long serial phase, not only while waiting at a kernel barrier.
+* The transition from compatibility mode to reserved execution must not wait
+  for an arbitrary Rayon job that could itself depend on the requested team.
+  If exclusive participation cannot be established without such a wait, the
+  entry releases any tentative claims and refuses before running any callback;
+  the caller takes a barrier-free route. A child inherits already reserved
+  members and confirms their transfer before its barrier-bearing work starts. Cutting the first
+  split at cache-domain boundaries gives the per-domain layout above inside
+  one pool.
+* A reservation is returned only after every dispatched callback and child
+  has finished, on normal return and on unwind. Scheduler waits must propagate
+  cancellation and join participants before borrowed state is released.
+  Barrier-bearing kernel callbacks retain their non-panicking contract;
+  kernels that support failure during a section need a cancellation-aware
+  barrier so peers can leave it. Catching a panic in one participant alone
+  cannot release the reservation or unblock an ordinary barrier.
 * The cost is that load does not balance across sets. Within a set it does,
   as below; across sets, the split's shares decide.
 
 **How a section is shared out.** As spindle does: each member first runs a
 contiguous share fixed by its index, then takes work from the member with the
 most left, then the remainder from a shared counter. The fixed share keeps a
-member on the same range across sections, so that range stays in its private
-caches. It also keeps the order of per-member partial sums reproducible, and
-dispatch is a single publish. The stealing absorbs a late member or cores of
-different speed. Whether the fixed share pays is measured per kernel, with
-and without it.
+member preferentially on the same range across sections for cache locality;
+stealing can change that assignment. This is work sharing within a reserved
+set, separate from executing unrelated Rayon jobs, and never crosses sibling
+reservations. It applies to independent jobs, not to moving or duplicating
+the participants of a barrier-bearing section. Whether the fixed share pays
+is measured per kernel, with and without it.
+
+Fixed initial shares do not make floating-point reductions reproducible when
+jobs can be stolen. A kernel that promises reproducibility partitions input
+into fixed logical chunks independent of worker identity and timing. Each
+chunk uses a fixed arithmetic order and writes its partial sum to its own
+slot; the final combination follows a fixed chunk order or reduction tree.
+Workers may steal whole chunks, but never append them to a worker-local sum
+whose grouping depends on scheduling. Numerical kernels own this policy and
+its scratch requirements. The guarantee is repeatability for the same
+inputs, chunk plan and arithmetic configuration; cross-platform or
+cross-width reproducibility needs a separate contract. If a kernel cannot
+provide such a reduction, it disables stealing for that reduction and fixes
+the partial sums and merge order, or explicitly makes no reproducibility
+promise.
 
 **What tcontract gains.** tcontract's driver runs a GEMM grid either as a
 barrier-free `fork` or, when `pm > 1`, as a barrier-bearing team through
 `limit(width).broadcast(cell)`. It falls back to the barrier-free path when
 `can_broadcast` refuses, which a fork child (`Refused::ForkChild`) and a caller
-inside the pool (`Refused::CallerInPool`) do today. With reserved sets and a
-leading thread that is participant 0, neither refusal is needed. A batch split
-by `fork` can then run each item's GEMM as a team. Its per-worker workspace
+inside the pool (`Refused::CallerInPool`) do today. With an acknowledged
+reservation and a leading thread that is participant 0, neither blanket
+refusal is needed. A fork child carrying that reservation can run each
+item's GEMM as a team; an arbitrary call from a pool worker still cannot
+claim a team merely because it runs there. If reservation acquisition fails,
+the refusal and barrier-free fallback remain. Its per-worker workspace
 lends slots rather than keying on a Rayon worker index, so it works with a
 leading thread that is not a Rayon worker.
 
@@ -1077,12 +1146,27 @@ pool with `m - 1` workers and pins the leading thread to a core of the same
 cache domain. The crate may offer a helper that computes such a layout; it
 does not pin anything by itself.
 
-**To be shown before adoption.** Both benchmark stages above. That the
-handle's lifetime can be confined to the shim, and that faer does not store
-a `Par` beyond a call. That t4a-private-gemm-x86's loops do not assume that all
-participants run at once. That a member waiting at a kernel's barrier does
-not yield to Rayon work. That upstream fixes can still be imported with small
-conflicts. And the CPU use of several engines running at once.
+**To be shown before adoption.** Both benchmark stages above, plus:
+
+* Compile-fail cases for copying a team token, using a parent during a child
+  borrow, escaping a child token, and retaining a token in a user-defined
+  `LinOp` beyond its reservation. Check the public callbacks, not only faer's
+  internal calls.
+* Concurrency tests for distinct participants, nested sibling teams,
+  reservation acquisition while a member is in a Rayon job, and a serial
+  phase longer than the configured idle timeout. Include a dependent Rayon
+  job to check refusal rather than circular waiting, scoped policy
+  inheritance/restoration, explicit release, and unwind cleanup.
+* Reduction tests that perturb completion order and force stealing, including
+  cancellation-sensitive inputs such as `[1e16, -1e16, 1, 0]`. Repeated runs
+  with the same plan must agree bit for bit where reproducibility is promised.
+* That t4a-private-gemm-x86's independent loops do not require simultaneous
+  participants, and that upstream fixes remain practical to import despite
+  the changes to signatures and token ownership.
+* Dispatch, idle CPU use and reacquisition costs across local policy settings,
+  including zero and 200 ms spin times, with one engine and several engines.
+  Stage 1's Rayon compatibility result does not establish the safety or
+  performance of reserved nested teams or deterministic reductions.
 
 ## Settled questions
 
