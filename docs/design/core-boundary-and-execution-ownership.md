@@ -1009,8 +1009,9 @@ jobs to the team cost about 0.1 µs.
   hold no thread-local state, since they also run other Rayon jobs.
 
 **One exec crate, used by t4a-faer as well.** `strided-exec` becomes an
-independent small crate. t4a-faer is not merged upstream, so it may depend on
-it.
+independent small crate named `threadteam`, after OpenMP's team of threads,
+and meant for use outside tensor4all as well. t4a-faer is not merged
+upstream, so it may depend on it.
 
 * faer's `Par` gains one variant, `Par::Team(handle)`, a `Copy` handle with a
   width; every other signature stays. `join_raw` and `for_each` dispatch a
@@ -1026,6 +1027,46 @@ it.
   share of each parallel section, while the members run the rest, like
   OpenMP's master thread. Until then, `external` enters the pool as today.
 
+**Nesting: a tree of dispatch slots.** The pool's thread count is fixed; a
+team is formed per parallel section and its size follows the token. A `fork`
+divides the members along with the budget, so a child token names a set of
+members whose size equals its share.
+
+* The caller at the second level is the thread already running the parent's
+  piece, a member or the leading thread. It leads its child's set: it
+  publishes to the child's dispatch slot and takes a share itself. No thread
+  is created and no pool is entered.
+* Each member watches one slot at a time: the root slot, or the slot of the
+  child it was assigned to until that child finishes. The leader of child 0
+  is the parent's leader itself, so nothing is handed over. A share of one runs
+  sequentially on its thread.
+* A share therefore becomes a reservation: a child's members do not work for
+  its siblings. A barrier-bearing kernel can run inside a child, because the
+  child's members are guaranteed to be awake for it. Cutting the first split
+  at cache-domain boundaries gives the per-domain layout above inside one
+  pool.
+* The cost is that load does not balance across sets. Within a set it does,
+  as below; across sets, the split's shares decide.
+
+**How a section is shared out.** As spindle does: each member first runs a
+contiguous share fixed by its index, then takes work from the member with the
+most left, then the remainder from a shared counter. The fixed share keeps a
+member on the same range across sections, so that range stays in its private
+caches. It also keeps the order of per-member partial sums reproducible, and
+dispatch is a single publish. The stealing absorbs a late member or cores of
+different speed. Whether the fixed share pays is measured per kernel, with
+and without it.
+
+**What tcontract gains.** tcontract's driver runs a GEMM grid either as a
+barrier-free `fork` or, when `pm > 1`, as a barrier-bearing team through
+`limit(width).broadcast(cell)`. It falls back to the barrier-free path when
+`can_broadcast` refuses, which a fork child (`Refused::ForkChild`) and a caller
+inside the pool (`Refused::CallerInPool`) do today. With reserved sets and a
+leading thread that is participant 0, neither refusal is needed. A batch split
+by `fork` can then run each item's GEMM as a team. Its per-worker workspace
+lends slots rather than keying on a Rayon worker index, so it works with a
+leading thread that is not a Rayon worker.
+
 **Placement stays with the caller.** The leading thread now computes, so its
 placement matters. A caller that gives an engine a budget of `m` builds the
 pool with `m - 1` workers and pins the leading thread to a core of the same
@@ -1035,7 +1076,8 @@ does not pin anything by itself.
 **To be shown before adoption.** Both benchmark stages above. That the
 handle's lifetime can be confined to the shim, and that faer does not store
 a `Par` beyond a call. That t4a-private-gemm-x86's loops do not assume that all
-participants run at once. That upstream fixes can still be imported with small
+participants run at once. That a member waiting at a kernel's barrier does
+not yield to Rayon work. That upstream fixes can still be imported with small
 conflicts. And the CPU use of several engines running at once.
 
 ## Settled questions
