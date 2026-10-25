@@ -6,7 +6,8 @@ them work in a few hundred nanoseconds. faer never opens the team itself: its
 kernels call `spindle::for_each`, and the caller is expected to open a region
 with `spindle::with_lock`. This note explains the mechanism from the source
 (spindle 0.2.6: `src/lib.rs` and `src/barrier/mod.rs`) and records measurements
-on an Apple M5 Max. The rule it supports is rule 8 of
+on an Apple M5 Max. The rules it supports, and where the region is opened, are
+in "Where placement is decided" and "faer and spindle" of
 [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md).
 
 ## Two modes
@@ -105,34 +106,20 @@ that was not measured here.
 
 ![Exec::external hands a width to t4a-faer, which opens the region](figures/faer_boundary.svg)
 
-* **In t4a-faer.** `strided-exec` knows neither faer nor spindle. It enters the
-  pool and hands over a width through `Exec::external`. A t4a-faer entry point
-  that receives `Par::Rayon(w)` opens `with_lock(w)` when no region is open.
-  The team then has `w` members, and nesting is staffed from them.
+The rule is in the main document ("faer and spindle", rules 1 and 5): only
+t4a-faer opens a region, for the duration of one call, and batched callers
+split their batch with the token. The mechanism above explains three properties
+the rule relies on.
+
 * **Opening inside an open region is free.** spindle runs the closure directly
   when the leader of an open region calls `with_lock` again, so a caller that
   already opened a region pays nothing extra.
-* **spindle's thread-local state stays inside t4a-faer.** It exists only while
-  the region is open, so it cannot leak into tensor4all's own code. The
-  placement rules forbid thread-local placement state in tensor4all crates;
-  spindle's lives behind the library boundary, for the duration of one call.
-* **Everything parallel inside a region must go through spindle.** Plain Rayon
-  code inside a region runs on one thread, as the matrix product above shows.
-  t4a-faer is therefore to replace the `gemm` crate path on aarch64 with a
-  spindle-based kernel (open question 2 of the main document).
-* **spindle stays inside t4a-faer.** No other tensor4all crate depends on
-  spindle or opens a region (rule 13 of the main document, checked with
-  `cargo deny`). Widening a region to a whole operation would amortize the
-  opening cost, but strided and tcontract kernels parallelize through
-  `strided-exec`, which uses plain Rayon, and would run on one thread inside
-  it.
-* **Batches are split outside the region.** tlinalg gives every slot to the
-  batch direction and solves each item with `Par::Seq` when the batch is at
-  least the budget. When the batch is smaller, it forks the token over the
-  items and each item calls t4a-faer through `external` with its share, so
-  each call opens its own region sized to that share. The opening cost, at
-  most about 1.8 µs per item, is small next to an item large enough to be
-  worth parallelizing internally.
+* **spindle's thread-local state lasts one call.** It exists only while the
+  region is open, so it never reaches tensor4all's own code.
+* **Plain Rayon code inside a region runs on one thread**, as the matrix
+  product above shows, which is why every parallel kernel t4a-faer runs inside
+  a region has to dispatch through spindle, and why a region never spans
+  `strided-exec` kernels, which use plain Rayon.
 
 Upstream faer's `join_raw` gives both halves `n - n/2` threads, so
 `Par::Rayon(3)` produces 4 leaves there. t4a-faer splits a width into halves

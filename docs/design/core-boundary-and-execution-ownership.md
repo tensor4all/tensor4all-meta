@@ -525,7 +525,7 @@ impl<'p> Exec<'p> {
   token, enters the pool (or runs in place when the caller is already one of
   its workers), and hands the budget as a plain width to a library outside
   tensor4all, such as faer or a vendor BLAS. `strided-exec` does not know
-  which library receives it (rule 8).
+  which library receives it (rule 5).
 * `broadcast` is the co-scheduling entry for barrier-bearing kernels: every
   `t < budget` runs concurrently on a distinct worker, or the call is refused
   before anything runs. It is accepted only for a token that owns its slots
@@ -535,8 +535,9 @@ impl<'p> Exec<'p> {
   siblings; so is a call from a worker of the same pool
   (`Refused::CallerInPool`), because the caller would occupy a participant.
   The team size is the budget, narrowed with `limit` beforehand, so there is
-  no width argument to exceed. A caller that is refused takes its
-  barrier-free path.
+  no width argument to exceed, and a shortfall is never absorbed by running
+  fewer participants. A caller that is refused takes its barrier-free path; a
+  barrier-bearing callback must not panic.
 * A serial token, a budget of one, or `t == 1` runs inline on the calling
   thread and enters no pool. Otherwise an entry runs inline when the caller is
   already a worker of the token's pool, and enters the pool once when it is
@@ -551,150 +552,89 @@ let that waiting thread run one of the children, but that child is one of the
 tasks already counted. Because no other code can start tasks on the pool
 (rule 1), at most `budget` tasks of one token run at any moment.
 
-The rules below are what makes the ownership in this section checkable instead
-of merely documented. Each rule names its mechanical check.
+Six rules make the ownership in this section checkable instead of merely
+documented. Each names its mechanical check.
 
-1. **One crate starts tasks.** Among tensor4all crates only `strided-exec`
-   depends on Rayon directly. Each consumer enforces this with `cargo deny`:
-   `rayon` is denied with `wrappers` listing `strided-exec` and the vendor
-   crates that need it (faer, gemm). A crate that cannot name `rayon` cannot
-   call `rayon::scope`, `join`, `par_iter` or `ThreadPool::install`. In kernel
-   crates, clippy `disallowed-methods` lists `std::thread::spawn` and
-   `std::thread::scope`. A resource wrapper (`tcontract_exec::Exec`) may own a
-   pool and hand out tokens; it starts no tasks itself. `strided-exec` itself
-   depends on neither faer nor spindle, and its `cargo deny` configuration bans
-   both.
-2. **No implicit global pool.** A token without a pool is serial and runs on the
-   calling thread; there is no ambient variant. Each consumer keeps a
-   regression test asserting that the global Rayon pool is still unset after
-   its operations, in its own process, through
-   `strided_exec::ledger::global_pool_unstarted()` (feature `ledger`), so the
-   test needs no `rayon` dependency of its own.
-3. **Lazy entry.** Nothing enters a pool until an operation concludes that more
-   than one task is worth it. Policy chooses `jobs` and `grain` from
-   `budget()`; it does not enter the pool to find out. A 1 KiB elementwise call
-   stays near 40 ns; an eager `install` costs 4 to 14 µs on the same machine.
-4. **Budgets only shrink.** The constructor clamps the budget to the pool width
-   once. After that a budget is only divided (`fork`, `for_ranges`) or narrowed
-   (`limit`): no callee re-derives, raises or re-clamps it. A unit test asserts that the shares of every split add up to
-   the parent's budget.
-5. **Per call.** Plans, caches and prepared kernels never store the token. The
-   token is not `Clone`, so a stored token could be used only once anyway.
-6. **Resources and policy stay with their owner.** The `Pool` and `PoolBuilder`
-   *types* live in `strided-exec`, so one builder makes every pool and no caller
-   names Rayon; a pool *instance*, its lifetime, the arena and scratch, and the
-   numerical policy (`WorkModel`, `BatchPolicy`) stay with the provider crate
-   (`tcontract_exec`) or the engine. Placement carries no numerical policy, and
-   policy starts no tasks.
-7. **A child receives a child token, never a pool.** A child token points at its
-   parent's pool, so a nested job can parallelize further within its share and
-   cannot reach a pool its caller did not choose. No API turns a token into a
-   pool reference.
-8. **Vendor libraries receive a width only through the token.**
-   `Exec::external` consumes the token and hands over a plain width; the
-   adapter in the calling crate turns it into the library's own type
-   (`faer::Par::Rayon(w)`, a BLAS thread count). Scheduling that belongs to a
-   library stays in that library: t4a-faer opens spindle's `with_lock(w)`
-   itself in its entry points when no region is open, so the width becomes the
-   size of faer's team (see "faer and spindle" below). t4a-faer's `join_raw`
+1. **Dependency boundaries.** Each consumer keeps one `cargo deny`
+   configuration with three boundaries: `rayon` only through `strided-exec`
+   and the vendor crates that need it (faer, gemm, spindle), listed as
+   `wrappers`; `spindle` only through `t4a-faer`; and neither faer nor spindle
+   in `strided-exec`. `cargo public-api` of `strided-exec`, `tcontract-exec`
+   and `tenferro-cpu` contains no `rayon::`, so the scheduler behind `Pool` can
+   be replaced inside `strided-exec` alone. Kernel crates list
+   `std::thread::spawn` and `std::thread::scope` in clippy
+   `disallowed-methods`. As a result only `strided-exec` starts tasks on a
+   pool, and only t4a-faer opens a spindle region.
+2. **The type carries the budget.** A token is neither `Clone` nor `Copy`, is
+   made from `&Pool` by the pool's owner (the engine, or a resource wrapper such
+   as `tcontract_exec::Exec`), and is consumed by every parallel entry. `fork`
+   and `for_ranges` divide it, `limit` narrows it, and `reborrow` lends it while
+   the parent is borrowed; nothing re-derives, raises or re-clamps a budget.
+   Plans, caches and prepared kernels never store a token, and no API turns a
+   token back into a pool, so a nested job cannot reach a pool its caller did
+   not choose. Checks: a compile-fail doctest that `Exec` is not `Clone` or
+   `Copy`, and a property test that the shares of every split add up to the
+   parent's budget.
+3. **No ambient pool, and decide before entering.** A token without a pool is
+   serial and runs on the calling thread; nothing falls back to the global
+   Rayon pool. Policy chooses `jobs` and `grain` from `budget()` and never
+   enters a pool to find out whether parallelism pays: a 1 KiB elementwise call
+   stays near 40 ns, and an eager `install` costs 4 to 14 µs. Check: each
+   consumer runs `strided_exec::ledger::global_pool_unstarted()` (feature
+   `ledger`) after its operations, in its own process.
+4. **Policy stays with its owner.** The `Pool` and `PoolBuilder` *types* live
+   in `strided-exec`, so one builder makes every pool; a pool *instance*, its
+   lifetime, the arena and scratch, and the numerical policy (`WorkModel`,
+   `BatchPolicy`) stay with the provider crate (`tcontract_exec`) or the
+   engine. Placement carries no numerical policy, and policy starts no tasks.
+5. **Libraries schedule behind `external`.** A library outside tensor4all
+   receives a plain width through `Exec::external`; the adapter in the calling
+   crate turns it into the library's own type (`faer::Par::Rayon(w)`, a BLAS
+   thread count). Scheduling that belongs to the library stays in it: t4a-faer
+   opens spindle's region for the duration of one call, and its `join_raw`
    splits a width into halves that add up to it
-   ([tensor4all/faer#55](https://github.com/tensor4all/faer/pull/55)), so a
-   recursive split ends in exactly `w` leaves. Vendor BLAS and LAPACK keep
-   their own worker teams, outside the budget; their adapter also enters the
-   pool through `external` before the call.
-9. **Barrier-bearing work never runs short.** `broadcast` refuses a shortfall
-   instead of clamping the participant count, and a barrier-bearing callback
-   must not panic.
-10. **Verification measures the real thing.** Under a test feature,
-    `strided-exec` keeps a ledger per root token: the number of live tasks and
-    its maximum, and every test asserts that the maximum stays within the
-    budget. Rule 1 makes `strided-exec` the only place tasks start, so this
-    counter covers all tensor4all code. What it does not cover is a leaf: see
-    "What the token does not bound" below. A compile-fail doctest checks that
-    `Exec` is neither `Clone` nor `Copy`. The "global pool still unset"
-    assertion runs in its own process. A worker index is not evidence of a
-    budget.
-11. **Every migration records its target**: repository, revision, crate versions
-    and features, so a claim about what changed can be rechecked against the
-    tree it was measured on.
-12. **No Rayon type in a public signature.** `Pool`, `Exec` and their
-    builders wrap Rayon privately; callers never name `rayon::ThreadPool` or
-    `ThreadPoolBuilder`. `cargo public-api` runs in CI for `strided-exec`,
-    `tcontract-exec` and `tenferro-cpu`, and its output must not contain
-    `rayon::`. The scheduler behind `Pool` can then be replaced inside
-    `strided-exec` alone.
-13. **spindle stays inside t4a-faer.** No tensor4all crate other than
-    t4a-faer depends on spindle or opens a spindle region; tlinalg, tcontract,
-    cpueinsum and tenferro reach faer's parallelism only by handing a width to
-    a t4a-faer entry point through `Exec::external`. Each consumer's
-    `cargo deny` bans `spindle` with `wrappers` listing only `t4a-faer`. A
-    region is opened by a t4a-faer entry point for the duration of one call,
-    so it never spans tensor4all code, and a batched caller splits its batch
-    with the token, not with spindle (see "faer and spindle" below).
+   ([tensor4all/faer#55](https://github.com/tensor4all/faer/pull/55)). Vendor
+   BLAS and LAPACK keep their own worker teams, outside the budget. A batched
+   caller splits its batch with the token (see "faer and spindle").
+6. **Claims are measured where they hold.** Under the `ledger` feature,
+   `strided-exec` records the peak number of live tasks per root token, and
+   every test asserts that it stays within the budget; rule 1 makes this cover
+   all tensor4all code. Inside a library, concurrency is measured at the
+   kernel's boundary. A worker index or a pool size is not evidence of a
+   budget.
 
 **What the token does not bound.** The ledger counts the tasks the token
-starts, and nothing more. Two consequences follow, and both are documented
-rather than defended against.
+starts, and nothing more.
 
-* A call into faer or a vendor BLAS is a leaf. Its internal concurrency belongs
-  to that library; the token's budget is not a claim about the leaf's task count.
-  What the caller can rely on is the width handed over at the boundary and the
-  pool the library runs in, which is the caller's. Vendor BLAS keeps its own
-  worker team, as before; for faer the width is passed through
-  `Exec::external`.
-* Within one pool there is no reservation. A task's children spread over every
-  worker of that pool, so a lane's share bounds the tasks the lane starts, not
-  the workers it occupies. A lane that calls faer can therefore keep more workers
-  busy than its share, at the expense of its siblings. Results stay correct and
-  the slot arithmetic still holds for the tasks we start; only the effective
-  worker count per lane is unpinned. When isolation is required, use separate
-  pools.
+* A call into faer or a vendor BLAS is a leaf whose internal concurrency
+  belongs to the library. The caller relies on the width it handed over and on
+  the pool the library runs in.
+* Within one pool there is no reservation: a task's children can run on any
+  worker, so a share bounds the tasks a lane starts, not the workers it keeps
+  busy. When isolation is required, use separate pools.
 
 ### faer and spindle
 
 faer parallelizes through [spindle](https://crates.io/crates/spindle): its
-kernels call `spindle::for_each`, and the caller is expected to open a region
-with `spindle::with_lock(n)` around them. Inside a region, `n - 1` Rayon
-workers are held as a spinning team and a dispatch costs a few hundred
-nanoseconds; outside one, `for_each` falls back to a plain Rayon `par_iter`.
-How the team is formed, how jobs are distributed and how nesting works is
-explained, with measurements, in [spindle.md](./spindle.md).
+kernels call `spindle::for_each`, and the caller opens a region with
+`spindle::with_lock(n)` around them, which holds `n - 1` Rayon workers as a
+spinning team. [spindle.md](./spindle.md) explains the mechanism and records
+the measurements behind the points below.
 
 ![Where with_lock is opened: in t4a-faer, behind Exec::external](figures/faer_boundary.svg)
 
-* **The region is opened in t4a-faer, not in `strided-exec`.** The placement
-  layer hands over a pool and a width through `Exec::external`; a t4a-faer
-  entry point that receives `Par::Rayon(w)` opens `with_lock(w)` when no
-  region is open. Opening a region inside one is free (spindle runs the
-  closure directly), so a caller that already opened one pays nothing extra.
-  spindle's thread-local state exists only between the opening and the closing
-  of that region.
-* **A region holds Rayon workers.** While it is open, the team members sit in
-  spindle's loop, so code inside the region that parallelizes with plain Rayon
-  finds no free worker and runs on one thread. Every parallel kernel that
-  t4a-faer runs inside a region therefore has to dispatch through spindle. On
-  aarch64 faer's matrix product goes through the `gemm` crate, which uses Rayon
-  directly; on an M5 Max a 1024 x 1024 product inside a region ran at the
-  sequential speed (spindle.md has the table). t4a-faer is to replace that path
-  with a spindle-based kernel (open question 2).
-* **Cost.** Opening and closing a region costs 0.25 to 1.8 µs on an M5 Max
-  (more when the workers have gone to sleep), which only calls large enough to
-  be parallel pay. While a region is open its members spin and keep their cores
-  busy.
-* **Batches are split with the token (rule 13).** A batched caller such as
-  tlinalg chooses between two shapes, and neither uses spindle itself:
-  * *batch at least the budget*: every slot goes to the batch direction
-    (`for_ranges` or `fork` over the items), each item is solved with
-    `Par::Seq`, and no region is opened;
-  * *batch smaller than the budget*: `fork(batch)` gives each item a child
-    token, and each item goes through `external` with its share; t4a-faer
-    opens one region per call, sized to that share. Several regions are then
-    open at once in one pool, and their team sizes add up to at most the
-    budget.
-
-  The per-call opening cost only matters for an item that is both small and
-  worth parallelizing internally; such an item is better solved with
-  `Par::Seq` in the first shape.
+* **The region is opened in t4a-faer.** An entry point that receives
+  `Par::Rayon(w)` opens `with_lock(w)` when no region is open, for the duration
+  of that call (rules 1 and 5).
+* **Everything parallel inside a region goes through spindle.** The team's
+  workers sit in spindle's loop, so plain Rayon code inside a region runs on
+  one thread. faer's matrix product on aarch64 goes through the `gemm` crate,
+  which uses Rayon directly; t4a-faer is to replace it (open question 2).
+* **Batches are split with the token.** A batched caller such as tlinalg gives
+  every slot to the batch, with `Par::Seq` items, when the batch is at least
+  the budget. Otherwise it forks the token over the items and calls t4a-faer
+  through `external` once per item, so each call opens its own region sized to
+  its share.
 
 ### Example: nested parallelism in hataori
 
@@ -722,45 +662,6 @@ or the items of a batch, calls `exec.fork(2, ...)` on its token, and each part
 receives a child token with half of the budget that it can pass on to any
 kernel. The bound in "Where placement is decided" holds at every depth of such
 nesting.
-
-### Planned: one pool per cache domain
-
-A machine often has several shared-cache domains: the cores behind one L3
-on a multi-CCD or multi-socket x86 machine, or one L2 cluster on Apple
-Silicon (an M5 Max has three: one cluster of 6 Super cores sharing 16 MB of
-L2, and two clusters of 6 Performance cores sharing 8 MB each). Inside one
-Rayon pool any worker may steal any task, so the children of a task spread
-over every worker of the pool. A pool that spans several domains therefore
-moves blocked data, such as packed GEMM panels sized for one cache, between
-caches.
-
-The plan is to give such a machine one Rayon pool per domain and let a
-`Pool` hold all of them:
-
-* `Pool::builder()` gains a domain layout: the caller, or a helper that
-  reads the topology (`/sys/devices/system/cpu/cpu*/cache/index3/shared_cpu_list`
-  on Linux, `hw.perflevelN.cpusperl2` on macOS), says which workers belong
-  to which domain.
-* A `fork` on a token that covers several domains splits at domain
-  boundaries first: each child receives the slots of one domain, and
-  because each domain is a separate Rayon pool, no task of that child can
-  run outside its domain at any depth. Inside a domain, splitting divides
-  the budget as above.
-* Domains with cores of different speed (Super and Performance on Apple
-  Silicon) receive work in proportion to their speed, which needs weighted
-  shares in `fork`. Work across domains does not balance itself; how a large
-  contraction is cut across domains is decided by `WorkModel` and
-  `BatchPolicy` in `tcontract_exec`, and a GEMM larger than one domain is
-  cut into blocks there instead of inside faer.
-
-Separate Rayon pools never share a worker: a thread is a worker of at most
-one pool at a time (rayon-core 1.13.0, `src/registry.rs:710`), and two pools
-built on disjoint threads ran 64 tasks each without any thread in common.
-Entering a domain's pool from outside costs on the order of 15 µs on an
-M5 Max, which only operations large enough to span domains pay.
-
-Because no Rayon type is public (rule 12), this is a change inside
-`strided-exec`; `Exec`, `fork` and every kernel signature stay as they are.
 
 ## 4. GPU execution ownership
 
@@ -1019,6 +920,51 @@ single pull request when it is finished, not as a series of partial ones.
    tenferro-benchmark, gaugefields-rs.
 4. Update the backend guide and retire the superseded tenferro design notes.
 
+## Planned work
+
+Not part of the rules above; recorded so that the rules leave room for it.
+
+### One pool per cache domain
+
+A machine often has several shared-cache domains: the cores behind one L3
+on a multi-CCD or multi-socket x86 machine, or one L2 cluster on Apple
+Silicon (an M5 Max has three: one cluster of 6 Super cores sharing 16 MB of
+L2, and two clusters of 6 Performance cores sharing 8 MB each). Inside one
+Rayon pool any worker may steal any task, so the children of a task spread
+over every worker of the pool. A pool that spans several domains therefore
+moves blocked data, such as packed GEMM panels sized for one cache, between
+caches.
+
+The plan is to give such a machine one Rayon pool per domain and let a
+`Pool` hold all of them:
+
+![An M5 Max has three cache domains; fork gives each child one domain's pool](figures/cache_domains.svg)
+
+* `Pool::builder()` gains a domain layout: the caller, or a helper that
+  reads the topology (`/sys/devices/system/cpu/cpu*/cache/index3/shared_cpu_list`
+  on Linux, `hw.perflevelN.cpusperl2` on macOS), says which workers belong
+  to which domain.
+* A `fork` on a token that covers several domains splits at domain
+  boundaries first: each child receives the slots of one domain, and
+  because each domain is a separate Rayon pool, no task of that child can
+  run outside its domain at any depth. Inside a domain, splitting divides
+  the budget as above.
+* Domains with cores of different speed (Super and Performance on Apple
+  Silicon) receive work in proportion to their speed, which needs weighted
+  shares in `fork`. Work across domains does not balance itself; how a large
+  contraction is cut across domains is decided by `WorkModel` and
+  `BatchPolicy` in `tcontract_exec`, and a GEMM larger than one domain is
+  cut into blocks there instead of inside faer.
+
+Separate Rayon pools never share a worker: a thread is a worker of at most
+one pool at a time (rayon-core 1.13.0, `src/registry.rs:710`), and two pools
+built on disjoint threads ran 64 tasks each without any thread in common.
+Entering a domain's pool from outside costs on the order of 15 µs on an
+M5 Max, which only operations large enough to span domains pay.
+
+Because no Rayon type is public (rule 1), this is a change inside
+`strided-exec`; `Exec`, `fork` and every kernel signature stay as they are.
+
 ## Settled questions
 
 1. *Should the workspace be separable from the pool?* Not in the first
@@ -1067,7 +1013,7 @@ single pull request when it is finished, not as a series of partial ones.
    another engine or stream may have been bound on the same thread in
    between. Measure before choosing.
 
-2. *t4a-faer work behind rule 8.* (a) The entry points open
+2. *t4a-faer work behind rule 5.* (a) The entry points open
    `spindle::with_lock(w)` when no region is open; not implemented yet.
    (b) A spindle-based matrix product for targets where faer uses the `gemm`
    crate (aarch64), so that a region does not reduce it to one thread.
