@@ -1025,10 +1025,13 @@ jobs to the team cost about 0.1 µs.
 * The team and its loop live in `strided-exec`'s scheduler module. Members
   hold no thread-local state, since they also run other Rayon jobs.
 
-**One exec crate, used by t4a-faer as well.** `strided-exec` becomes an
-independent small crate named `threadteam`, after OpenMP's team of threads,
-and meant for use outside tensor4all as well. t4a-faer is not merged
-upstream, so it may depend on it.
+**One exec crate, used by t4a-faer as well.** `threadteam` is the same crate
+as `strided-exec`, evolved into an independent small crate named after
+OpenMP's team of threads and meant for use outside tensor4all as well. It
+carries `Pool`, `Exec`, `fork` and the ledger unchanged, and adds the team.
+The providers and t4a-faer depend on it in one coordinated release that
+retires the `strided-exec` package name, so no second crate starts tasks.
+t4a-faer is not merged upstream, so it may depend on it.
 
 * faer's parallelism becomes `Par<'team>`, with a
   `Team(TeamExec<'team>)` variant. Neither `Par` nor `TeamExec` is `Clone` or
@@ -1050,10 +1053,11 @@ upstream, so it may depend on it.
   Global parallelism settings accept only owned sequential/width policy,
   never a borrowed team token. Scratch queries borrow policy or read a width
   without acquiring an execution token they could retain.
-* `Par::Team` makes the fork incompatible with upstream faer, so t4a-faer is
-  renamed `taer` (packages `taer` and `taer-traits`, library name `taer`) in
-  the same change; until then it stays `t4a-faer`. The MIT notice, Sarah
-  Quiñones's copyright and the statement that it is a fork of faer stay.
+* `Par::Team` makes the fork incompatible with upstream faer. The change
+  lands in `t4a-faer` itself as a breaking release, together with its
+  companion crates under their existing t4a package names, such as
+  `t4a-faer-traits`. The MIT notice, Sarah Quiñones's copyright and the
+  statement that it is a fork of faer stay.
 * spindle and the `faer::spindle` re-export are removed.
   t4a-private-gemm-x86 stops opening `with_lock` and sends its two
   `for_each_raw` loops to the crate. On aarch64, faer cuts a large product into
