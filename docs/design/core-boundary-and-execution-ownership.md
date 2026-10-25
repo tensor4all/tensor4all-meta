@@ -967,9 +967,21 @@ Because no Rayon type is public (rule 1), this is a change inside
 
 ### One exec crate and an awake team (candidate)
 
-A candidate, to be adopted only if
-[tensor4all/faer-benchmark#24](https://github.com/tensor4all/faer-benchmark/issues/24)
-supports it. Until then the rules above and "faer and spindle" stand as written.
+A candidate, to be adopted only after two benchmarks support it. Until then
+the rules above and "faer and spindle" stand as written.
+
+1. **Stage 1,
+   [tensor4all/faer-benchmark#24](https://github.com/tensor4all/faer-benchmark/issues/24).**
+   This runs the current t4a-faer with a team built in the harness, and checks
+   whether keeping borrowed workers awake competes with a held spindle group.
+   On x86_64 it needs one change in the faer stack: t4a-private-gemm-x86 opens
+   `spindle::with_lock` inside every product with more than one thread, so a
+   feature that calls the product directly is added; the default stays. If
+   stage 1 loses, the rest of this subsection is not built.
+2. **Stage 2, a later campaign.** This measures the modified t4a-faer
+   described below, as an ordinary candidate pair against the baseline fork.
+   Adoption depends on it.
+
 Tracking: [tensor4all/tensor4all-meta#47](https://github.com/tensor4all/tensor4all-meta/issues/47)
 (this document), [tensor4all/faer#59](https://github.com/tensor4all/faer/issues/59)
 (t4a-faer), [tensor4all/faer#56](https://github.com/tensor4all/faer/issues/56)
@@ -1020,8 +1032,8 @@ pool with `m - 1` workers and pins the leading thread to a core of the same
 cache domain. The crate may offer a helper that computes such a layout; it
 does not pin anything by itself.
 
-**To be shown before adoption.** The comparison in faer-benchmark#24. That
-the handle's lifetime can be confined to the shim, and that faer does not store
+**To be shown before adoption.** Both benchmark stages above. That the
+handle's lifetime can be confined to the shim, and that faer does not store
 a `Par` beyond a call. That t4a-private-gemm-x86's loops do not assume that all
 participants run at once. That upstream fixes can still be imported with small
 conflicts. And the CPU use of several engines running at once.
