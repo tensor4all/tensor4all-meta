@@ -965,34 +965,52 @@ M5 Max, which only operations large enough to span domains pay.
 Because no Rayon type is public (rule 1), this is a change inside
 `strided-exec`; `Exec`, `fork` and every kernel signature stay as they are.
 
-### One exec crate and an awake team (candidate)
+### One exec crate and an awake team (adopted provisionally)
 
-A candidate, to be adopted only if both benchmark stages below support it.
-Until then the rules above and "faer and spindle" stand as written. Both stages
-are measured on the M5 Max (macOS, Apple Silicon), since no Linux host is
-available. This leaves unmeasured the x86_64 product path that the stage 1
-feature changes, multi-socket and multi-L3 domains, and Linux thread pinning;
+**Decision.** The candidate is adopted provisionally on M5 Max data: both
+benchmark stages, run with 6 threads at QoS UserInitiated on a shared laptop,
+with rough measurements. Final acceptance is a measurement on a quiet Linux
+machine, including the x86_64 product path that the stage 1 feature changes.
+Until acceptance, the rules above and "faer and spindle" describe the code.
+Multi-socket and multi-L3 domains and Linux thread pinning are unmeasured, and
 no numbers for them are claimed here.
 
-Both stages are carried through. Stage 1 makes no decision and does not gate
-stage 2; adoption is decided once, after stage 2, with the stage 1 data.
+**Conditions before acceptance.**
 
-1. **Stage 1,
-   [tensor4all/faer-benchmark#24](https://github.com/tensor4all/faer-benchmark/issues/24).**
-   This runs the current t4a-faer with a team built in the harness, and checks
+* `Par<'team>` carries the team authority in the token. The stage 2 prototype
+  used a thread-local team; the final form does not.
+* The serial thresholds are recalibrated: the faer GEMM floor, LU
+  `par_threshold`, strided `MINTHREADLENGTH` and tcontract `width_for`.
+* Members spinning during sequential sequences are explained and fixed. CPU
+  time reaches 5.6 times wall time on sequences of 32 by 32 GEMMs.
+* A quiet Linux acceptance run passes, including the x86_64 product path.
+
+**Evidence.** Both stages are measured on the M5 Max (macOS, Apple Silicon).
+
+1. **Stage 1 baseline,
+   [tensor4all/faer-benchmark#24](https://github.com/tensor4all/faer-benchmark/issues/24#issuecomment-6396772104).**
+   It runs the current t4a-faer with a team built in the harness, and checks
    whether keeping borrowed workers awake competes with a held spindle group.
    On x86_64 it needs one change in the faer stack: t4a-private-gemm-x86 opens
    `spindle::with_lock` inside every product with more than one thread, so a
    feature that calls the product directly is added; the default stays.
-2. **Stage 2, a later campaign.** This measures the modified t4a-faer
-   described below, as an ordinary candidate pair against the baseline fork.
-   Its results, read together with stage 1, decide adoption. Its workloads
-   include many small matrix operations: sequences of small GEMMs, batched
-   small LU and QR, and chains resembling tenferro contractions. A section on
-   a held team costs sub-microsecond, against microseconds to enter a Rayon
-   pool, which lowers the size at which parallel execution pays. The serial
-   thresholds (`MINTHREADLENGTH`, `width_for`) would be recalibrated on
-   adoption.
+2. **Stage 2 prototypes,
+   [threadteam-rs#1](https://github.com/tensor4all/threadteam-rs/issues/1),
+   [faer#60](https://github.com/tensor4all/faer/issues/60) and
+   [faer-benchmark#26](https://github.com/tensor4all/faer-benchmark/issues/26),
+   with results on
+   [faer-benchmark#24](https://github.com/tensor4all/faer-benchmark/issues/24).**
+   Against the current fork, where a held spindle region runs aarch64 GEMM on
+   one thread, the team is 4 to 14 times faster on GEMM, 1.6 to 3 times faster
+   on LU, 1.1 to 1.4 times faster on Cholesky and equal on QR. Against an awake
+   borrowed Rayon team it is equal or faster, except square GEMM, which is 2 to
+   4 percent slower. With a lowered GEMM threshold, sequences of 64 by 64 GEMMs
+   run about 4 times faster than on one thread, because a section costs about
+   0.85 microseconds. Its workloads include many small matrix operations:
+   sequences of small GEMMs, batched small LU and QR, and chains resembling
+   tenferro contractions. A section on a held team costs sub-microsecond,
+   against microseconds to enter a Rayon pool, which lowers the size at which
+   parallel execution pays.
 
 Tracking: [tensor4all/tensor4all-meta#47](https://github.com/tensor4all/tensor4all-meta/issues/47)
 (this document), [tensor4all/faer#59](https://github.com/tensor4all/faer/issues/59)
@@ -1005,12 +1023,8 @@ and the calling thread form the team. Stage 1 instead keeps its leader in
 Rayon and lets idle members call `rayon::yield_now()` to serve faer and
 `gemm` work. This compatibility mode promises no reserved team for
 barrier-bearing kernels: `yield_now()` runs the job it takes to completion,
-including nested work, before returning to the dispatch loop. A standalone
-scan on an M5 Max (faer 0.24.4, 4 threads, not a paired campaign) showed this:
-the 1024 product ran in 9.2 ms in the team against 36.6 ms in a spindle region,
-LU 1024 in 6.3 ms
-against 14.7 ms, and QR 1024 in 11.9 ms against 12.1 ms. A dispatch of four
-jobs to the team cost about 0.1 µs.
+including nested work, before returning to the dispatch loop. The stage 1
+measurements are linked above.
 
 **The engine holds its team for its lifetime.** The engine that owns a pool
 holds one reservation for the whole of its lifetime. tenferro's `CpuEngine`
@@ -1088,8 +1102,10 @@ t4a-faer is not merged upstream, so it may depend on it.
   lands in `t4a-faer` itself as a breaking release, together with its
   companion crates under their existing t4a package names, such as
   `t4a-faer-traits`. The MIT notice, Sarah Quiñones's copyright and the
-  statement that it is a fork of faer stay. Renaming the fork is deferred;
-  it is not part of this candidate.
+  statement that it is a fork of faer stay. Renaming the fork is deferred.
+  If the crate is renamed, the candidate name is `linearis` with
+  `linearis-traits` (both crates.io names are currently free), at the same
+  breaking release.
 * spindle and the `faer::spindle` re-export are removed.
   t4a-private-gemm-x86 stops opening `with_lock` and sends its two
   `for_each_raw` loops to the crate. On aarch64, faer cuts a large product into
@@ -1182,7 +1198,7 @@ pool with `m - 1` workers and pins the leading thread to a core of the same
 cache domain. The crate may offer a helper that computes such a layout; it
 does not pin anything by itself.
 
-**To be shown before adoption.** Both benchmark stages above, plus:
+**To be shown before acceptance.** Both benchmark stages above, plus:
 
 * Compile-fail cases for copying a team token, using a parent during a child
   borrow, escaping a child token, and retaining a token in a user-defined
