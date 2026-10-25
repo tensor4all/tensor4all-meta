@@ -11,3 +11,5 @@ Repository-scoped design documents live in each implementation repository:
 | Document | Status | Summary |
 | --- | --- | --- |
 | [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) | Proposed (2026-10) | What the tenferro core contains, and why the caller owns CPU threads and GPU streams while every layer borrows them |
+| [cpu-placement-token.md](./cpu-placement-token.md) | Explainer (2026-10) | The CPU placement token (`strided_exec::Exec`) with figures: what it is, how it is split, how the rules are checked |
+| [spindle.md](./spindle.md) | Explainer (2026-10) | How spindle, faer's scheduler, works; measurements on an M5 Max; why its region is opened in t4a-faer |

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="330" viewBox="0 0 880 330">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="880" height="330" fill="#FCFCFA"/>
+<rect x="20" y="130" width="150" height="70" rx="8" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="95.0" y="160.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#6B4A12" text-anchor="middle">Exec</text>
+<text x="95.0" y="181.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">budget 4</text>
+<rect x="240" y="40" width="170" height="70" rx="8" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="325.0" y="70.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#6B4A12" text-anchor="middle">child 0</text>
+<text x="325.0" y="91.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">same pool, budget 2</text>
+<rect x="240" y="220" width="170" height="70" rx="8" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="325.0" y="250.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#6B4A12" text-anchor="middle">child 1</text>
+<text x="325.0" y="271.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">same pool, budget 2</text>
+<path d="M 170 165 L 205 165 L 205 75 L 238 75" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 205 165 L 205 255 L 238 255" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<text x="205" y="150" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">fork(2)</text>
+<text x="325" y="160" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#6B4A12" text-anchor="middle">2 + 2 = 4</text>
+<text x="325" y="180" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#6B4A12" text-anchor="middle">shares add up to the parent</text>
+<rect x="470" y="30" width="220" height="90" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="580.0" y="60.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">for_ranges</text>
+<text x="580.0" y="81.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">at most 2 tasks,</text>
+<text x="580.0" y="99.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">each range sequential</text>
+<rect x="470" y="210" width="220" height="90" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="580.0" y="240.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">external</text>
+<text x="580.0" y="261.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">enter the pool, hand over</text>
+<text x="580.0" y="279.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">a width of 2</text>
+<path d="M 410 75 L 468 75" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 410 255 L 468 255" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="730" y="90" width="130" height="150" rx="8" fill="#FBEAE6" stroke="#C0563F" stroke-width="1.2"/>
+<text x="795.0" y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#8A2E1C" text-anchor="middle">cannot</text>
+<text x="795.0" y="135" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#8A2E1C" text-anchor="middle">copy a token:</text>
+<text x="795.0" y="153" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#8A2E1C" text-anchor="middle">compile error</text>
+<text x="795.0" y="171" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#8A2E1C" text-anchor="middle"></text>
+<text x="795.0" y="189" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#8A2E1C" text-anchor="middle">name rayon:</text>
+<text x="795.0" y="207" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#8A2E1C" text-anchor="middle">cargo deny</text>
+</svg>

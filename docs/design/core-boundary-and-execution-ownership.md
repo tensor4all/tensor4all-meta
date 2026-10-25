@@ -480,7 +480,8 @@ token cannot be copied, every entry that runs work in parallel consumes it, and
 a split gives each child a token on the same pool whose budgets add up to the
 parent's. The number of tasks that run at once under one token is therefore
 bounded by its budget by construction, at every nesting depth, instead of by a
-convention that each layer has to follow.
+convention that each layer has to follow. A walkthrough with figures is in
+[cpu-placement-token.md](./cpu-placement-token.md).
 
 ```rust
 pub struct Exec<'p> { /* pool: Option<&'p Pool>, budget: NonZeroUsize */ }
@@ -494,7 +495,7 @@ impl<'p> Exec<'p> {
     // The parallel entries. Each one consumes the token.
     pub fn fork(self, jobs: usize, f: impl Fn(usize, Exec<'_>) + Sync);
     pub fn for_ranges(self, len: usize, grain: NonZeroUsize, f: impl Fn(Range<usize>) + Sync);
-    pub fn faer<R: Send>(self, f: impl FnOnce(faer::Par) -> R + Send) -> R;
+    pub fn external<R: Send>(self, f: impl FnOnce(NonZeroUsize) -> R + Send) -> R;
     pub fn broadcast(self, f: impl Fn(usize) + Sync) -> Result<(), Refused>;
 }
 ```
@@ -509,8 +510,11 @@ impl<'p> Exec<'p> {
 * `for_ranges` is the data-parallel loop: `0..len` is cut into ranges of at
   least `grain` elements, and at most `budget` tasks take ranges from a shared
   counter. Each range runs sequentially.
-* `faer` is the only place where a bare width exists. It consumes the token,
-  enters the pool, and hands faer a `Par` derived from the budget (rule 8).
+* `external` is the only place where a bare width exists. It consumes the
+  token, enters the pool (or runs in place when the caller is already one of
+  its workers), and hands the budget as a plain width to a library outside
+  tensor4all, such as faer or a vendor BLAS. `strided-exec` does not know
+  which library receives it (rule 8).
 * `broadcast` is the co-scheduling entry for barrier-bearing kernels: every
   `t < budget` runs concurrently on a distinct worker, or the call is refused
   before anything runs (`Unavailable`, `WidthExceedsPool`,
@@ -539,7 +543,9 @@ of merely documented. Each rule names its mechanical check.
    call `rayon::scope`, `join`, `par_iter` or `ThreadPool::install`. In kernel
    crates, clippy `disallowed-methods` lists `std::thread::spawn` and
    `std::thread::scope`. A resource wrapper (`tcontract_exec::Exec`) may own a
-   pool and hand out tokens; it starts no tasks itself.
+   pool and hand out tokens; it starts no tasks itself. `strided-exec` itself
+   depends on neither faer nor spindle, and its `cargo deny` configuration bans
+   both.
 2. **No implicit global pool.** A token without a pool is serial and runs on the
    calling thread; there is no ambient variant. Each consumer keeps a
    regression test asserting that `rayon::ThreadPoolBuilder::build_global()` is
@@ -564,14 +570,18 @@ of merely documented. Each rule names its mechanical check.
    parent's pool, so a nested job can parallelize further within its share and
    cannot reach a pool its caller did not choose. No API turns a token into a
    pool reference.
-8. **Vendor libraries receive a width only through the token.** faer gets its
-   `Par` from `Exec::faer`, which consumes the token. faer's own `join` gives
-   each half `n - n/2` threads, so for an `n` that is not a power of two the
-   number of leaves can reach the next power of two (faer 618b567,
-   `faer/src/utils/mod.rs:30`); the adapter therefore passes the largest power
-   of two not above the budget. Vendor BLAS and LAPACK keep their own worker
-   teams, outside the budget; their adapter also takes the token and installs
-   before the call.
+8. **Vendor libraries receive a width only through the token.**
+   `Exec::external` consumes the token and hands over a plain width; the
+   adapter in the calling crate turns it into the library's own type
+   (`faer::Par::Rayon(w)`, a BLAS thread count). Scheduling that belongs to a
+   library stays in that library: t4a-faer opens spindle's `with_lock(w)`
+   itself in its entry points when no region is open, so the width becomes the
+   size of faer's team (see "faer and spindle" below). t4a-faer's `join_raw`
+   splits a width into halves that add up to it
+   ([tensor4all/faer#55](https://github.com/tensor4all/faer/pull/55)), so a
+   recursive split ends in exactly `w` leaves. Vendor BLAS and LAPACK keep
+   their own worker teams, outside the budget; their adapter also enters the
+   pool through `external` before the call.
 9. **Barrier-bearing work never runs short.** `broadcast` refuses a shortfall
    instead of clamping the participant count, and a barrier-bearing callback
    must not panic.
@@ -602,7 +612,8 @@ rather than defended against.
   to that library; the token's budget is not a claim about the leaf's task count.
   What the caller can rely on is the width handed over at the boundary and the
   pool the library runs in, which is the caller's. Vendor BLAS keeps its own
-  worker team, as before; for faer the width is passed through `Exec::faer`.
+  worker team, as before; for faer the width is passed through
+  `Exec::external`.
 * Within one pool there is no reservation. A task's children spread over every
   worker of that pool, so a lane's share bounds the tasks the lane starts, not
   the workers it occupies. A lane that calls faer can therefore keep more workers
@@ -610,6 +621,38 @@ rather than defended against.
   the slot arithmetic still holds for the tasks we start; only the effective
   worker count per lane is unpinned. When isolation is required, use separate
   pools.
+
+### faer and spindle
+
+faer parallelizes through [spindle](https://crates.io/crates/spindle): its
+kernels call `spindle::for_each`, and the caller is expected to open a region
+with `spindle::with_lock(n)` around them. Inside a region, `n - 1` Rayon
+workers are held as a spinning team and a dispatch costs a few hundred
+nanoseconds; outside one, `for_each` falls back to a plain Rayon `par_iter`.
+How the team is formed, how jobs are distributed and how nesting works is
+explained, with measurements, in [spindle.md](./spindle.md).
+
+![Where with_lock is opened: in t4a-faer, behind Exec::external](figures/faer_boundary.svg)
+
+* **The region is opened in t4a-faer, not in `strided-exec`.** The placement
+  layer hands over a pool and a width through `Exec::external`; a t4a-faer
+  entry point that receives `Par::Rayon(w)` opens `with_lock(w)` when no
+  region is open. Opening a region inside one is free (spindle runs the
+  closure directly), so a caller that already opened one pays nothing extra.
+  spindle's thread-local state exists only between the opening and the closing
+  of that region.
+* **A region holds Rayon workers.** While it is open, the team members sit in
+  spindle's loop, so code inside the region that parallelizes with plain Rayon
+  finds no free worker and runs on one thread. Every parallel kernel that
+  t4a-faer runs inside a region therefore has to dispatch through spindle. On
+  aarch64 faer's matrix product goes through the `gemm` crate, which uses Rayon
+  directly; on an M5 Max a 1024 x 1024 product inside a region ran at the
+  sequential speed (spindle.md has the table). t4a-faer is to replace that path
+  with a spindle-based kernel (open question 2).
+* **Cost.** Opening and closing a region costs 0.25 to 1.8 µs on an M5 Max
+  (more when the workers have gone to sleep), which only calls large enough to
+  be parallel pay. While a region is open its members spin and keep their cores
+  busy.
 
 ### Example: nested parallelism in hataori
 
@@ -981,6 +1024,13 @@ single pull request when it is finished, not as a series of partial ones.
    can prove nothing changed; the thread alone is not enough proof, since
    another engine or stream may have been bound on the same thread in
    between. Measure before choosing.
+
+2. *t4a-faer work behind rule 8.* (a) The entry points open
+   `spindle::with_lock(w)` when no region is open; not implemented yet.
+   (b) A spindle-based matrix product for targets where faer uses the `gemm`
+   crate (aarch64), so that a region does not reduce it to one thread.
+   (c) An audit of which entry points start parallel work and whether a leaf
+   starts further parallel work outside spindle.
 
 The figures are generated by `figures/make_figures.py` (standard library
 Python). Edit the script and rerun it rather than editing the SVG files.

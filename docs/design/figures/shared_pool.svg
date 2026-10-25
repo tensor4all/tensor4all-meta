@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="300" viewBox="0 0 860 300">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="300" fill="#FCFCFA"/>
+<rect x="15" y="15" width="405" height="270" rx="10" fill="#FBEAE6" stroke="#C0563F" stroke-width="1.2"/>
+<text x="217.5" y="39" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#8A2E1C" text-anchor="middle">Not allowed: two engines on one pool</text>
+<rect x="40" y="60" width="160" height="40" rx="6" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="120.0" y="85.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">engine A, budget 4</text>
+<rect x="235" y="60" width="160" height="40" rx="6" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="315.0" y="85.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">engine B, budget 4</text>
+<rect x="70" y="150" width="300" height="70" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="220.0" y="180.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">one pool, one queue</text>
+<text x="220.0" y="201.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">8 workers</text>
+<path d="M 120 100 L 170 148" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 315 100 L 270 148" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<text x="217" y="248" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8A2E1C" text-anchor="middle">a budget is a cap, not a reservation;</text>
+<text x="217" y="266" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#8A2E1C" text-anchor="middle">per-pool state in each engine cannot see the other</text>
+<rect x="440" y="15" width="405" height="270" rx="10" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="642.5" y="39" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="middle">Instead: one pool per engine</text>
+<rect x="465" y="60" width="160" height="40" rx="6" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="545.0" y="85.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">engine A</text>
+<rect x="660" y="60" width="160" height="40" rx="6" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="740.0" y="85.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">engine B</text>
+<rect x="465" y="150" width="160" height="70" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="545.0" y="180.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">pool A</text>
+<text x="545.0" y="201.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">4 workers</text>
+<rect x="660" y="150" width="160" height="70" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="740.0" y="180.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">pool B</text>
+<text x="740.0" y="201.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">4 workers</text>
+<path d="M 545 100 L 545 148" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 740 100 L 740 148" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<text x="642" y="257" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#1F5A3F" text-anchor="middle">the caller decides cores and totals</text>
+</svg>

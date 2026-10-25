@@ -268,6 +268,281 @@ def runtime_split():
     f.save("runtime_split.svg")
 
 
+# ---------------------------------------------------------------- placement
+
+
+def raw(f, svg):
+    f.parts.append(svg)
+
+
+def token_anatomy():
+    f = Figure(860, 300)
+    f.box(20, 20, 340, 260, "CpuEngine", ["owns its pool by value"],
+          style="green", title_at="top")
+    f.box(45, 90, 290, 110, "Pool (strided_exec::Pool)",
+          ["8 workers, Rayon inside, never named"], style="purple",
+          title_at="top", r=8)
+    for i in range(8):
+        raw(f, f'<circle cx="{75 + i * 33}" cy="170" r="11" fill="#6A62D6" '
+               f'fill-opacity="0.8"/>')
+    f.box(45, 215, 290, 45, "Workspace", ["buffers, arena, scratch"],
+          style="plain", r=8)
+    f.box(470, 50, 370, 200, "Exec<'p>", style="amber", title_at="top")
+    f.box(490, 90, 330, 40, lines=["pool: Option<&'p Pool>   // borrowed"],
+          style="plain", mono_lines=True, r=6)
+    f.box(490, 140, 330, 40, lines=["budget: NonZeroUsize    // e.g. 4"],
+          style="plain", mono_lines=True, r=6)
+    f.text(655, 205, "not Clone, not Copy; made per call", size=12.5,
+           color="#6B4A12")
+    f.text(655, 225, "only the pool's owner can make one", size=12.5,
+           color="#6B4A12")
+    f.arrow([(335, 145), (488, 110)], label="borrowed", label_at=(410, 118))
+    f.text(655, 275, "no pool = serial: runs on the calling thread", size=12,
+           color="#4A4844")
+    f.save("token_anatomy.svg")
+
+
+def token_split():
+    f = Figure(880, 330)
+    f.box(20, 130, 150, 70, "Exec", ["budget 4"], style="amber", r=8)
+    f.box(240, 40, 170, 70, "child 0", ["same pool, budget 2"], style="amber",
+          r=8)
+    f.box(240, 220, 170, 70, "child 1", ["same pool, budget 2"],
+          style="amber", r=8)
+    f.arrow([(170, 165), (205, 165), (205, 75), (238, 75)])
+    f.arrow([(205, 165), (205, 255), (238, 255)])
+    f.text(205, 150, "fork(2)", size=12, mono=True, color="#4A4844")
+    f.text(325, 160, "2 + 2 = 4", size=15, weight=600, color="#6B4A12")
+    f.text(325, 180, "shares add up to the parent", size=12, color="#6B4A12")
+    f.box(470, 30, 220, 90, "for_ranges", ["at most 2 tasks,", "each range sequential"],
+          style="purple", r=8)
+    f.box(470, 210, 220, 90, "external", ["enter the pool, hand over", "a width of 2"],
+          style="purple", r=8)
+    f.arrow([(410, 75), (468, 75)])
+    f.arrow([(410, 255), (468, 255)])
+    f.box(730, 90, 130, 150, "cannot", ["copy a token:", "compile error", "",
+          "name rayon:", "cargo deny"], style="red", title_at="top", r=8)
+    f.save("token_split.svg")
+
+
+def token_entry():
+    f = Figure(860, 320)
+    f.box(300, 10, 260, 50, lines=["exec.fork(n, f) and the",
+          "other parallel entries"], style="amber", r=8)
+    f.box(270, 85, 320, 44, lines=["serial, budget one, or one task?"],
+          style="plain", r=22)
+    f.box(240, 160, 380, 44, lines=["caller already a worker of the token's pool?"],
+          style="plain", r=22)
+    f.arrow([(430, 60), (430, 83)])
+    f.arrow([(270, 107), (120, 107), (120, 238)], label="yes",
+            label_at=(190, 107))
+    f.arrow([(430, 129), (430, 158)], label="no", label_at=(430, 144))
+    f.arrow([(430, 204), (430, 238)], label="yes", label_at=(430, 221))
+    f.arrow([(620, 182), (740, 182), (740, 238)], label="no",
+            label_at=(680, 182))
+    f.box(20, 240, 200, 64, "inline", ["no Rayon call at all"], style="green",
+          r=8)
+    f.box(320, 240, 220, 64, "spawn in place", ["into the current scope"],
+          style="green", r=8)
+    f.box(630, 240, 220, 64, "enter once and wait", ["plain thread or", "another pool's worker"],
+          style="purple", r=8)
+    f.save("token_entry.svg")
+
+
+def shared_pool():
+    f = Figure(860, 300)
+    f.box(15, 15, 405, 270, "Not allowed: two engines on one pool",
+          style="red", title_at="top")
+    f.box(40, 60, 160, 40, lines=["engine A, budget 4"], style="plain", r=6)
+    f.box(235, 60, 160, 40, lines=["engine B, budget 4"], style="plain", r=6)
+    f.box(70, 150, 300, 70, "one pool, one queue", ["8 workers"],
+          style="purple", r=8)
+    f.arrow([(120, 100), (170, 148)])
+    f.arrow([(315, 100), (270, 148)])
+    f.text(217, 248, "a budget is a cap, not a reservation;", size=12,
+           color="#8A2E1C")
+    f.text(217, 266, "per-pool state in each engine cannot see the other",
+           size=12, color="#8A2E1C")
+    f.box(440, 15, 405, 270, "Instead: one pool per engine", style="green",
+          title_at="top")
+    f.box(465, 60, 160, 40, lines=["engine A"], style="plain", r=6)
+    f.box(660, 60, 160, 40, lines=["engine B"], style="plain", r=6)
+    f.box(465, 150, 160, 70, "pool A", ["4 workers"], style="purple", r=8)
+    f.box(660, 150, 160, 70, "pool B", ["4 workers"], style="purple", r=8)
+    f.arrow([(545, 100), (545, 148)])
+    f.arrow([(740, 100), (740, 148)])
+    f.text(642, 257, "the caller decides cores and totals", size=12,
+           color="#1F5A3F")
+    f.save("shared_pool.svg")
+
+
+def cache_domains():
+    f = Figure(880, 330)
+    f.box(330, 15, 220, 60, "Exec", ["3 domains, 18 slots"], style="amber",
+          r=8)
+    names = [("Super cluster", "6 cores, 16 MB L2"),
+             ("Performance cluster 1", "6 cores, 8 MB L2"),
+             ("Performance cluster 2", "6 cores, 8 MB L2")]
+    for i, (n, c) in enumerate(names):
+        x = 20 + i * 290
+        f.arrow([(440, 75), (x + 130, 115)])
+        f.box(x, 118, 260, 190, n, [c, "its own Rayon pool"], style="purple",
+              title_at="top")
+        for j in range(6):
+            raw(f, f'<circle cx="{x + 40 + j * 36}" cy="200" r="11" '
+                   f'fill="#6A62D6" fill-opacity="0.8"/>')
+        f.box(x + 20, 228, 220, 60, "child: 6 slots",
+              ["split by budget inside"], style="amber", r=8)
+    f.text(565, 40, "fork splits at domain", size=12, anchor="start",
+           color="#4A4844")
+    f.text(565, 58, "boundaries first", size=12, anchor="start",
+           color="#4A4844")
+    f.save("cache_domains.svg")
+
+
+# ---------------------------------------------------------------- spindle
+
+
+def spindle_modes():
+    f = Figure(860, 240)
+    f.box(320, 15, 220, 44, lines=["spindle::for_each(n, f)"], style="purple",
+          mono_lines=True, r=8)
+    f.arrow([(380, 59), (200, 100)], label="outside with_lock",
+            label_at=(275, 76))
+    f.arrow([(480, 59), (660, 100)], label="inside with_lock",
+            label_at=(585, 76))
+    f.box(20, 102, 390, 125, "Rayon par_iter",
+          ["(0..n).into_par_iter().for_each(f)", "wakes sleeping workers,",
+           "distributes by work stealing,", "microseconds per hand-off"],
+          style="neutral", title_at="top")
+    f.box(450, 102, 390, 125, "the spinning team",
+          ["publishes one task pointer;", "members are spinning and",
+           "pick it up at once;", "0.33 to 0.42 µs for 4 jobs (M5 Max)"],
+          style="amber", title_at="top")
+    f.save("spindle_modes.svg")
+
+
+def spindle_timeline():
+    f = Figure(880, 300)
+    rows = [("leader", "#6A62D6"), ("member 1", "#B7832F"),
+            ("member 2", "#B7832F"), ("member 3", "#B7832F")]
+    cols = [90, 210, 330, 450, 570, 690, 810]
+    heads = ["(1) borrow", "(3) dispatch", "leader serial", "(3) dispatch",
+             "long serial", "(4) close"]
+    for i, h in enumerate(heads):
+        f.text(cols[i] + 60, 30, h, size=12, color="#4A4844")
+    for c in cols:
+        raw(f, f'<line x1="{c}" y1="40" x2="{c}" y2="240" stroke="#D8D6D0"/>')
+    for r, (name, col) in enumerate(rows):
+        y = 60 + r * 50
+        f.text(20, y + 15, name, size=12, anchor="start", mono=True,
+               color=col)
+        if r == 0:
+            for x0, x1, op in [(92, 110, 1), (214, 326, 1), (330, 448, .45),
+                               (454, 566, 1), (570, 688, .45), (692, 712, 1)]:
+                raw(f, f'<rect x="{x0}" y="{y}" width="{x1 - x0}" height="20" '
+                       f'rx="3" fill="#6A62D6" fill-opacity="{op}"/>')
+        else:
+            w1, w2 = [(110, 112), (96, 104), (104, 100)][r - 1]
+            raw(f, f'<path d="M 112 {y + 10} L 210 {y + 10}" stroke="#B7832F" '
+                   f'stroke-width="2" stroke-dasharray="3 3"/>')
+            raw(f, f'<rect x="214" y="{y}" width="{w1}" height="20" rx="3" '
+                   f'fill="#B7832F"/>')
+            raw(f, f'<path d="M {216 + w1} {y + 10} L 452 {y + 10}" '
+                   f'stroke="#B7832F" stroke-width="2" stroke-dasharray="3 3"/>')
+            raw(f, f'<rect x="454" y="{y}" width="{w2}" height="20" rx="3" '
+                   f'fill="#B7832F"/>')
+            raw(f, f'<path d="M {456 + w2} {y + 10} L 630 {y + 10}" '
+                   f'stroke="#B7832F" stroke-width="2" stroke-dasharray="3 3"/>')
+            raw(f, f'<path d="M 632 {y + 10} L 690 {y + 10}" stroke="#77756F" '
+                   f'stroke-width="2" stroke-dasharray="1 5" '
+                   f'stroke-linecap="round"/>')
+    for x in (328, 568):
+        raw(f, f'<line x1="{x}" y1="52" x2="{x}" y2="236" stroke="#77756F" '
+               f'stroke-width="1.5"/>')
+        f.text(x, 256, "barrier", size=11.5, color="#4A4844")
+    raw(f, '<rect x="90" y="272" width="18" height="10" rx="2" fill="#B7832F"/>')
+    f.text(114, 281, "work", size=11.5, anchor="start", color="#4A4844")
+    raw(f, '<path d="M 170 277 L 210 277" stroke="#B7832F" stroke-width="2" '
+           'stroke-dasharray="3 3"/>')
+    f.text(216, 281, "spinning (keeps a core busy)", size=11.5,
+           anchor="start", color="#4A4844")
+    raw(f, '<path d="M 430 277 L 470 277" stroke="#77756F" stroke-width="2" '
+           'stroke-dasharray="1 5" stroke-linecap="round"/>')
+    f.text(476, 281, "futex sleep after SPIN_LIMIT", size=11.5,
+           anchor="start", color="#4A4844")
+    f.save("spindle_timeline.svg")
+
+
+def spindle_jobs():
+    f = Figure(820, 220)
+    f.text(20, 26, "n_jobs = 14, team of 4 (leader included)", size=14,
+           weight=600, anchor="start")
+    names = ["leader", "member 1", "member 2", "member 3"]
+    for r, n in enumerate(names):
+        y = 50 + r * 36
+        f.text(20, y + 17, n, size=12, anchor="start", mono=True,
+               color="#6A62D6" if r == 0 else "#B7832F")
+        for k in range(3):
+            j = r * 3 + k
+            f.box(110 + k * 50, y, 44, 26, lines=[str(j)], style="amber",
+                  mono_lines=True, r=4)
+    f.text(185, 210, "1: own share, 14 / 4 = 3 each", size=12,
+           color="#4A4844")
+    f.arrow([(345, 110), (282, 182)])
+    f.text(350, 92, "2: when done, take from the member", size=12,
+           anchor="start", color="#4A4844")
+    f.text(350, 110, "with the most left, from its far end", size=12,
+           anchor="start", color="#4A4844")
+    f.box(600, 150, 44, 26, lines=["12"], style="purple", mono_lines=True,
+          r=4)
+    f.box(650, 150, 44, 26, lines=["13"], style="purple", mono_lines=True,
+          r=4)
+    f.text(647, 200, "3: remainder 14 % 4 = 2,", size=12, color="#4A4844")
+    f.text(647, 216, "first come first served", size=12, color="#4A4844")
+    f.save("spindle_jobs.svg")
+
+
+def spindle_nesting():
+    f = Figure(820, 210)
+    f.box(15, 15, 790, 180, "Parent team: with_lock(4)", style="amber",
+          title_at="top")
+    labels = [("leader", "working on its share", "purple"),
+              ("member 1", "calls for_each(2)", "plain"),
+              ("member 2", "idle: joins the child", "plain"),
+              ("member 3", "working on its share", "plain")]
+    for i, (n, d, st) in enumerate(labels):
+        f.box(35 + i * 192, 55, 175, 55, n, [d], style=st, r=8)
+    f.box(227, 135, 367, 46, lines=["child team: member 1 + member 2"],
+          style="amber", r=8)
+    f.arrow([(314, 110), (314, 133)])
+    f.arrow([(506, 110), (506, 133)])
+    f.save("spindle_nesting.svg")
+
+
+def faer_boundary():
+    f = Figure(880, 330)
+    f.box(20, 20, 250, 70, "tlinalg / tenferro", ["holds the token"],
+          style="green", r=8)
+    f.box(320, 20, 250, 70, "Exec::external", ["enter the pool,", "hand over width w"],
+          style="amber", r=8)
+    f.box(620, 15, 240, 80, "t4a-faer entry point",
+          ["gets Par::Rayon(w),", "opens with_lock(w)", "if no region is open"],
+          style="purple", r=8)
+    f.arrow([(270, 55), (318, 55)])
+    f.arrow([(570, 55), (618, 55)])
+    f.box(380, 140, 480, 165, "inside the region (t4a-faer)", style="purple",
+          title_at="top")
+    f.box(400, 180, 210, 105, "spindle::for_each", ["QR, LU panels,", "Householder, join_raw:", "fast"],
+          style="green", r=8)
+    f.box(630, 180, 210, 105, "plain Rayon code", ["e.g. the gemm crate", "on aarch64:", "runs on 1 thread"],
+          style="red", r=8)
+    f.arrow([(740, 95), (740, 138)])
+    f.text(190, 170, "strided-exec knows", size=12.5, color="#4A4844")
+    f.text(190, 188, "neither faer nor spindle", size=12.5, color="#4A4844")
+    f.save("faer_boundary.svg")
+
+
 if __name__ == "__main__":
     layers()
     batches()
@@ -275,3 +550,13 @@ if __name__ == "__main__":
     operation()
     nesting()
     runtime_split()
+    token_anatomy()
+    token_split()
+    token_entry()
+    shared_pool()
+    cache_domains()
+    spindle_modes()
+    spindle_timeline()
+    spindle_jobs()
+    spindle_nesting()
+    faer_boundary()
