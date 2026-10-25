@@ -1057,7 +1057,8 @@ t4a-faer is not merged upstream, so it may depend on it.
   lands in `t4a-faer` itself as a breaking release, together with its
   companion crates under their existing t4a package names, such as
   `t4a-faer-traits`. The MIT notice, Sarah Quiñones's copyright and the
-  statement that it is a fork of faer stay.
+  statement that it is a fork of faer stay. Renaming the fork is deferred;
+  it is not part of this candidate.
 * spindle and the `faer::spindle` re-export are removed.
   t4a-private-gemm-x86 stops opening `with_lock` and sends its two
   `for_each_raw` loops to the crate. On aarch64, faer cuts a large product into
