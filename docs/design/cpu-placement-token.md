@@ -43,6 +43,14 @@ consumes the token:
 | `external(\|w\| ...)` | enters the pool and hands a plain width to a library outside tensor4all (faer, a vendor BLAS) |
 | `broadcast(\|t\| ...)` | barrier-bearing kernels: all `budget` participants run at once, or the call is refused |
 
+Two more operations keep the slot count without starting tasks. `reborrow`
+lends the token to one phase while the caller keeps it for the next, so a
+kernel that fills and then copies passes `exec.reborrow()` to each step.
+`limit(max)` narrows the budget, for example to the team size a work model
+picked. `broadcast` is accepted only for a token from `new` (or its reborrows
+and limits); a child of `fork` is refused, because its slots may share workers
+with its siblings, and the caller then takes its barrier-free path.
+
 Splitting can be nested to any depth, and at every level the children's budgets
 add up to the parent's:
 

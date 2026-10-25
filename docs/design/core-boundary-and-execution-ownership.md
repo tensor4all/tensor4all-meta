@@ -491,6 +491,11 @@ impl<'p> Exec<'p> {
     pub const fn serial() -> Exec<'static>;
     pub fn new(pool: &'p Pool, budget: usize) -> Result<Self>;      // clamps once
     pub fn budget(&self) -> NonZeroUsize;                             // read only, for policy
+    pub fn is_serial(&self) -> bool;                                  // budget == 1
+
+    // Sequential phases and narrowing. Neither creates a slot.
+    pub fn reborrow(&mut self) -> Exec<'_>;
+    pub fn limit(self, max: NonZeroUsize) -> Exec<'p>;
 
     // The parallel entries. Each one consumes the token.
     pub fn fork(self, jobs: usize, f: impl Fn(usize, Exec<'_>) + Sync);
@@ -500,6 +505,12 @@ impl<'p> Exec<'p> {
 }
 ```
 
+* `reborrow` gives a token with the same pool and budget while the parent is
+  exclusively borrowed, so one token drives several parallel phases in
+  sequence (a fill, then a copy). `limit` narrows the budget to
+  `min(budget, max)`; the dropped slots stay unused. Policy narrows with
+  `limit` before an entry, for example to the team size a work model chose for
+  `broadcast` or `external`.
 * `fork` runs `jobs` jobs on `t = min(jobs, budget)` tasks. The budget is
   divided among the tasks in shares that differ by at most one and add up to
   the budget; each job receives a child token holding its task's share and may
@@ -517,8 +528,15 @@ impl<'p> Exec<'p> {
   which library receives it (rule 8).
 * `broadcast` is the co-scheduling entry for barrier-bearing kernels: every
   `t < budget` runs concurrently on a distinct worker, or the call is refused
-  before anything runs (`Unavailable`, `WidthExceedsPool`,
-  `WidthExceedsBudget`).
+  before anything runs. It is accepted only for a token that owns its slots
+  outright: one from `new`, or derived from one by `reborrow` or `limit`. A
+  token produced by `fork`, or derived from one, is refused
+  (`Refused::ForkChild`), because its slots may share workers with its
+  siblings; so is a call from a worker of the same pool
+  (`Refused::CallerInPool`), because the caller would occupy a participant.
+  The team size is the budget, narrowed with `limit` beforehand, so there is
+  no width argument to exceed. A caller that is refused takes its
+  barrier-free path.
 * A serial token, a budget of one, or `t == 1` runs inline on the calling
   thread and enters no pool. Otherwise an entry runs inline when the caller is
   already a worker of the token's pool, and enters the pool once when it is
@@ -548,15 +566,17 @@ of merely documented. Each rule names its mechanical check.
    both.
 2. **No implicit global pool.** A token without a pool is serial and runs on the
    calling thread; there is no ambient variant. Each consumer keeps a
-   regression test asserting that `rayon::ThreadPoolBuilder::build_global()` is
-   still unset after its operations, in its own process.
+   regression test asserting that the global Rayon pool is still unset after
+   its operations, in its own process, through
+   `strided_exec::ledger::global_pool_unstarted()` (feature `ledger`), so the
+   test needs no `rayon` dependency of its own.
 3. **Lazy entry.** Nothing enters a pool until an operation concludes that more
    than one task is worth it. Policy chooses `jobs` and `grain` from
    `budget()`; it does not enter the pool to find out. A 1 KiB elementwise call
    stays near 40 ns; an eager `install` costs 4 to 14 µs on the same machine.
 4. **Budgets only shrink.** The constructor clamps the budget to the pool width
-   once. After that a budget is only divided: no callee re-derives, raises or
-   re-clamps it. A unit test asserts that the shares of every split add up to
+   once. After that a budget is only divided (`fork`, `for_ranges`) or narrowed
+   (`limit`): no callee re-derives, raises or re-clamps it. A unit test asserts that the shares of every split add up to
    the parent's budget.
 5. **Per call.** Plans, caches and prepared kernels never store the token. The
    token is not `Clone`, so a stored token could be used only once anyway.
