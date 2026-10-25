@@ -124,8 +124,12 @@ children can run on any worker. The main document explains both.
 
 `strided-exec` knows nothing about faer. It hands over a pool and a width
 through `external`; t4a-faer turns the width into faer's own scheduling, which
-is spindle. How spindle works, and why the region it needs is opened inside
-t4a-faer, is in [spindle.md](./spindle.md).
+is spindle. spindle is confined to t4a-faer: no other tensor4all crate
+depends on it, and a batched caller such as tlinalg splits its batch with the
+token (`for_ranges` with `Par::Seq` items when the batch is at least the
+budget, otherwise `fork` with one `external` per item). How spindle works, and
+why the region it needs is opened inside t4a-faer, is in
+[spindle.md](./spindle.md).
 
 ## Planned: one pool per cache domain
 

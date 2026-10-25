@@ -120,10 +120,19 @@ that was not measured here.
   code inside a region runs on one thread, as the matrix product above shows.
   t4a-faer is therefore to replace the `gemm` crate path on aarch64 with a
   spindle-based kernel (open question 2 of the main document).
-* **A region should not span tensor4all's own kernels.** Widening the region to
-  a whole operation would amortize the opening cost, but strided and tcontract
-  kernels parallelize through `strided-exec`, which uses plain Rayon, and would
-  run on one thread inside it.
+* **spindle stays inside t4a-faer.** No other tensor4all crate depends on
+  spindle or opens a region (rule 13 of the main document, checked with
+  `cargo deny`). Widening a region to a whole operation would amortize the
+  opening cost, but strided and tcontract kernels parallelize through
+  `strided-exec`, which uses plain Rayon, and would run on one thread inside
+  it.
+* **Batches are split outside the region.** tlinalg gives every slot to the
+  batch direction and solves each item with `Par::Seq` when the batch is at
+  least the budget. When the batch is smaller, it forks the token over the
+  items and each item calls t4a-faer through `external` with its share, so
+  each call opens its own region sized to that share. The opening cost, at
+  most about 1.8 µs per item, is small next to an item large enough to be
+  worth parallelizing internally.
 
 Upstream faer's `join_raw` gives both halves `n - n/2` threads, so
 `Par::Rayon(3)` produces 4 leaves there. t4a-faer splits a width into halves
