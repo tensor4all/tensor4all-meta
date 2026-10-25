@@ -967,8 +967,15 @@ Because no Rayon type is public (rule 1), this is a change inside
 
 ### One exec crate and an awake team (candidate)
 
-A candidate, to be adopted only after two benchmarks support it. Until then
-the rules above and "faer and spindle" stand as written.
+A candidate, to be adopted only if both benchmark stages below support it.
+Until then the rules above and "faer and spindle" stand as written. Both stages
+are measured on the M5 Max (macOS, Apple Silicon), since no Linux host is
+available. This leaves unmeasured the x86_64 product path that the stage 1
+feature changes, multi-socket and multi-L3 domains, and Linux thread pinning;
+no numbers for them are claimed here.
+
+Both stages are carried through. Stage 1 makes no decision and does not gate
+stage 2; adoption is decided once, after stage 2, with the stage 1 data.
 
 1. **Stage 1,
    [tensor4all/faer-benchmark#24](https://github.com/tensor4all/faer-benchmark/issues/24).**
@@ -976,11 +983,10 @@ the rules above and "faer and spindle" stand as written.
    whether keeping borrowed workers awake competes with a held spindle group.
    On x86_64 it needs one change in the faer stack: t4a-private-gemm-x86 opens
    `spindle::with_lock` inside every product with more than one thread, so a
-   feature that calls the product directly is added; the default stays. If
-   stage 1 loses, the rest of this subsection is not built.
+   feature that calls the product directly is added; the default stays.
 2. **Stage 2, a later campaign.** This measures the modified t4a-faer
    described below, as an ordinary candidate pair against the baseline fork.
-   Adoption depends on it.
+   Its results, read together with stage 1, decide adoption.
 
 Tracking: [tensor4all/tensor4all-meta#47](https://github.com/tensor4all/tensor4all-meta/issues/47)
 (this document), [tensor4all/faer#59](https://github.com/tensor4all/faer/issues/59)
@@ -1022,13 +1028,14 @@ jobs to the team cost about 0.1 µs.
   The next parallel section reacquires the required members before starting.
   Spinning on one's own pool is a caller-controlled cost, measured with
   several engines as well as one.
-* The team and its loop live in `strided-exec`'s scheduler module. Members
+* The team and its loop live in the scheduler module of `threadteam`. Members
   hold no thread-local state, since they also run other Rayon jobs.
 
 **One exec crate, used by t4a-faer as well.** `threadteam` is the same crate
 as `strided-exec`, evolved into an independent small crate named after
-OpenMP's team of threads and meant for use outside tensor4all as well. It
-carries `Pool`, `Exec`, `fork` and the ledger unchanged, and adds the team.
+OpenMP's team of threads and meant for use outside tensor4all as well. It is
+developed in its own repository, `tensor4all/threadteam-rs`, starting from the
+`strided-exec` crate. It carries `Pool`, `Exec`, `fork` and the ledger unchanged, and adds the team.
 The providers and t4a-faer depend on it in one coordinated release that
 retires the `strided-exec` package name, so no second crate starts tasks.
 t4a-faer is not merged upstream, so it may depend on it.
