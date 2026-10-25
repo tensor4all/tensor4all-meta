@@ -984,6 +984,9 @@ no numbers for them are claimed here.
 * Members spinning during sequential sequences are explained and fixed. CPU
   time reaches 5.6 times wall time on sequences of 32 by 32 GEMMs.
 * A quiet Linux acceptance run passes, including the x86_64 product path.
+* The fork removes its process-wide parallelism setting. High-level methods and
+  solvers take an explicit `Par`, and operator overloads run sequentially (link
+  [tensor4all/faer#61](https://github.com/tensor4all/faer/pull/61)).
 
 **Evidence.** Both stages are measured on the M5 Max (macOS, Apple Silicon).
 
