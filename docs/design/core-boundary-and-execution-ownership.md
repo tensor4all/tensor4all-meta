@@ -1018,6 +1018,10 @@ upstream, so it may depend on it.
   `Team` parallelism to the crate's `fork` and `for_ranges`, so the budget
   bounds faer's own splits. The handle's lifetime is erased inside that shim,
   under one `unsafe` block.
+* `Par::Team` makes the fork incompatible with upstream faer, so t4a-faer is
+  renamed `taer` (packages `taer` and `taer-traits`, library name `taer`) in
+  the same change; until then it stays `t4a-faer`. The MIT notice, Sarah
+  Quiñones's copyright and the statement that it is a fork of faer stay.
 * spindle and the `faer::spindle` re-export are removed.
   t4a-private-gemm-x86 stops opening `with_lock` and sends its two
   `for_each_raw` loops to the crate. On aarch64, faer cuts a large product into
