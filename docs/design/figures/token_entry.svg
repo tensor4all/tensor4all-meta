@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="320" viewBox="0 0 860 320">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="320" fill="#FCFCFA"/>
+<rect x="300" y="10" width="260" height="50" rx="8" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="430.0" y="30.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">exec.fork(n, f) and the</text>
+<text x="430.0" y="48.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">other parallel entries</text>
+<rect x="270" y="85" width="320" height="44" rx="22" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="430.0" y="112.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">serial, budget one, or one task?</text>
+<rect x="240" y="160" width="380" height="44" rx="22" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="430.0" y="187.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">caller already a worker of the token's pool?</text>
+<path d="M 430 60 L 430 83" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 270 107 L 120 107 L 120 238" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="172.65" y="95.0" width="34.7" height="24" rx="4" fill="#FFFFFF"/>
+<text x="190" y="112.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">yes</text>
+<path d="M 430 129 L 430 158" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="416.1" y="132.0" width="27.8" height="24" rx="4" fill="#FFFFFF"/>
+<text x="430" y="149.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">no</text>
+<path d="M 430 204 L 430 238" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="412.65" y="209.0" width="34.7" height="24" rx="4" fill="#FFFFFF"/>
+<text x="430" y="226.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">yes</text>
+<path d="M 620 182 L 740 182 L 740 238" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="666.1" y="170.0" width="27.8" height="24" rx="4" fill="#FFFFFF"/>
+<text x="680" y="187.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">no</text>
+<rect x="20" y="240" width="200" height="64" rx="8" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="120.0" y="267.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="middle">inline</text>
+<text x="120.0" y="288.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1F5A3F" text-anchor="middle">no Rayon call at all</text>
+<rect x="320" y="240" width="220" height="64" rx="8" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="430.0" y="267.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="middle">spawn in place</text>
+<text x="430.0" y="288.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1F5A3F" text-anchor="middle">into the current scope</text>
+<rect x="630" y="240" width="220" height="64" rx="8" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="740.0" y="257.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">enter once and wait</text>
+<text x="740.0" y="278.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">plain thread or</text>
+<text x="740.0" y="296.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">another pool's worker</text>
+</svg>
