@@ -47,9 +47,8 @@ Two more operations keep the slot count without starting tasks. `reborrow`
 lends the token to one phase while the caller keeps it for the next, so a
 kernel that fills and then copies passes `exec.reborrow()` to each step.
 `limit(max)` narrows the budget, for example to the team size a work model
-picked. `broadcast` is accepted only for a token from `new` (or its reborrows
-and limits); a child of `fork` is refused, because its slots may share workers
-with its siblings, and the caller then takes its barrier-free path.
+picked. The cases in which `broadcast` refuses a token are listed with the API
+in the main document.
 
 Splitting can be nested to any depth, and at every level the children's budgets
 add up to the parent's:
@@ -105,41 +104,22 @@ therefore takes its pool by value.
 
 ![Two engines on one pool is not allowed; give each engine its own pool](figures/shared_pool.svg)
 
-## How the rules are checked
+## Rules
 
-| Mechanism | What it prevents | Check |
-| --- | --- | --- |
-| tokens cannot be copied | handing one budget to two children | compile-fail doctest: `Exec` is not `Clone` or `Copy` |
-| only the pool's owner makes tokens | a kernel minting a full-budget token | `new` takes `&Pool`; no accessor returns the pool |
-| splits keep the total | a split that grows the budget | property test: shares add up to the parent's budget |
-| only `strided-exec` depends on Rayon | starting tasks without a token | `cargo deny` with `wrappers` |
-| no Rayon type is public | a scheduler swap breaking callers | `cargo public-api` output contains no `rayon::` |
-| the ledger | anything the above missed | per root token, the peak number of live tasks stays within the budget in every test |
-
-What the token does not bound: a call into faer or a vendor BLAS is a leaf whose
-internal concurrency belongs to that library, and inside one pool a task's
-children can run on any worker. The main document explains both.
+The rules and the check that enforces each one are in the main document,
+"Where placement is decided", together with what the token does not bound.
+This walkthrough does not restate them.
 
 ## faer
 
 `strided-exec` knows nothing about faer. It hands over a pool and a width
-through `external`; t4a-faer turns the width into faer's own scheduling, which
-is spindle. spindle is confined to t4a-faer: no other tensor4all crate
-depends on it, and a batched caller such as tlinalg splits its batch with the
-token (`for_ranges` with `Par::Seq` items when the batch is at least the
-budget, otherwise `fork` with one `external` per item). How spindle works, and
-why the region it needs is opened inside t4a-faer, is in
-[spindle.md](./spindle.md).
+through `external`, and t4a-faer turns the width into faer's own scheduling,
+spindle. How spindle works is in [spindle.md](./spindle.md); where its region is
+opened and how a batched caller splits its batch is in "faer and spindle" of the
+main document.
 
 ## Planned: one pool per cache domain
 
-Many machines have several shared-cache domains. Inside one Rayon pool any
-worker may steal any task, so a pool that spans domains moves data between
-caches. The plan is one Rayon pool per domain, bundled by `Pool`; a `fork`
-splits at domain boundaries first, and each child receives one domain.
-
-![An M5 Max has three cache domains; fork gives each child one domain's pool](figures/cache_domains.svg)
-
-Separate Rayon pools never share a worker, so a child cannot leave its domain at
-any depth. Because no Rayon type is public, this is a change inside
-`strided-exec`.
+A machine with several shared-cache domains can get one Rayon pool per domain,
+bundled by `Pool`, so that a `fork` splits at domain boundaries first. The plan
+is under "Planned work" in the main document.
