@@ -965,6 +965,67 @@ M5 Max, which only operations large enough to span domains pay.
 Because no Rayon type is public (rule 1), this is a change inside
 `strided-exec`; `Exec`, `fork` and every kernel signature stay as they are.
 
+### One exec crate and an awake team (candidate)
+
+A candidate, to be adopted only if
+[tensor4all/faer-benchmark#24](https://github.com/tensor4all/faer-benchmark/issues/24)
+supports it. Until then the rules above and "faer and spindle" stand as written.
+Tracking: [tensor4all/tensor4all-meta#47](https://github.com/tensor4all/tensor4all-meta/issues/47)
+(this document), [tensor4all/faer#59](https://github.com/tensor4all/faer/issues/59)
+(t4a-faer), [tensor4all/faer#56](https://github.com/tensor4all/faer/issues/56)
+(the aarch64 product).
+
+**An awake team instead of spindle regions.** A `Pool` borrows `budget - 1`
+of its Rayon workers as a team and keeps them awake. An idle member first
+checks the team's own dispatch slot, then runs one pending Rayon job
+(`rayon::yield_now()`), and otherwise spins. Rayon work issued inside the
+team, such as a faer fork/join or the `gemm` crate's product, is therefore
+picked up at once instead of starving. A standalone scan on an M5 Max (faer
+0.24.4, 4 threads, not a paired campaign) showed this: the 1024 product ran in
+9.2 ms in the team against 36.6 ms in a spindle region, LU 1024 in 6.3 ms
+against 14.7 ms, and QR 1024 in 11.9 ms against 12.1 ms. A dispatch of four
+jobs to the team cost about 0.1 µs.
+
+* The team belongs to the `Pool`, so it stays awake across operations. A
+  member returns to Rayon after an idle time, 200 ms by default as OpenMP's
+  `KMP_BLOCKTIME`, set through `PoolBuilder`, and the pool can be told to
+  release its team at once, as OpenMP's `omp_pause_resource`. The next
+  parallel section borrows it again. Spinning on one's own pool is acceptable
+  under the ownership of this section, where the caller owns the pool and its
+  cores.
+* The team and its loop live in `strided-exec`'s scheduler module. Members
+  hold no thread-local state, since they also run other Rayon jobs.
+
+**One exec crate, used by t4a-faer as well.** `strided-exec` becomes an
+independent small crate. t4a-faer is not merged upstream, so it may depend on
+it.
+
+* faer's `Par` gains one variant, `Par::Team(handle)`, a `Copy` handle with a
+  width; every other signature stays. `join_raw` and `for_each` dispatch a
+  `Team` parallelism to the crate's `fork` and `for_ranges`, so the budget
+  bounds faer's own splits. The handle's lifetime is erased inside that shim,
+  under one `unsafe` block.
+* spindle and the `faer::spindle` re-export are removed.
+  t4a-private-gemm-x86 stops opening `with_lock` and sends its two
+  `for_each_raw` loops to the crate. On aarch64, faer cuts a large product into
+  tiles and calls `gemm` sequentially per tile.
+* Once no implicit Rayon call remains inside faer, the caller's thread need not
+  be a pool worker. It leads the team: it runs every serial part and its own
+  share of each parallel section, while the members run the rest, like
+  OpenMP's master thread. Until then, `external` enters the pool as today.
+
+**Placement stays with the caller.** The leading thread now computes, so its
+placement matters. A caller that gives an engine a budget of `m` builds the
+pool with `m - 1` workers and pins the leading thread to a core of the same
+cache domain. The crate may offer a helper that computes such a layout; it
+does not pin anything by itself.
+
+**To be shown before adoption.** The comparison in faer-benchmark#24. That
+the handle's lifetime can be confined to the shim, and that faer does not store
+a `Par` beyond a call. That t4a-private-gemm-x86's loops do not assume that all
+participants run at once. That upstream fixes can still be imported with small
+conflicts. And the CPU use of several engines running at once.
+
 ## Settled questions
 
 1. *Should the workspace be separable from the pool?* Not in the first
