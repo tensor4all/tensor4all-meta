@@ -2,23 +2,25 @@
 // data-focus="users" or "backend" dims the layers that page does not cover.
 (function () {
   var GH = "https://github.com/tensor4all/";
+  // Every row is one layer named by its role; every box is one library,
+  // titled with its name and linked to its GitHub repository.
+  var T4A = GH + "tensor4all-rs/tree/main/crates/";
   var ROWS = [
-    { id: "front", kind: "user", label: "Frontends", sub: "how you call it", boxes: [
-      { t: "Tensor4all.jl", d: "Julia frontend", href: GH + "Tensor4all.jl" },
-      { t: "C API, Python", d: "tensor4all-capi, tensor4all-py", href: GH + "tensor4all-rs/tree/main/crates/tensor4all-capi" },
-      { t: "Your Rust code", d: "git dependencies", href: "https://tensor4all.org/tensor4all-rs/" } ] },
-    { id: "algo", kind: "user", label: "tensor4all-rs", sub: "TT, TCI, tree networks", boxes: [
-      { t: "TT and TCI stack", d: "simplett, tensorci, quanticstci", href: GH + "tensor4all-rs" },
-      { t: "Network stack", d: "treetn, itensorlike, treetci", href: GH + "tensor4all-rs" } ] },
-    { id: "tenferro", kind: "backend", label: "tenferro-rs", sub: "tensors, AD, backends", boxes: [
-      { t: "Tensor types", d: "typed, eager and traced", href: "https://tensor4all.org/tenferro-rs/" },
-      { t: "Autodiff", d: "VJP, JVP, HVP", href: GH + "computegraph-rs" },
-      { t: "Backends", d: "CPU, GPU (cubecl), XLA", href: GH + "tenferro-rs" } ] },
-    { id: "prov", kind: "backend", label: "Providers", sub: "contraction, linalg", boxes: [
-      { t: "cpueinsum", d: "N-ary einsum, given order", href: GH + "cpueinsum-rs" },
-      { t: "tcontract", d: "binary contraction, C ABI", href: GH + "tcontract-rs" },
-      { t: "tlinalg, tlinalg-blas", d: "batched SVD, QR, eigh, LU", href: GH + "tlinalg-rs" } ] },
-    { id: "found", kind: "backend", label: "Foundation", sub: "shared types, kernels", boxes: [
+    { id: "front", kind: "user", label: "Frontends", sub: "Julia, C, Python", boxes: [
+      { t: "Tensor4all.jl", d: "Julia frontend, best effort", href: GH + "Tensor4all.jl" },
+      { t: "tensor4all-capi", d: "C API over tensor4all-rs", href: T4A + "tensor4all-capi" },
+      { t: "tensor4all-py", d: "PyO3 prototype", href: T4A + "tensor4all-py" } ] },
+    { id: "algo", kind: "user", label: "Algorithms", sub: "TT, TCI, tree networks", boxes: [
+      { t: "tensor4all-rs", d: "TT and TCI stack, network stack", href: GH + "tensor4all-rs" },
+      { t: "quanticsgrids-rs", d: "quantics grids, coordinates", href: GH + "quanticsgrids-rs" } ] },
+    { id: "tenferro", kind: "backend", label: "Tensor runtime", sub: "tensors, AD, backends", boxes: [
+      { t: "tenferro-rs", d: "tensor types, autodiff, CPU/GPU/XLA", href: GH + "tenferro-rs" },
+      { t: "computegraph-rs", d: "graph IR for traced AD", href: GH + "computegraph-rs" } ] },
+    { id: "prov", kind: "backend", label: "Kernel providers", sub: "contraction, linalg", boxes: [
+      { t: "cpueinsum-rs", d: "N-ary einsum, given order", href: GH + "cpueinsum-rs" },
+      { t: "tcontract-rs", d: "binary contraction, C ABI", href: GH + "tcontract-rs" },
+      { t: "tlinalg-rs", d: "batched SVD, QR, eigh, LU", href: GH + "tlinalg-rs" } ] },
+    { id: "found", kind: "backend", label: "Foundation", sub: "views, dense kernels", boxes: [
       { t: "strided-rs", d: "shared strided view types", href: GH + "strided-rs" },
       { t: "t4a-faer", d: "our fork of faer, pure Rust", href: GH + "faer" },
       { t: "BLAS, LAPACK", d: "vendor library, optional", href: null } ] }
