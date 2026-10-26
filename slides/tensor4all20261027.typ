@@ -1,0 +1,430 @@
+// tensor4all meeting 2026-10-27: overview (top and bottom of the stack)
+// Build: typst compile tensor4all20261027.typ
+
+#set page(
+  paper: "presentation-16-9",
+  margin: (x: 2cm, y: 1.5cm),
+  numbering: "1",
+  footer: context [
+    #h(1fr)
+    #text(size: 14pt, fill: gray)[#counter(page).display()]
+  ],
+)
+
+#set text(font: "Hiragino Sans", size: 18pt)
+
+#let blue = rgb("#1e3a8a")
+#let c-tenferro = rgb("#1e40af")
+#let c-t4rs = rgb("#1e40af")
+#let c-t4jl = rgb("#7b47a8")
+#let c-green = rgb("#475569")
+#let accent = rgb("#c81e1e")
+#let hi(t) = text(fill: accent, weight: "bold")[#t]
+
+#let title-slide(title, subtitle: none, author: none, date: none, acknowledgements: none) = {
+  set align(center + horizon)
+  block[
+    #text(size: 44pt, weight: "bold")[#title]
+    #if subtitle != none { v(0.5em); text(size: 26pt, fill: gray.darken(20%))[#subtitle] }
+    #if author != none { v(1.5em); text(size: 24pt)[#author] }
+    #if date != none { v(0.5em); text(size: 20pt, fill: gray)[#date] }
+    #if acknowledgements != none { v(0.8em); text(size: 13pt, fill: gray)[#acknowledgements] }
+  ]
+}
+
+#let slide(title, tag: none, color: blue, ..blocks) = {
+  let body = blocks.pos().at(0)
+  let refs = blocks.pos().at(1, default: none)
+  pagebreak()
+  block(width: 100%, height: 100%)[
+    #grid(columns: (1fr, auto), align: (left, right + horizon),
+      text(size: 26pt, weight: "bold")[#title],
+      if tag != none {
+        box(fill: color, inset: (x: 10pt, y: 5pt), radius: 4pt, text(size: 13pt, fill: white, weight: "bold")[#tag])
+      })
+    #v(0.6em)
+    #line(length: 100%, stroke: 0.5pt + color)
+    #v(1.0em)
+    #set text(size: 19pt)
+    #set par(leading: 0.6em)
+    #set list(spacing: 0.9em)
+    #body
+    #if refs != none {
+      place(bottom + left, dy: 1.15cm, block(width: 88%, text(size: 11.5pt, fill: gray.darken(30%))[#refs]))
+    }
+  ]
+}
+
+#let code-block(code) = block(fill: rgb("#f1f5f9"), inset: 12pt, radius: 6pt, width: 100%, text(font: "Menlo", size: 13pt)[#code])
+#let note(body) = text(size: 13pt, fill: gray.darken(30%))[#body]
+
+
+
+#let orange = rgb("#1e40af")
+#let node(c: blue, r: 0.32cm) = circle(radius: r, fill: c.lighten(55%), stroke: 1pt + c)
+#let hbar(label, v, maxv, color, txt) = grid(columns: (4.6cm, 1fr), gutter: 8pt, align: horizon,
+  text(size: 15pt)[#label],
+  stack(dir: ltr, spacing: 8pt, rect(width: 9cm * v / maxv, height: 0.55cm, fill: color, radius: 2pt), text(size: 14pt, weight: "bold")[#txt]))
+#let card(title, sub, tagline, color, h: 6.6cm) = block(width: 100%, height: h, fill: color.lighten(90%), stroke: 1pt + color, radius: 6pt, inset: 10pt)[
+  #text(size: 19pt, weight: "bold", fill: color)[#title]
+  #v(2pt)
+  #text(size: 14pt, fill: gray.darken(30%))[#sub]
+  #v(6pt)
+  #text(size: 16pt)[#tagline]
+]
+#let minitree(c, sc: 1.0) = box(width: 4.2cm * sc, height: 2.6cm * sc)[
+  #let n(x, y) = place(top + left, dx: x * sc, dy: y * sc, node(c: c, r: 0.28cm * sc))
+  #let e(x1, y1, x2, y2) = place(top + left, line(start: (x1 * sc, y1 * sc), end: (x2 * sc, y2 * sc), stroke: 1.4pt + c))
+  #e(0.28cm, 1.08cm, 1.68cm, 1.38cm) #e(1.68cm, 1.38cm, 3.28cm, 0.48cm) #e(1.68cm, 1.38cm, 3.28cm, 2.28cm)
+  #n(0cm, 0.8cm) #n(1.4cm, 1.1cm) #n(3cm, 0.2cm) #n(3cm, 2cm)
+]
+#let patches(x, y, w, depth) = {
+  // split cells near the lower-left corner, where the function is hard
+  let hard = x + y < 0.35 * 7cm and depth < 4
+  if hard {
+    let h = w / 2
+    patches(x, y, h, depth + 1); patches(x + h, y, h, depth + 1)
+    patches(x, y + h, h, depth + 1); patches(x + h, y + h, h, depth + 1)
+  } else {
+    place(top + left, dx: x, dy: 7cm - y - w, rect(width: w, height: w, fill: c-t4rs.lighten(70% + 7% * (3 - calc.min(depth, 3))), stroke: 0.6pt + c-t4rs))
+  }
+}
+#let band(label, items, color) = block(width: 100%, fill: color.lighten(88%), stroke: 0.8pt + color, radius: 5pt, inset: 7pt)[
+  #grid(columns: (3.8cm, 1fr), align: horizon, text(size: 14pt, weight: "bold", fill: color)[#label], text(size: 15pt)[#items])]
+
+#let flow(..items) = grid(columns: items.pos().len() * 2 - 1, gutter: 8pt, align: horizon,
+  ..items.pos().enumerate().map(((i, it)) => if i == 0 { (it,) } else { (text(size: 22pt, fill: gray)[→], it) }).flatten())
+#let pill(t, c, w: auto) = block(width: w, fill: c.lighten(88%), stroke: 0.9pt + c, radius: 5pt, inset: 8pt, text(size: 15pt)[#t])
+
+#title-slide(
+  "tensor4all development update",
+  subtitle: "Who contributed, tree methods, and the engine underneath",
+  author: "tensor4all developers",
+  date: "tensor4all meeting, 2026-10-27",
+)
+
+// ---------------------------------------------------------------------
+#slide("Who contributed since September 22")[
+  #set text(size: 16pt)
+  #table(columns: (1.4fr, 3.2fr), stroke: 0.4pt, inset: 5pt,
+    [*Name*], [*Where*],
+    [Samuel Badr], [tensor4all-rs],
+    [Simon Becker], [tensor4all-rs: tree network storage (HDF5)],
+    [Lingrui Cheng], [tensor4all-rs: tree patching, TreeRSI, tree reliability],
+    [Lukas Devos], [tcontract-rs: the original contraction kernels],
+    [Ken Inayoshi], [tensor4all-rs: performance, quantics transform precision],
+    [Martin Mikkelsen], [tlinalg-rs, t4a-faer, tensor4all-rs, tenferro-rs],
+    [Marc K. Ritter], [AlternatingCrossInterpolation.jl],
+    [Rihito Sakurai], [tensor4all-rs: TCI pivot search fixes],
+    [Hiroshi Shinaoka], [most repositories],
+    [Satoshi Terasaki], [tenferro-rs, tenferro-benchmark, CI bot],
+    [Ryo Watanabe], [t4a-faer],
+  )
+][
+  Commit authors and co-authors on the default branches of tensor4all repositories, 2026-09-22 to 2026-10-27, alphabetical. Also upstream faer authors (via sync) and AI coding agents under human review.
+]
+
+// ---------------------------------------------------------------------
+#slide("Five weeks at a glance")[
+  #grid(columns: (1fr, 1fr, 1fr), gutter: 12pt,
+    align(center)[#text(size: 44pt, weight: "bold", fill: blue)[11] \ #text(size: 15pt)[people committed]],
+    align(center)[#text(size: 44pt, weight: "bold", fill: blue)[33] \ #text(size: 15pt)[repositories touched]],
+    align(center)[#text(size: 44pt, weight: "bold", fill: blue)[15] \ #text(size: 15pt)[new public repositories]])
+  #v(1em)
+  #grid(columns: (1fr, 1fr, 1fr), gutter: 12pt,
+    pill([*Top*: tree methods in tensor4all-rs], c-t4rs),
+    pill([*Middle*: tenferro engine and a new GPU path], c-tenferro),
+    pill([*Bottom*: kernels split out of tenferro], orange))
+][
+  New repositories include tcontract-rs, cpueinsum-rs, tlinalg-rs, the faer fork, t4a-cuda-kernels, t4a-gpu-backend, threadteam-rs and their benchmark repositories.
+]
+
+// ---------------------------------------------------------------------
+#slide("The stack")[
+  #band("Frontends", [tensor4all-rs · Tensor4all.jl · tensor4all-py], c-t4rs)
+  #v(2pt)
+  #band("Algorithms", [tensor trains, trees, TCI, patching, quantics], c-t4rs)
+  #v(2pt)
+  #band("Tensor runtime", [tenferro-rs: tensors, autodiff, CPU and GPU], c-tenferro)
+  #v(2pt)
+  #band("Kernel providers", [*cpueinsum-rs · tcontract-rs · tlinalg-rs*], orange)
+  #v(2pt)
+  #band("Foundation", [*strided-rs · t4a-faer*], orange)
+  #v(0.3em)
+  #grid(columns: (1fr, 1fr, 1fr),
+    text(fill: c-t4rs, weight: "bold")[Top: what users call],
+    text(fill: c-tenferro, weight: "bold")[Middle: the runtime],
+    text(fill: orange, weight: "bold")[Bottom: the engine])
+][
+  Interactive version: tensor4all.org/tensor4all-meta/stack/
+]
+
+// =====================================================================
+#slide("Top: adaptive patching on trees", tag: "tensor4all-rs", color: c-t4rs)[
+  Published for tensor trains; #hi[Lingrui Cheng extended it to trees.]
+  #v(0.4em)
+  #grid(columns: (6.4cm, 1fr), gutter: 28pt, align: horizon,
+    box(width: 6cm, height: 6cm, scale(85.7%, reflow: true, box(width: 7cm, height: 7cm, patches(0cm, 0cm, 7cm, 0)))),
+    [
+      - Split the domain *only where the function is hard*
+      - Every patch is a small tree with the same shape
+      - Works for chains and branched trees alike
+      #v(0.6em)
+      #note[On one test the patched run was slower and less accurate than a single network. When patching pays off is still open.]
+    ])
+][
+  G. Grosso, M. K. Ritter, S. Rohshap, S. Badr, A. Kauch, M. Wallerberger, J. von Delft, H. Shinaoka, Adaptive patching for tensor train computations, arXiv:2602.22372. Trees: tensor4all-rs PR #900.
+]
+
+// ---------------------------------------------------------------------
+#slide("Top: patches in parallel", tag: "tensor4all-rs", color: c-t4rs)[
+  #align(center)[
+    #flow(pill([one big problem], c-t4rs), pill([many independent patches], c-t4rs), pill([hataori: threads or MPI ranks], c-green), pill([one result], c-t4rs))
+  ]
+  #v(1em)
+  - Patches are independent, so they can run on different cores or nodes
+  - *hataori-rs* hands out the work; each worker uses its own tenferro engine
+  - Chains and trees share one implementation; the chain-only crate was removed
+  #v(0.5em)
+  #note[Tested for correctness on 1 and 2 MPI ranks. Scaling not measured yet.]
+][
+  tensor4all-rs PRs #1005, #1009; hataori-rs PRs #25, #27.
+]
+
+// ---------------------------------------------------------------------
+#slide("Top: TreeRSI, multiplying two trees", tag: "tensor4all-rs", color: c-t4rs)[
+  Published for tensor trains; #hi[Lingrui Cheng extended it to trees.]
+  #v(0.4em)
+  #align(center)[
+    #grid(columns: 5, gutter: 14pt, align: horizon,
+      minitree(c-t4rs), text(size: 30pt)[×], minitree(c-tenferro), text(size: 30pt, fill: gray)[→], minitree(c-green))
+    #grid(columns: (4.2cm, 1cm, 4.2cm, 1.3cm, 4.2cm), gutter: 14pt,
+      text(size: 14pt)[tree A], [], text(size: 14pt)[tree B], [], text(size: 14pt)[A·B, already small])
+  ]
+  #v(1em)
+  - Element-by-element product of two trees, compressed in one pass
+  - Checked against the original authors' code, with the same random numbers
+][
+  Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, Recursive sketched interpolation: efficient Hadamard products of tensor trains, arXiv:2602.17974.
+]
+
+// ---------------------------------------------------------------------
+#slide("Top: other fixes in tensor4all-rs", tag: "tensor4all-rs", color: c-t4rs)[
+  #grid(columns: (1fr, 1fr), gutter: 12pt,
+    card("Convergence reports", "Lingrui Cheng", [Says "rank limit reached" instead of a false "converged".], c-t4rs, h: 4.7cm),
+    card("TCI pivots", "Rihito Sakurai", [Pivot search no longer stops at zero residuals or forgets good moves.], c-t4rs, h: 4.7cm),
+    card("Speed", "Ken Inayoshi, Martin Mikkelsen", [Fewer copies in core loops; column-major grids in TCI.], c-t4rs, h: 4.7cm),
+    card("Storage", "Simon Becker", [Tree networks saved to HDF5 keep their canonical form.], c-t4rs, h: 4.7cm))
+][
+  Full details of the tree work: slides/tensor4all20261027-lingrui-cheng.pdf
+]
+
+// ---------------------------------------------------------------------
+#slide("Top: what comes next", tag: "tensor4all-rs", color: c-t4rs)[
+  #grid(columns: (1fr, 1fr, 1fr), gutter: 12pt,
+    card("Patched products", hi[biggest gap], [Multiply two patched operators (MPO-MPO) end to end.], c-t4rs, h: 7.2cm),
+    card("Error checks", "cheaper and safer", [Catch local errors that sampling misses, at lower cost; fix remaining TreeACI convergence issues.], c-t4rs, h: 7.2cm),
+    card("Scaling", "not measured yet", [Run the MPI patching at scale and measure.], c-t4rs, h: 7.2cm))
+][
+  Source: Lingrui Cheng's slides, "Remaining work".
+]
+
+// =====================================================================
+#slide("Middle: you hold the engine", tag: "tenferro-rs", color: c-tenferro)[
+  #align(center)[
+    #flow(pill([your program], gray), pill([creates an *engine*: threads, memory, GPU stream], c-tenferro), pill([prepare once], c-tenferro), pill([run many times], c-tenferro))
+  ]
+  #v(1em)
+  - The engine is an ordinary value: you create it and pass it to each call
+  - Two engines can run side by side, for example one per MPI rank or per patch
+  - Small operations stay on the calling thread
+  #v(0.5em)
+  #note[This is a breaking change; the old session API was removed.]
+][
+  tenferro-rs #2206, PR #2209.
+]
+
+// ---------------------------------------------------------------------
+#slide("Middle: a new GPU path", tag: "tenferro-rs", color: c-tenferro)[
+  #grid(columns: (1fr, 1fr), gutter: 24pt, align: horizon,
+    [
+      #pill([#align(center)[tenferro GPU engine]], c-tenferro, w: 100%)
+      #v(4pt)
+      #align(center)[#text(size: 20pt, fill: gray)[↓]]
+      #grid(columns: (1fr, 1fr), gutter: 6pt,
+        pill([*t4a-cuda-kernels* \ our own CUDA kernels, C ABI], orange, w: 100%),
+        pill([*cuBLAS, cuTENSOR* \ vendor libraries], gray, w: 100%))
+      #v(4pt)
+      #pill([#align(center)[*t4a-gpu-backend*: streams, memory, launches]], orange, w: 100%)
+    ],
+    [
+      - Replaces the earlier CubeCL-based CUDA path
+      - The kernels use no tenferro types, so other CUDA codes can call them
+      - Matrix products via cuBLAS, contractions via cuTENSOR
+      - Migration is in progress, piece by piece; tested on an A100
+    ])
+][
+  tenferro-rs #2208, PRs #2250 to #2263; t4a-cuda-kernels; t4a-gpu-backend.
+]
+
+// =====================================================================
+#slide("Bottom: one engine, many callers", tag: "engine", color: orange)[
+  #grid(columns: (1fr, auto, 1fr), gutter: 12pt, align: horizon,
+    stack(spacing: 4pt, ..("Rust: tenferro", "Julia", "Python", "C, Fortran codes").map(t =>
+      block(width: 100%, fill: c-tenferro.lighten(88%), stroke: 0.8pt + c-tenferro, radius: 4pt, inset: 5pt, text(size: 14pt)[#t]))),
+    text(size: 26pt, fill: gray)[→ \ #text(size: 12pt)[C API]],
+    block(width: 100%, fill: orange.lighten(88%), stroke: 1.2pt + orange, radius: 6pt, inset: 12pt)[
+      #text(size: 18pt, weight: "bold", fill: orange)[Engine]
+      #v(4pt)
+      #text(size: 16pt)[tcontract · cpueinsum · tlinalg · t4a-faer]
+    ])
+  #v(0.5em)
+  Started with *Lukas Devos* (CCQ, developer of TensorKit.jl) and his Rust prototype.
+  #v(0.4em)
+  - *Julia:* call precompiled kernels, less precompile time (future)
+  - Fast kernels are too much work for one group to maintain
+  - #hi[We want to maintain them together with other groups]
+]
+
+// ---------------------------------------------------------------------
+#slide("Middle: tenferro-benchmark", tag: "tenferro-rs", color: c-tenferro)[
+  #set text(size: 16pt)
+  #align(center)[
+    #flow(pill([tenferro main], gray), pill([CPU: every night, Linux and macOS \ GPU: A100, every weekend], c-tenferro), pill([PyTorch, JAX, Julia, HPTT, cuTENSOR], c-tenferro), pill([dashboard], gray))
+  ]
+  #v(0.6em)
+  - Runs start automatically from GitHub Actions; the GPU runs use rented A100s
+  - Raw data and settings for every run are kept in the repository
+  - Example, A100, a tensor network contraction (f32): tenferro 49 ms, PyTorch 111 ms
+  - Dashboard: tensor4all.org/tenferro-benchmark
+][
+  github.com/tensor4all/tenferro-benchmark; example from result/nvidia-gpu/gpu/tensornetwork.md, 2026-10-24, tenferro 06ac247. Most changes since September 22 by Satoshi Terasaki.
+]
+
+// ---------------------------------------------------------------------
+#slide("Bottom: four libraries", tag: "engine", color: orange)[
+  #grid(columns: (1fr, 1fr, 1fr, 1fr), gutter: 10pt,
+    card("tcontract-rs", "multiply two tensors", [From *Lukas Devos's prototype*. C API follows *TAPP*.], orange),
+    card("cpueinsum-rs", "multiply many tensors", [*Cut out of tenferro.* Lower per-step overhead.], orange),
+    card("tlinalg-rs", "SVD, QR, LU, eigen", [Thin layer over t4a-faer. *Batch* API like PyTorch.], orange),
+    card("t4a-faer", "fork of faer", [New parallel model, bug fixes, *AI-driven* optimization.], orange))
+  #v(0.8em)
+  #text(size: 15pt, fill: gray.darken(30%))[All four now on crates.io and used by tenferro.]
+]
+
+// ---------------------------------------------------------------------
+#slide("Bottom: tcontract-rs, no copies", tag: "engine", color: orange)[
+  #align(center)[
+    #flow(pill([A, B with any strides], gray), pill([packed straight into small tiles], orange), pill([fast inner kernel (AVX, NEON)], orange), pill([D = A·B + C], gray))
+  ]
+  #v(1em)
+  - No transpose or copy of the inputs first
+  - f32, f64 and complex; batch indices, traces, conjugation
+  - C API follows *TAPP*, a community standard for tensor products
+  - One shared library, `libtcontract_capi`, for any language with a C FFI
+][
+  TAPP: arXiv:2601.07827. tcontract-rs README.
+]
+
+// ---------------------------------------------------------------------
+#slide("Bottom: cpueinsum-rs, a whole einsum", tag: "engine", color: orange)[
+  #align(center)[
+    #flow(pill([a, b, c, d], gray), pill([step 1: a·b], orange), pill([step 2: (ab)·c], orange), pill([step 3: ...·d], orange), pill([result], gray))
+  ]
+  #v(1em)
+  - *You* choose the order; cpueinsum plans every step once
+  - One reusable scratch buffer for all the intermediates
+  - Not included: order search, `"ij,jk->ik"` strings, GPUs
+  - Usable without tenferro
+]
+
+// ---------------------------------------------------------------------
+#slide("Bottom: batches of small matrices", tag: "engine", color: orange)[
+  #grid(columns: (1fr, 1fr), gutter: 24pt,
+    [
+      #text(size: 16pt, weight: "bold")[Many small matrices]
+      #v(6pt)
+      #grid(columns: (1fr, 1fr, 1fr, 1fr), gutter: 5pt,
+        ..range(4).map(i => block(fill: orange.lighten(88%), stroke: 0.8pt + orange, radius: 4pt, inset: 6pt, width: 100%)[
+          #align(center)[#text(size: 12pt, weight: "bold")[worker #(i+1)] \ #text(size: 20pt)[▦▦▦▦]]]))
+      #v(4pt)
+      #text(size: 15pt)[each worker takes whole matrices]
+    ],
+    [
+      #text(size: 16pt, weight: "bold")[One big matrix]
+      #v(6pt)
+      #block(fill: rgb("#dbeafe"), stroke: 0.8pt + blue, radius: 4pt, inset: 6pt, width: 100%)[
+        #align(center)[#text(size: 12pt, weight: "bold")[all workers] \ #text(size: 20pt)[▩▩▩▩]]]
+      #v(4pt)
+      #text(size: 15pt)[workers share one matrix]
+    ])
+  #v(1.2em)
+  For small matrices, splitting #hi[across the batch] can beat splitting inside one matrix. tlinalg picks automatically.
+][
+  tlinalg-rs. Rule today: matrix at most 64 by 64, and at least one matrix per worker.
+]
+
+// ---------------------------------------------------------------------
+#slide("Bottom: t4a-faer", tag: "engine", color: orange)[
+  #grid(columns: (1fr, 1fr, 1fr), gutter: 12pt,
+    card("Fork of faer", "dense linear algebra in Rust", [We use it for fast experiments, mostly run by AI agents.], orange),
+    card("What we changed", "", [Parallel model, bug fixes, faster QR and LU paths.], orange),
+    card("Experiment log", "PATCHSET.md", [Each change is recorded as kept or dropped, with the reason.], orange))
+][
+  faer by Sarah Quiñones. Our fork: github.com/tensor4all/faer, crates.io t4a-faer.
+]
+
+// ---------------------------------------------------------------------
+#slide("Bottom: faer-benchmark", tag: "engine", color: orange)[
+  #align(center)[
+    #flow(pill([every commit of the fork], gray), pill([same machine, same protocol], orange), pill([fork vs upstream faer vs MKL, OpenBLAS], orange), pill([public pages], gray))
+  ]
+  #v(1em)
+  - Nine families: GEMM, LU, Cholesky, QR, SVD, eigenvalues, ...
+  - Each result is tied to a commit and a machine; results from older commits are marked
+  - An unchanged control row checks the machine; if it moves, the result is not accepted
+  - Raw data, scripts and every run's settings are in the repository
+][
+  github.com/tensor4all/faer-benchmark. Sibling repositories: tlinalg-benchmark, tcontract-benchmark, cpueinsum-benchmark, tenferro-benchmark.
+]
+
+// ---------------------------------------------------------------------
+#slide("Bottom: QR factorization, 1 vs 8 threads", tag: "engine", color: orange)[
+  #align(center)[#image("figures/faer-qr-factor-1t-8t.svg", height: 7.6cm)]
+  #v(0.2em)
+  #set text(size: 16pt)
+  #grid(columns: (1fr, 1fr), gutter: 20pt,
+    [*1 thread:* our fork beats upstream faer and MKL.],
+    [*8 threads:* MKL still leads. #hi[Parallel scaling is the next target.]])
+][
+  faer-benchmark, AMD Zen 5, f64, nominal GFLOP/s ($4n^3\/3$); fork 50c2b98 (n = 1024: a5e6b7d) vs upstream faer 0.24.4. QR with an explicit Q shows the same trend. Provisional: development host.
+]
+
+// ---------------------------------------------------------------------
+#slide("Benchmarks on a schedule")[
+  #v(0.3em)
+  #align(center)[#text(size: 20pt)[AI agents write most of this code. \ #hi[Public, repeatable benchmarks let others check the results.]]]
+  #v(0.8em)
+  - tenferro-benchmark already runs on a schedule: CPU every night, A100 every weekend
+  - faer-benchmark runs on a development host for now; a dedicated machine will rerun it regularly
+  - We will show the trends at these meetings
+]
+
+// ---------------------------------------------------------------------
+#slide("Discussion")[
+  - *Top:* which tree workloads should we test with real users?
+  - *Middle:* who needs the GPU path first?
+  - *Bottom:* who else wants to share the kernels with us?
+  - *t4a-faer:* send our fixes back to upstream faer?
+]
+
+// ---------------------------------------------------------------------
+#slide("References")[
+  #set text(size: 14pt)
+  - Tree methods in detail (Lingrui Cheng): `slides/tensor4all20261027-lingrui-cheng.pdf` and its notes
+  - Adaptive patching: G. Grosso et al., arXiv:2602.22372
+  - RSI: Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, arXiv:2602.17974
+  - TAPP: arXiv:2601.07827
+  - Stack map: tensor4all.org/tensor4all-meta/stack/
+  - Code: github.com/tensor4all (tensor4all-rs, tenferro-rs, tcontract-rs, cpueinsum-rs, tlinalg-rs, faer)
+]
