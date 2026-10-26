@@ -183,3 +183,5 @@ footer .inner { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; }
   .topbar { position: static; }
   .topbar nav { gap: 4px 14px; }
 }
+.sm-link .sm-title { fill: var(--accent); }
+.sm-link:hover .sm-title { text-decoration: underline; }
