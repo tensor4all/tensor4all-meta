@@ -340,28 +340,15 @@
 
 // ---------------------------------------------------------------------
 #slide("Bottom: batches of small matrices", tag: "engine", color: orange)[
-  #grid(columns: (1fr, 1fr), gutter: 24pt,
-    [
-      #text(size: 16pt, weight: "bold")[Many small matrices]
-      #v(6pt)
-      #grid(columns: (1fr, 1fr, 1fr, 1fr), gutter: 5pt,
-        ..range(4).map(i => block(fill: orange.lighten(88%), stroke: 0.8pt + orange, radius: 4pt, inset: 6pt, width: 100%)[
-          #align(center)[#text(size: 12pt, weight: "bold")[worker #(i+1)] \ #text(size: 20pt)[▦▦▦▦]]]))
-      #v(4pt)
-      #text(size: 15pt)[each worker takes whole matrices]
-    ],
-    [
-      #text(size: 16pt, weight: "bold")[One big matrix]
-      #v(6pt)
-      #block(fill: rgb("#dbeafe"), stroke: 0.8pt + blue, radius: 4pt, inset: 6pt, width: 100%)[
-        #align(center)[#text(size: 12pt, weight: "bold")[all workers] \ #text(size: 20pt)[▩▩▩▩]]]
-      #v(4pt)
-      #text(size: 15pt)[workers share one matrix]
-    ])
-  #v(1.2em)
-  For small matrices, splitting #hi[across the batch] can beat splitting inside one matrix. tlinalg picks automatically.
+  Like PyTorch, tlinalg takes a *batch*: many matrices of the same shape in one call.
+  #v(0.6em)
+  With 4 threads there are two ways to run it:
+  + Give each thread its own share of the batch, a contiguous block of matrices.
+  + Factorize the matrices one by one, each with all 4 threads.
+  #v(0.6em)
+  For small matrices the threads in the second way spend most of their time coordinating, so #hi[the first way is faster]. By default tlinalg picks the way itself; a caller can also fix it.
 ][
-  tlinalg-rs. Rule today: matrix at most 64 by 64, and at least one matrix per worker.
+  tlinalg-rs 0.6. The default policy estimates each matrix's work and splits the batch across threads only when that repays the cost of starting them.
 ]
 
 // ---------------------------------------------------------------------
