@@ -1,6 +1,7 @@
 import re,sys
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 src="/Users/hiroshi/projects/tensor4all/faer-benchmark/result/zen5-cpu/faer-kernels/throughput/throughput-qr_factor-v2.md"
 blocks=[];cur=None
 for l in open(src):
@@ -16,9 +17,14 @@ for ax,(b,title) in zip(axs,[(blocks[0],"1 thread"),(blocks[2],"8 threads")]):
     ax.plot(ns,[b[n][1] for n in ns],"--o",color="#94a3b8",lw=1.8,ms=4,label="upstream faer")
     ax.plot(ns,[b[n][2] for n in ns],"-^",color="#111827",lw=1.6,ms=5,label="MKL")
     ax.set_xscale("log",base=2); ax.set_yscale("log")
-    tk=[n for n in ns if n!=96]; ax.set_xticks(tk); ax.set_xticklabels([str(n) for n in tk]); ax.minorticks_off()
+    tk=[n for n in ns if n!=96]; ax.set_xticks(tk); ax.set_xticklabels([str(n) for n in tk]); ax.xaxis.set_minor_locator(matplotlib.ticker.FixedLocator([48, 80, 96, 112, 192, 384, 768]))
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+    ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10))
+    ax.yaxis.set_minor_locator(matplotlib.ticker.LogLocator(base=10, subs=range(2, 10)))
+    ax.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+    ax.tick_params(which="minor", length=4)
     ax.set_title(title,fontsize=18,fontweight="bold",loc="left")
-    ax.set_xlabel("matrix size n"); ax.grid(alpha=.25)
+    ax.set_xlabel("matrix size n"); ax.grid(alpha=.25); ax.grid(axis="y", which="minor", alpha=.12)
     for s in ("top","right"): ax.spines[s].set_visible(False)
 axs[0].set_ylabel("GFLOP/s (nominal)")
 axs[0].legend(frameon=False,loc="upper left")
