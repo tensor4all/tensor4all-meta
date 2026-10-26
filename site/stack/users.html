@@ -31,7 +31,7 @@
     <li><a href="#start">Getting started</a></li>
     <li><a href="#underneath">What runs underneath</a></li>
     <li><a href="#parallel">Parallel runs with hataori</a></li>
-    <li><a href="#maturity">Maturity and help</a></li>
+    <li><a href="#help">Getting help</a></li>
   </ol>
 </aside>
 <main>
@@ -39,7 +39,6 @@
     <p class="eyebrow">Guide A</p>
     <h1>The stack for tensor network users</h1>
     <p class="lead">You work with quantics tensor trains, tensor cross interpolation or tree tensor networks. This guide tells you which tensor4all-rs crate does what, how it lines up with the Julia packages you may know, and how much of the backend you need to care about (very little).</p>
-    <p class="asof">Status as of 2026-10-13.</p>
   </section>
 
   <figure class="figure">
@@ -103,7 +102,7 @@
   <p>They coexist on purpose. Converting between them is the job of a single bridge in <code>tensor4all-treetn</code>: <code>tensor_train_to_treetn</code> and <code>treetn_to_tensor_train</code> (with variants that set node names and site indices). A common pattern is to learn a QTT with quantics TCI, move it to the network stack, then apply operators and contract there.</p>
 
   <h2 id="start">Getting started</h2>
-  <p>The crates are not on crates.io yet. Add them as git dependencies; pin a revision with <code>rev = "..."</code> for reproducible runs.</p>
+  <p>Add the crates as git dependencies; pin a revision with <code>rev = "..."</code> for reproducible runs.</p>
   <pre><code>[dependencies]
 tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-simplett" }
 tensor4all-quanticstci = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-quanticstci" }</code></pre>
@@ -137,7 +136,7 @@ let integral = qtci.integral().unwrap();</code></pre>
   <ul>
     <li><strong>Julia:</strong> <a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a> (best effort, see above). Its build step compiles tensor4all-rs for you.</li>
     <li><strong>C:</strong> <code>tensor4all-capi</code> exposes indices, tensors, tree tensor networks and quantics materialization through a small FFI surface.</li>
-    <li><strong>Python:</strong> <code>tensor4all-py</code> is an early PyO3 prototype forwarding to the core, tree network, tree TCI and quantics TCI crates.</li>
+    <li><strong>Python:</strong> <code>tensor4all-py</code> is a PyO3 binding forwarding to the core, tree network, tree TCI and quantics TCI crates.</li>
   </ul>
 
   <h2 id="underneath">What runs underneath</h2>
@@ -152,14 +151,9 @@ let integral = qtci.integral().unwrap();</code></pre>
 
   <h2 id="parallel">Parallel runs with hataori</h2>
   <p>Many tensor network studies are embarrassingly parallel at the outer level: a parameter scan, a set of momenta, independent patches. <a href="https://tensor4all.org/hataori-rs/">hataori</a> provides <code>map</code> and a dynamically scheduled <code>pmap</code> (in the spirit of Distributed.jl) over serial, Rayon, MPI and hybrid MPI plus threads execution. Its MPI support can load the MPI library at run time, so the same binary can share the MPI installation used by MPI.jl or mpi4py.</p>
-  <p>hataori owns the processes and threads, and lends them to each task through the same explicit contexts described above, so outer and inner parallelism do not fight over cores. Adapters for tenferro and tensor4all exist in the hataori repository. The synchronous <code>map</code> and <code>pmap</code> are usable today; the asynchronous runtime is still under development.</p>
+  <p>hataori owns the processes and threads, and lends them to each task through the same explicit contexts described above, so outer and inner parallelism do not fight over cores. Adapters for tenferro and tensor4all exist in the hataori repository.</p>
 
-  <h2 id="maturity">Maturity and help</h2>
-  <ul>
-    <li><strong>Stable enough to build on:</strong> TT and TCI, quantics TCI, quantics operators, tree network contraction and compression. APIs can still change between revisions, so pin one.</li>
-    <li><strong>Experimental:</strong> tree ACI and RSI, CUDA contraction, the Python bindings.</li>
-    <li><strong>Deprecated:</strong> <code>tensor4all-partitionedtt</code>; use <code>tensor4all-partitionedtreetn</code>.</li>
-  </ul>
+  <h2 id="help">Getting help</h2>
   <p>Using a coding agent? Install the tensor4all-rs agent skill, which teaches it the crate map and conventions:</p>
   <pre><code>npx skills add tensor4all/tensor4all-rs --skill use-tensor4all-rs -g</code></pre>
   <p>A machine oriented index of the documentation is in <a href="https://github.com/tensor4all/tensor4all-rs/blob/main/llms.txt">llms.txt</a>. Questions and bug reports go to the <a href="https://github.com/tensor4all/tensor4all-rs/issues">tensor4all-rs issue tracker</a>. If you publish results, please read the <a href="https://github.com/tensor4all/tensor4all-rs/blob/main/docs/PROVENANCE_AND_CITATION_POLICY.md">citation policy</a>, which asks you to cite the algorithm papers your work relies on.</p>

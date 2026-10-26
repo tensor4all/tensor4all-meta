@@ -26,7 +26,6 @@
     <p class="eyebrow">Stack overview</p>
     <h1>The tensor4all Rust stack</h1>
     <p class="lead">A family of Rust libraries for tensor networks (quantics tensor trains, tensor cross interpolation, tree tensor networks) and the dense tensor backend they run on. This page shows how the pieces fit together and where to start reading.</p>
-    <p class="asof">Status as of 2026-10-13. The stack moves quickly; each repository's README is the source of truth.</p>
   </section>
 
   <div class="cards">
@@ -53,7 +52,7 @@
 
   <h2 id="layers">The layers in brief</h2>
   <ul>
-    <li><strong>Frontends.</strong> Rust programs use tensor4all-rs directly as a git dependency. <a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a> is a Julia frontend over the C API, maintained on a best effort basis for light use and teaching. A thin Python prototype (<code>tensor4all-py</code>) also exists.</li>
+    <li><strong>Frontends.</strong> Rust programs use tensor4all-rs directly. <a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a> is a Julia frontend over the C API, maintained on a best effort basis for light use and teaching. Python bindings (<code>tensor4all-py</code>) live in the tensor4all-rs repository.</li>
     <li><strong>Algorithms.</strong> <a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a> holds the algorithms: tensor trains, TCI, quantics grids and operators, tree tensor networks, patching, HDF5 I/O. It keeps two stacks on purpose (a TT and TCI stack and a network stack) with an explicit bridge between them. Grid and coordinate conversion lives in the standalone <a href="https://github.com/tensor4all/quanticsgrids-rs">quanticsgrids-rs</a>.</li>
     <li><strong>Tensor runtime.</strong> <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a> is the tensor runtime: typed and dynamic tensors, eager and traced automatic differentiation, and CPU, GPU and XLA backends. tensor4all-rs reaches it through one adapter crate. <a href="https://github.com/tensor4all/computegraph-rs">computegraph-rs</a> supplies the graph IR that traced AD builds on.</li>
     <li><strong>Kernel providers.</strong> Tensor-free numerical libraries that tenferro calls: <a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> for N-ary einsum, <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> for binary contraction over arbitrary strides, and <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> for batched factorizations. They take borrowed strided views and an explicit execution context, so they are usable on their own, including from C.</li>
@@ -61,22 +60,22 @@
     <li><strong>Beside the stack.</strong> <a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a> provides data-parallel map and pmap over serial, Rayon, MPI and hybrid execution. Since no layer in the stack owns a global thread pool, hataori is where pools and MPI ranks come from.</li>
   </ul>
 
-  <h2 id="repos">Repositories and release status</h2>
-  <p>Several layers are not on crates.io yet. Where a crate is unpublished, use it as a git dependency pinned to a revision.</p>
+  <h2 id="repos">Repositories</h2>
+  <p>Each repository's README says how to depend on it.</p>
   <div class="table-wrap"><table>
-    <thead><tr><th>Repository</th><th>Role</th><th>Release</th><th>Docs</th></tr></thead>
+    <thead><tr><th>Repository</th><th>Role</th><th>Docs</th></tr></thead>
     <tbody>
-      <tr><td><a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a></td><td>TT, TCI, QTT, tree tensor networks, C API</td><td><span class="pill wip">git only</span></td><td><a href="https://tensor4all.org/tensor4all-rs/">user guide</a></td></tr>
-      <tr><td><a href="https://github.com/tensor4all/quanticsgrids-rs">quanticsgrids-rs</a></td><td>quantics grids and coordinate conversion</td><td><span class="pill ok">crates.io</span> main is ahead</td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a></td><td>Julia frontend, best effort</td><td><span class="pill wip">git only</span></td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a></td><td>tensor runtime, autodiff, backends</td><td><span class="pill ok">crates.io</span> main is ahead</td><td><a href="https://tensor4all.org/tenferro-rs/">docs</a></td></tr>
-      <tr><td><a href="https://github.com/tensor4all/computegraph-rs">computegraph-rs</a></td><td>graph IR used by traced AD</td><td><span class="pill ok">crates.io</span></td><td>rustdoc</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum-rs</a></td><td>N-ary einsum with caller-supplied order</td><td><span class="pill wip">git only</span></td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/tcontract-rs">tcontract-rs</a></td><td>binary strided contraction, TAPP C ABI</td><td><span class="pill wip">git only</span></td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/tlinalg-rs">tlinalg-rs</a></td><td>batched SVD, QR, LU, Cholesky, eigensolvers</td><td><span class="pill wip">git only</span></td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/strided-rs">strided-rs</a></td><td>strided view types, permutation, kernels</td><td><span class="pill ok">crates.io</span></td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/faer">t4a-faer</a></td><td>tensor4all fork of <a href="https://github.com/sarah-quinones/faer-rs">faer</a> by Sarah Quinones, tuned for the stack</td><td><span class="pill ok">crates.io (t4a-faer)</span></td><td><a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a></td></tr>
-      <tr><td><a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a></td><td>map and pmap over Rayon and MPI</td><td><span class="pill wip">git only</span></td><td><a href="https://tensor4all.org/hataori-rs/">docs</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a></td><td>TT, TCI, QTT, tree tensor networks, C API</td><td><a href="https://tensor4all.org/tensor4all-rs/">user guide</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/quanticsgrids-rs">quanticsgrids-rs</a></td><td>quantics grids and coordinate conversion</td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a></td><td>Julia frontend, best effort</td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a></td><td>tensor runtime, autodiff, backends</td><td><a href="https://tensor4all.org/tenferro-rs/">docs</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/computegraph-rs">computegraph-rs</a></td><td>graph IR used by traced AD</td><td>rustdoc</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum-rs</a></td><td>N-ary einsum with caller-supplied order</td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tcontract-rs">tcontract-rs</a></td><td>binary strided contraction, TAPP C ABI</td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tlinalg-rs">tlinalg-rs</a></td><td>batched SVD, QR, LU, Cholesky, eigensolvers</td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/strided-rs">strided-rs</a></td><td>strided view types, permutation, kernels</td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/faer">t4a-faer</a></td><td>tensor4all fork of <a href="https://github.com/sarah-quinones/faer-rs">faer</a> by Sarah Quinones, tuned for the stack</td><td><a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a></td><td>map and pmap over Rayon and MPI</td><td><a href="https://tensor4all.org/hataori-rs/">docs</a></td></tr>
     </tbody>
   </table></div>
   <p>Benchmarks are kept in separate repositories so results can be keyed by commit and hardware: <a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a>, <a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a>, <a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a> and <a href="https://github.com/tensor4all/tensor4all-benchmark">tensor4all-benchmark</a>.</p>
