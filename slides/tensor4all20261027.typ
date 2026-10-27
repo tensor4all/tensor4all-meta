@@ -312,12 +312,14 @@
       #v(4pt)
       #text(size: 16pt)[tcontract · cpueinsum · tlinalg · t4a-faer]
     ])
-  #v(0.5em)
+  #v(0.2em)
   Started with *Lukas Devos* (CCQ, developer of TensorKit.jl) and his Rust prototype.
-  #v(0.4em)
+  #v(0.1em)
+  #set list(spacing: 0.6em)
   - *Julia:* call precompiled kernels, less precompile time (future)
   - Fast kernels are too much work for one group to maintain
   - #hi[We want to maintain them together with other groups]
+  - Planned: CPU kernel optimization with Guo Chen's group at HKUST(GZ)
 ]
 
 // ---------------------------------------------------------------------
