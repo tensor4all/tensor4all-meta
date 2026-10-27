@@ -267,6 +267,21 @@
   tenferro-rs #2208, PRs #2250 to #2263; t4a-cuda-kernels; t4a-gpu-backend.
 ]
 
+// ---------------------------------------------------------------------
+#slide("Middle: tenferro-benchmark", tag: "tenferro-rs", color: c-tenferro)[
+  #set text(size: 16pt)
+  #align(center)[
+    #flow(pill([tenferro main], gray), pill([CPU: every night, Linux and macOS \ GPU: A100, every weekend], c-tenferro), pill([PyTorch, JAX, Julia, HPTT, cuTENSOR], c-tenferro), pill([dashboard], gray))
+  ]
+  #v(0.6em)
+  - Runs start automatically from GitHub Actions; the GPU runs use rented A100s
+  - Raw data and settings for every run are kept in the repository
+  - Example, A100, a tensor network contraction (f32): tenferro 49 ms, PyTorch 111 ms
+  - Dashboard: tensor4all.org/tenferro-benchmark
+][
+  github.com/tensor4all/tenferro-benchmark; example from result/nvidia-gpu/gpu/tensornetwork.md, 2026-10-24, tenferro 06ac247. Most changes since September 22 by Satoshi Terasaki.
+]
+
 // =====================================================================
 #slide("Bottom: why split out the kernels", tag: "engine", color: orange)[
   #grid(columns: (1fr, auto, 1fr), gutter: 12pt, align: horizon,
@@ -284,21 +299,6 @@
   - *Julia:* call precompiled kernels, less precompile time (future)
   - Fast kernels are too much work for one group to maintain
   - #hi[We want to maintain them together with other groups]
-]
-
-// ---------------------------------------------------------------------
-#slide("Middle: tenferro-benchmark", tag: "tenferro-rs", color: c-tenferro)[
-  #set text(size: 16pt)
-  #align(center)[
-    #flow(pill([tenferro main], gray), pill([CPU: every night, Linux and macOS \ GPU: A100, every weekend], c-tenferro), pill([PyTorch, JAX, Julia, HPTT, cuTENSOR], c-tenferro), pill([dashboard], gray))
-  ]
-  #v(0.6em)
-  - Runs start automatically from GitHub Actions; the GPU runs use rented A100s
-  - Raw data and settings for every run are kept in the repository
-  - Example, A100, a tensor network contraction (f32): tenferro 49 ms, PyTorch 111 ms
-  - Dashboard: tensor4all.org/tenferro-benchmark
-][
-  github.com/tensor4all/tenferro-benchmark; example from result/nvidia-gpu/gpu/tensornetwork.md, 2026-10-24, tenferro 06ac247. Most changes since September 22 by Satoshi Terasaki.
 ]
 
 // ---------------------------------------------------------------------
