@@ -429,7 +429,7 @@
     - Several Matrix accounts in one window, each with its own tab
     - Typing and search that work for Japanese, Chinese and Korean; interface in five languages
     - Local full-text search, including encrypted rooms
-    - Open source (Apache-2.0), macOS build available
+    - Open source (Apache-2.0); macOS, Windows and Linux (experimental)
   ]
 ][
   github.com/shinaoka/koushi-matrix · shinaoka.github.io/koushi-matrix
