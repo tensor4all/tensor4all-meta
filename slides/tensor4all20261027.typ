@@ -443,9 +443,9 @@
   #v(0.6em)
   #align(center)[
     #table(columns: 5, stroke: 0.5pt + gray, inset: 8pt, align: center,
-      [*Vienna, Paris, Berlin*], [*Beijing*], [*Tokyo, Seoul*], [*New York*], [],
-      [9:00], [16:00], [17:00], [3:00], [new],
-      [14:00], [21:00], [22:00], [8:00], [current],
+      [*New York*], [*Vienna, Paris, Berlin*], [*Beijing*], [*Tokyo, Seoul*], [],
+      text(fill: gray)[#strike[3:00]], [9:00], [16:00], [17:00], [new],
+      [8:00], [14:00], [21:00], text(fill: gray)[#strike[22:00]], [current],
     )
   ]
 ][
