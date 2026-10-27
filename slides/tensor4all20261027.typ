@@ -14,8 +14,8 @@
 #set text(font: "Hiragino Sans", size: 18pt)
 
 #let blue = rgb("#111827")
-#let c-tenferro = rgb("#1f4e79")
-#let c-t4rs = rgb("#1f4e79")
+#let c-tenferro = rgb("#2f6fb3")
+#let c-t4rs = rgb("#2f6fb3")
 #let c-t4jl = rgb("#7b47a8")
 #let c-green = rgb("#6b7280")
 #let accent = rgb("#c81e1e")
@@ -60,7 +60,7 @@
 
 
 
-#let orange = rgb("#1f4e79")
+#let orange = rgb("#2f6fb3")
 #let node(c: blue, r: 0.32cm) = circle(radius: r, fill: c.lighten(55%), stroke: 1pt + c)
 #let hbar(label, v, maxv, color, txt) = grid(columns: (4.6cm, 1fr), gutter: 8pt, align: horizon,
   text(size: 15pt)[#label],
