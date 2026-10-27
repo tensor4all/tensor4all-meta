@@ -437,9 +437,9 @@
 
 // ---------------------------------------------------------------------
 #slide("Proposal: alternate the meeting time")[
-  Now: every meeting on Tuesday at 14:00 Vienna time, which is late evening in East Asia.
+  Now: Tuesday 14:00 Vienna time, summer and winter. That is 21:00 or 22:00 in Tokyo.
   #v(0.4em)
-  Proposal: alternate Tuesday 9:00 and 14:00 Vienna time.
+  Proposal: alternate Tuesday 9:00 and 14:00 Vienna time, also fixed in Vienna time all year.
   #v(0.6em)
   #align(center)[
     #table(columns: 5, stroke: 0.5pt + gray, inset: 8pt, align: center,
