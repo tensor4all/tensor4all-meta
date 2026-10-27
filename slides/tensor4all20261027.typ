@@ -419,11 +419,47 @@
 ]
 
 // ---------------------------------------------------------------------
+#slide("Proposal: grow the Matrix space")[
+  The tensor4all space on Matrix has almost 50 members. Please invite colleagues, students and users.
+  #v(0.8em)
+  #block(fill: rgb("#eef2f7"), inset: 12pt, radius: 6pt, width: 100%)[
+    *Koushi*, a desktop Matrix client
+    #v(2pt)
+    #set text(size: 16pt)
+    - Several Matrix accounts in one window, each with its own tab
+    - Typing and search that work for Japanese, Chinese and Korean; interface in five languages
+    - Local full-text search, including encrypted rooms
+    - Open source (Apache-2.0), macOS build available
+  ]
+][
+  github.com/shinaoka/koushi-matrix · shinaoka.github.io/koushi-matrix
+]
+
+// ---------------------------------------------------------------------
+#slide("Proposal: alternate the meeting time")[
+  Now: every meeting on Tuesday at 14:00 Vienna time, which is late evening in East Asia.
+  #v(0.4em)
+  Proposal: alternate Tuesday 9:00 and 14:00 Vienna time.
+  #v(0.6em)
+  #align(center)[
+    #table(columns: 5, stroke: 0.5pt + gray, inset: 8pt, align: center,
+      [*Vienna, Paris, Berlin*], [*Beijing*], [*Tokyo, Seoul*], [*New York*], [],
+      [9:00], [16:00], [17:00], [3:00], [new],
+      [14:00], [21:00], [22:00], [8:00], [current],
+    )
+  ]
+][
+  Winter time, from October 25 to March 28. In summer, Beijing, Tokyo and Seoul are one hour earlier.
+]
+
+// ---------------------------------------------------------------------
 #slide("Discussion")[
   - *tensor4all-rs:* which tree workloads should we test with real users?
   - *tenferro:* who needs the CUDA backend first?
   - *Kernels:* who else wants to share them with us?
   - *t4a-faer:* send our fixes back to upstream faer?
+  - *Matrix:* whom should we invite?
+  - *Meeting time:* alternate 9:00 and 14:00?
 ]
 
 // ---------------------------------------------------------------------
