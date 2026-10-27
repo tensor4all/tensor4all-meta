@@ -98,7 +98,7 @@
 
 #title-slide(
   "tensor4all development update",
-  subtitle: "Who contributed, tree methods, and the engine underneath",
+  subtitle: "Contributors, tree methods, tenferro, and the kernel libraries",
   author: "tensor4all developers",
   date: "tensor4all meeting, 2026-10-27",
 )
@@ -125,7 +125,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Five weeks at a glance")[
+#slide("Activity since September 22")[
   #grid(columns: (1fr, 1fr, 1fr), gutter: 12pt,
     align(center)[#text(size: 44pt, weight: "bold", fill: blue)[11] \ #text(size: 15pt)[people committed]],
     align(center)[#text(size: 44pt, weight: "bold", fill: blue)[33] \ #text(size: 15pt)[repositories touched]],
@@ -177,7 +177,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Top: patches in parallel", tag: "tensor4all-rs", color: c-t4rs)[
+#slide("Top: parallel patching with hataori", tag: "tensor4all-rs", color: c-t4rs)[
   #align(center)[
     #flow(pill([one big problem], c-t4rs), pill([many independent patches], c-t4rs), pill([hataori: threads or MPI ranks], c-green), pill([one result], c-t4rs))
   ]
@@ -192,7 +192,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Top: TreeRSI, multiplying two trees", tag: "tensor4all-rs", color: c-t4rs)[
+#slide("Top: TreeRSI", tag: "tensor4all-rs", color: c-t4rs)[
   Published for tensor trains; #hi[Lingrui Cheng extended it to trees.]
   #v(0.4em)
   #align(center)[
@@ -220,7 +220,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Top: what comes next", tag: "tensor4all-rs", color: c-t4rs)[
+#slide("Top: remaining work", tag: "tensor4all-rs", color: c-t4rs)[
   #grid(columns: (1fr, 1fr, 1fr), gutter: 12pt,
     card("Patched products", hi[biggest gap], [Multiply two patched operators (MPO-MPO) end to end.], c-t4rs, h: 7.2cm),
     card("Error checks", "cheaper and safer", [Catch local errors that sampling misses, at lower cost; fix remaining TreeACI convergence issues.], c-t4rs, h: 7.2cm),
@@ -230,7 +230,7 @@
 ]
 
 // =====================================================================
-#slide("Middle: you hold the engine", tag: "tenferro-rs", color: c-tenferro)[
+#slide("Middle: tenferro execution engine", tag: "tenferro-rs", color: c-tenferro)[
   #align(center)[
     #flow(pill([your program], gray), pill([creates an *engine*: threads, memory, GPU stream], c-tenferro), pill([prepare once], c-tenferro), pill([run many times], c-tenferro))
   ]
@@ -245,7 +245,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Middle: a new GPU path", tag: "tenferro-rs", color: c-tenferro)[
+#slide("Middle: new CUDA backend", tag: "tenferro-rs", color: c-tenferro)[
   #grid(columns: (1fr, 1fr), gutter: 24pt, align: horizon,
     [
       #pill([#align(center)[tenferro GPU engine]], c-tenferro, w: 100%)
@@ -268,7 +268,7 @@
 ]
 
 // =====================================================================
-#slide("Bottom: one engine, many callers", tag: "engine", color: orange)[
+#slide("Bottom: why split out the kernels", tag: "engine", color: orange)[
   #grid(columns: (1fr, auto, 1fr), gutter: 12pt, align: horizon,
     stack(spacing: 4pt, ..("Rust: tenferro", "Julia", "Python", "C, Fortran codes").map(t =>
       block(width: 100%, fill: c-tenferro.lighten(88%), stroke: 0.8pt + c-tenferro, radius: 4pt, inset: 5pt, text(size: 14pt)[#t]))),
@@ -313,7 +313,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Bottom: tcontract-rs, no copies", tag: "engine", color: orange)[
+#slide("Bottom: tcontract-rs", tag: "engine", color: orange)[
   #align(center)[
     #flow(pill([A, B with any strides], gray), pill([packed straight into small tiles], orange), pill([fast inner kernel (AVX, NEON)], orange), pill([D = A·B + C], gray))
   ]
@@ -327,7 +327,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Bottom: cpueinsum-rs, a whole einsum", tag: "engine", color: orange)[
+#slide("Bottom: cpueinsum-rs", tag: "engine", color: orange)[
   #align(center)[
     #flow(pill([a, b, c, d], gray), pill([step 1: a·b], orange), pill([step 2: (ab)·c], orange), pill([step 3: ...·d], orange), pill([result], gray))
   ]
@@ -339,7 +339,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Bottom: batches of small matrices", tag: "engine", color: orange)[
+#slide("Bottom: tlinalg-rs, batched linear algebra", tag: "engine", color: orange)[
   Like PyTorch, tlinalg takes a *batch*: many matrices of the same shape in one call.
   #v(0.6em)
   With 4 threads there are two ways to run it:
@@ -388,7 +388,7 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("Benchmarks on a schedule")[
+#slide("Regular benchmarking")[
   #v(0.3em)
   #align(center)[#text(size: 20pt)[AI agents write most of this code. \ #hi[Public, repeatable benchmarks let others check the results.]]]
   #v(0.8em)
