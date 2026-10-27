@@ -212,19 +212,28 @@
 
 // ---------------------------------------------------------------------
 #slide("TreeRSI", crates: ("tensor4all-rs",))[
-  Published for tensor trains; #hi[Lingrui Cheng extended it to trees.]
-  #v(0.4em)
-  #align(center)[
-    #grid(columns: 5, gutter: 14pt, align: horizon,
-      minitree(c-t4rs), text(size: 30pt)[×], minitree(c-tenferro), text(size: 30pt, fill: gray)[→], minitree(c-green))
-    #grid(columns: (4.2cm, 1cm, 4.2cm, 1.3cm, 4.2cm), gutter: 14pt,
-      text(size: 14pt)[tree A], [], text(size: 14pt)[tree B], [], text(size: 14pt)[A·B, already small])
+  #set text(size: 16pt)
+  Element-wise product of two tensor trains with bond dimension $chi$. Published for tensor trains; #hi[Lingrui Cheng extended it to trees.]
+  #let chain(w, c) = box(width: 3.4cm, height: 0.6cm)[
+    #place(left + horizon, dx: 0.2cm, line(length: 3cm, stroke: w + c))
+    #for k in range(4) { place(left + horizon, dx: k * 1cm, circle(radius: 0.2cm, fill: c.lighten(60%), stroke: 1pt + c)) }
   ]
-  #v(1em)
-  - Element-by-element product of two trees, compressed in one pass
-  - Checked against the original authors' code, with the same random numbers
+  #let A = chain(1.5pt, c-t4rs)
+  #let col(top, bottom) = align(center, stack(spacing: 4pt, top, text(size: 13pt)[#bottom]))
+  #let arr = text(size: 20pt, fill: gray)[→]
+  #v(0.3em)
+  #grid(columns: (2.6cm, auto, auto, auto, auto, auto, auto, 1fr), column-gutter: 8pt, row-gutter: 14pt, align: horizon,
+    text(weight: "bold")[Usual], col(A, [A, bond $chi$]), text(size: 18pt)[$dot.o$], col(A, [B, bond $chi$]), arr,
+      col(chain(6pt, gray), [exact product, bond $chi^2$]), arr, col(A, [compressed, bond $chi$]),
+    text(weight: "bold")[RSI], col(A, [A]), text(size: 18pt)[$dot.o$], col(A, [B]), arr,
+      col(box(width: 3.4cm, height: 0.6cm, align(center + horizon, text(size: 13pt)[sketch, pick slices])), []), arr, col(A, [compressed, bond $chi$]),
+  )
+  #v(0.4em)
+  - The usual way builds the $chi^2$ product first: cost at least $O(chi^4)$
+  - RSI never builds it: cost $O(chi^3)$
+  - Tree version checked against the authors' code, with the same random numbers
 ][
-  Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, Recursive sketched interpolation: efficient Hadamard products of tensor trains, arXiv:2602.17974.
+  Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, Recursive sketched interpolation: efficient Hadamard products of tensor trains, arXiv:2602.17974 (cost scalings from the abstract).
 ]
 
 // ---------------------------------------------------------------------
