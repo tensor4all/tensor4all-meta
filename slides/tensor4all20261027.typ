@@ -150,11 +150,6 @@
   #band("Kernel providers", [*cpueinsum-rs · tcontract-rs · tlinalg-rs*], orange)
   #v(2pt)
   #band("Foundation", [*strided-rs · t4a-faer*], orange)
-  #v(0.3em)
-  #grid(columns: (1fr, 1fr, 1fr),
-    text(fill: c-t4rs, weight: "bold")[Top: what users call],
-    text(fill: c-tenferro, weight: "bold")[Middle: the runtime],
-    text(fill: orange, weight: "bold")[Bottom: the engine])
 ][
   Interactive version: tensor4all.org/tensor4all-meta/stack/
 ]
