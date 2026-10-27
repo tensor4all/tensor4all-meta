@@ -211,21 +211,20 @@
 ]
 
 // ---------------------------------------------------------------------
-#slide("TreeRSI", crates: ("tensor4all-rs",))[
+#slide("TreeRSI and TreeACI", crates: ("tensor4all-rs",))[
   #set text(size: 16pt)
-  Element-wise (Hadamard) product of two tensor trains. Published for tensor trains; #hi[Lingrui Cheng extended it to trees.]
-  #v(0.4em)
-  #align(center, table(columns: 2, stroke: 0.5pt + gray, inset: 6pt, align: (left, center),
+  Element-wise (Hadamard) product of two tensor trains with bond dimension $chi$. Both $O(chi^3)$ methods were published for tensor trains; #hi[Lingrui Cheng extended them to trees.]
+  #v(0.6em)
+  #align(center, table(columns: 2, stroke: 0.5pt + gray, inset: 7pt, align: (left, center),
       [*Method*], [*Cost*],
       [Direct product (bond $chi^2$), then rounding], [$O(chi^6)$],
       [Zip-up, variational fit], [$O(chi^4)$],
       [TCI, entries evaluated one by one], [$O(chi^4)$],
-      [*RSI*], [$bold(O(chi^3))$],
+      [*ACI* (alternating cross interpolation)], [$bold(O(chi^3))$],
+      [*RSI* (recursive sketched interpolation)], [$bold(O(chi^3))$],
     ))
-  #v(0.3em)
-  RSI goes left to right: sketch the remaining sites with a random tensor, pick rows of the product by interpolative decomposition, slice the inputs at those rows, and repeat.
 ][
-  Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, Recursive sketched interpolation: efficient Hadamard products of tensor trains, arXiv:2602.17974. Inputs have bond $chi$; physical dimension omitted from the costs.
+  ACI: M. K. Ritter, Fast elementwise operations on tensor trains with alternating cross interpolation, arXiv:2604.00037. RSI: Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, arXiv:2602.17974. Physical dimension omitted from the costs.
 ]
 
 // ---------------------------------------------------------------------
@@ -468,6 +467,7 @@
   #set text(size: 14pt)
   - Tree methods in detail (Lingrui Cheng): `slides/tensor4all20261027-lingrui-cheng.pdf` and its notes
   - Adaptive patching: G. Grosso et al., arXiv:2602.22372
+  - ACI: M. K. Ritter, arXiv:2604.00037
   - RSI: Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, arXiv:2602.17974
   - TAPP: arXiv:2601.07827
   - Stack map: tensor4all.org/tensor4all-meta/stack/
