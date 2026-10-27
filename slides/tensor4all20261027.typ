@@ -213,27 +213,41 @@
 // ---------------------------------------------------------------------
 #slide("TreeRSI", crates: ("tensor4all-rs",))[
   #set text(size: 16pt)
-  Element-wise product of two tensor trains with bond dimension $chi$. Published for tensor trains; #hi[Lingrui Cheng extended it to trees.]
-  #let chain(w, c) = box(width: 3.4cm, height: 0.6cm)[
-    #place(left + horizon, dx: 0.2cm, line(length: 3cm, stroke: w + c))
-    #for k in range(4) { place(left + horizon, dx: k * 1cm, circle(radius: 0.2cm, fill: c.lighten(60%), stroke: 1pt + c)) }
+  Element-wise (Hadamard) product of two tensor trains. Published for tensor trains; #hi[Lingrui Cheng extended it to trees.]
+  #let sp = 1.15cm
+  #let nd(x, y, c) = place(top + left, dx: x - 0.17cm, dy: y - 0.17cm, circle(radius: 0.17cm, fill: c.lighten(60%), stroke: 1pt + c))
+  #let ln(x1, y1, x2, y2, w: 1.2pt, c: black) = place(top + left, line(start: (x1, y1), end: (x2, y2), stroke: w + c))
+  // A on top, B below, physical legs joined by a copy tensor (dot) with one open leg
+  #let hadamard = box(width: 4 * sp, height: 2.6cm)[
+    #for k in range(3) { ln(0.3cm + k * sp, 0.3cm, 0.3cm + (k + 1) * sp, 0.3cm, c: c-t4rs); ln(0.3cm + k * sp, 1.7cm, 0.3cm + (k + 1) * sp, 1.7cm, c: c-t4rs) }
+    #for k in range(4) {
+      let x = 0.3cm + k * sp
+      ln(x, 0.3cm, x, 1.7cm, w: 0.9pt)
+      ln(x, 1.0cm, x + 0.45cm, 1.0cm, w: 0.9pt)
+      place(top + left, dx: x - 0.06cm, dy: 0.94cm, circle(radius: 0.06cm, fill: black))
+      nd(x, 0.3cm, c-t4rs); nd(x, 1.7cm, c-t4rs)
+    }
+    #place(top + left, dx: -0.45cm, dy: 0.1cm, text(size: 14pt)[A])
+    #place(top + left, dx: -0.45cm, dy: 1.5cm, text(size: 14pt)[B])
   ]
-  #let A = chain(1.5pt, c-t4rs)
-  #let col(top, bottom) = align(center, stack(spacing: 4pt, top, text(size: 13pt)[#bottom]))
-  #let arr = text(size: 20pt, fill: gray)[→]
+  #let result = box(width: 4 * sp, height: 2.6cm)[
+    #for k in range(3) { ln(0.3cm + k * sp, 1.0cm, 0.3cm + (k + 1) * sp, 1.0cm, c: c-t4rs) }
+    #for k in range(4) { let x = 0.3cm + k * sp; ln(x, 1.0cm, x, 1.6cm, w: 0.9pt); nd(x, 1.0cm, c-t4rs) }
+    #place(top + left, dx: 0.3cm + 0.3 * sp, dy: 0.45cm, text(size: 12pt)[bond $chi$])
+  ]
+  #grid(columns: (auto, auto, auto, 1fr), column-gutter: 14pt, align: horizon,
+    hadamard, text(size: 22pt, fill: gray)[→], result,
+    table(columns: 2, stroke: 0.5pt + gray, inset: 6pt, align: (left, center),
+      [*Method*], [*Cost*],
+      [Direct product (bond $chi^2$), then rounding], [$O(chi^6)$],
+      [Zip-up, variational fit], [$O(chi^4)$],
+      [TCI, entries evaluated one by one], [$O(chi^4)$],
+      [*RSI*], [$bold(O(chi^3))$],
+    ))
   #v(0.3em)
-  #grid(columns: (2.6cm, auto, auto, auto, auto, auto, auto, 1fr), column-gutter: 8pt, row-gutter: 14pt, align: horizon,
-    text(weight: "bold")[Usual], col(A, [A, bond $chi$]), text(size: 18pt)[$dot.o$], col(A, [B, bond $chi$]), arr,
-      col(chain(6pt, gray), [exact product, bond $chi^2$]), arr, col(A, [compressed, bond $chi$]),
-    text(weight: "bold")[RSI], col(A, [A]), text(size: 18pt)[$dot.o$], col(A, [B]), arr,
-      col(box(width: 3.4cm, height: 0.6cm, align(center + horizon, text(size: 13pt)[sketch, pick slices])), []), arr, col(A, [compressed, bond $chi$]),
-  )
-  #v(0.4em)
-  - The usual way builds the $chi^2$ product first: cost at least $O(chi^4)$
-  - RSI never builds it: cost $O(chi^3)$
-  - Tree version checked against the authors' code, with the same random numbers
+  RSI goes left to right: sketch the remaining sites with a random tensor, pick rows of the product by interpolative decomposition, slice the inputs at those rows, and repeat.
 ][
-  Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, Recursive sketched interpolation: efficient Hadamard products of tensor trains, arXiv:2602.17974 (cost scalings from the abstract).
+  Z. Meng, Y. Khoo, J. Li, E. M. Stoudenmire, Recursive sketched interpolation: efficient Hadamard products of tensor trains, arXiv:2602.17974. Inputs have bond $chi$; physical dimension omitted from the costs.
 ]
 
 // ---------------------------------------------------------------------
