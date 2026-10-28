@@ -557,14 +557,14 @@ documented. Each names its mechanical check.
 
 1. **Dependency boundaries.** Each consumer keeps one `cargo deny`
    configuration with three boundaries: `rayon` only through `strided-exec`
-   and the vendor crates that need it (faer, gemm, spindle), listed as
-   `wrappers`; `spindle` only through `t4a-faer`; and neither faer nor spindle
-   in `strided-exec`. `cargo public-api` of `strided-exec`, `tcontract-exec`
+   and the vendor crates that need it (`gemm`, and `threadteam` through
+   `t4a-faer`), listed as `wrappers`; `threadteam` only through `t4a-faer`; and
+   neither faer nor threadteam in `strided-exec`. `cargo public-api` of `strided-exec`, `tcontract-exec`
    and `tenferro-cpu` contains no `rayon::`, so the scheduler behind `Pool` can
    be replaced inside `strided-exec` alone. Kernel crates list
    `std::thread::spawn` and `std::thread::scope` in clippy
    `disallowed-methods`. As a result only `strided-exec` starts tasks on a
-   pool, and only t4a-faer opens a spindle region.
+   pool, and only t4a-faer runs work on a team it was not handed.
 2. **The type carries the budget.** A token is neither `Clone` nor `Copy`, is
    made from `&Pool` by the pool's owner (the engine, or a resource wrapper such
    as `tcontract_exec::Exec`), and is consumed by every parallel entry. `fork`
@@ -589,13 +589,15 @@ documented. Each names its mechanical check.
    engine. Placement carries no numerical policy, and policy starts no tasks.
 5. **Libraries schedule behind `external`.** A library outside tensor4all
    receives a plain width through `Exec::external`; the adapter in the calling
-   crate turns it into the library's own type (`faer::Par::Rayon(w)`, a BLAS
-   thread count). Scheduling that belongs to the library stays in it: t4a-faer
-   opens spindle's region for the duration of one call, and its `join_raw`
-   splits a width into halves that add up to it
-   ([tensor4all/faer#55](https://github.com/tensor4all/faer/pull/55)). Vendor
-   BLAS and LAPACK keep their own worker teams, outside the budget. A batched
-   caller splits its batch with the token (see "faer and spindle").
+   crate turns it into the library's own type (a faer team of that width, a BLAS
+   thread count). Scheduling that belongs to the library stays in it: t4a-faer's
+   `join_raw` splits a width into halves that add up to it
+   ([tensor4all/faer#55](https://github.com/tensor4all/faer/pull/55)), and a
+   caller that reaches faer only through a width pays for the reservation that
+   width needs - see "faer and threadteam", which is why a caller with a
+   long-lived budget owns the team instead. Vendor BLAS and LAPACK keep their
+   own worker teams, outside the budget. A batched caller splits its batch with
+   the token (see "faer and threadteam").
 6. **Claims are measured where they hold.** Under the `ledger` feature,
    `strided-exec` records the peak number of live tasks per root token, and
    every test asserts that it stays within the budget; rule 1 makes this cover
@@ -607,34 +609,42 @@ documented. Each names its mechanical check.
 starts, and nothing more.
 
 * A call into faer or a vendor BLAS is a leaf whose internal concurrency
-  belongs to the library. The caller relies on the width it handed over and on
-  the pool the library runs in.
+  belongs to the library. The caller relies on the width of what it handed over
+  - for faer, on the team it lent.
 * Within one pool there is no reservation: a task's children can run on any
   worker, so a share bounds the tasks a lane starts, not the workers it keeps
   busy. When isolation is required, use separate pools.
 
-### faer and spindle
+### faer and threadteam
 
-faer parallelizes through [spindle](https://crates.io/crates/spindle): its
-kernels call `spindle::for_each`, and the caller opens a region with
-`spindle::with_lock(n)` around them, which holds `n - 1` Rayon workers as a
-spinning team. [spindle.md](./spindle.md) explains the mechanism and records
-the measurements behind the points below.
+faer parallelizes through [threadteam](https://crates.io/crates/threadteam): a
+token, `faer::Par::Team`, is the exclusive authority over a reserved set of
+members for as long as its owner lives, and every parallel region inside faer
+runs on those members. The token is neither `Clone` nor `Copy`; a phase sequence
+lends it with `reborrow`, and concurrent children are handed sub-teams by
+splitting, never copies. `ParShape` (`Copy`) carries the same width for
+workspace queries, which need the size but not the authority.
 
-![Where with_lock is opened: in t4a-faer, behind Exec::external](figures/faer_boundary.svg)
+![Who holds the team: the caller, and t4a-faer runs its regions on it](figures/faer_boundary.svg)
 
-* **The region is opened in t4a-faer.** An entry point that receives
-  `Par::Rayon(w)` opens `with_lock(w)` when no region is open, for the duration
-  of that call (rules 1 and 5).
-* **Everything parallel inside a region goes through spindle.** The team's
-  workers sit in spindle's loop, so plain Rayon code inside a region runs on
-  one thread. faer's matrix product on aarch64 goes through the `gemm` crate,
-  which uses Rayon directly; t4a-faer is to replace it (open question 2).
+* **The caller owns the team.** An engine that holds a token for a run gives faer
+  a sub-team of it per call; a caller that only has a *width* has two options,
+  and they are not equivalent. It can own a team for its whole run and lend it -
+  the shape tensor4all code uses - or it can scope one call with
+  `faer::team::with_team(w, |par| ..)`, which **builds a pool** for that call:
+  about 2 ms, measured with the `thr-faer` driver, so it belongs in tools, tests
+  and one-off calls, not in a loop.
+* **Everything parallel inside a call goes through the token.** The members spin
+  while the reservation is held, and the token places each region on them (a
+  section, a fork, a split); plain Rayon work inside such a region runs on the
+  one member that started it. That is why the matrix product on targets where
+  faer goes through the `gemm` crate, and the x86 kernel path, are dispatched
+  through the team (open question 2 has what remains).
 * **Batches are split with the token.** A batched caller such as tlinalg gives
-  every slot to the batch, with `Par::Seq` items, when the batch is at least
-  the budget. Otherwise it forks the token over the items and calls t4a-faer
-  through `external` once per item, so each call opens its own region sized to
-  its share.
+  every slot to the batch, with `Par::Seq` items, when the batch is at least the
+  budget. Otherwise it forks the token over the items and calls t4a-faer once per
+  item with the item's sub-team, so each call runs on its share and no call
+  reserves anything.
 
 ### Example: nested parallelism in hataori
 
@@ -1013,16 +1023,14 @@ Because no Rayon type is public (rule 1), this is a change inside
    another engine or stream may have been bound on the same thread in
    between. Measure before choosing.
 
-2. *t4a-faer work behind rule 5.* (a) The entry points open
-   `spindle::with_lock(w)` when no region is open; not implemented yet.
-   (b) A spindle-based matrix product for targets where faer uses the `gemm`
-   crate (aarch64), so that a region does not reduce it to one thread.
+2. *t4a-faer work behind rule 5.* (a) The dispatch cost is measured up to eight
+   members; above that faer extrapolates it linearly, so a wide team keeps a
+   conservative floor until the measurements behind
+   [tensor4all/faer#91](https://github.com/tensor4all/faer/issues/91) cover 2 to
+   64. (b) The matrix product on targets where faer goes through the `gemm` crate
+   runs one tile per member of the team; a team-native kernel there is open.
    (c) An audit of which entry points start parallel work and whether a leaf
-   starts further parallel work outside spindle.
-   (d) Several regions open at once in one pool (the second batch shape of
-   "faer and spindle"): check that each team gets its members and that the
-   items run at the expected parallelism, for example two 512 x 512 QR
-   factorizations under a budget of 8.
+   starts further parallel work outside the team it was handed.
 
 The figures are generated by `figures/make_figures.py` (standard library
 Python). Edit the script and rerun it rather than editing the SVG files.

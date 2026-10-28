@@ -113,10 +113,11 @@ This walkthrough does not restate them.
 ## faer
 
 `strided-exec` knows nothing about faer. It hands over a pool and a width
-through `external`, and t4a-faer turns the width into faer's own scheduling,
-spindle. How spindle works is in [spindle.md](./spindle.md); where its region is
-opened and how a batched caller splits its batch is in "faer and spindle" of the
-main document.
+through `external`, and t4a-faer turns the width into faer's own scheduling: a
+team of that width, whose token the call consumes. A caller that runs faer for a
+whole session owns a team itself and lends a sub-team per call. How a batched
+caller splits its batch, and what a width alone costs, is in "faer and
+threadteam" of the main document.
 
 ## Planned: one pool per cache domain
 
