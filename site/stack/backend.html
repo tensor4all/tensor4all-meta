@@ -34,7 +34,7 @@
     <li><a href="#execution">Execution and hataori</a></li>
     <li><a href="#qc">For quantum chemistry codes</a></li>
     <li><a href="#bench">Benchmarks</a></li>
-    <li><a href="#status">Status and contributing</a></li>
+    <li><a href="#contributing">Contributing</a></li>
   </ol>
 </aside>
 <main>
@@ -42,7 +42,6 @@
     <p class="eyebrow">Guide B</p>
     <h1>The stack for backend developers</h1>
     <p class="lead">What happens below the tensor network algorithms: a tensor runtime with automatic differentiation, and underneath it small, tensor-free libraries for strided contraction and batched linear algebra that you can use on their own, from Rust or from C. If you maintain a quantum chemistry or many-body code and need fast contractions without transposes, the middle of this page is for you.</p>
-    <p class="asof">Status as of 2026-10-13. Several crates described here are not on crates.io yet; this page says so where it matters.</p>
   </section>
 
   <figure class="figure">
@@ -78,7 +77,7 @@
     <li><strong>Conventions.</strong> Storage is column-major, matching LAPACK, Fortran and Julia. There is no facade crate: depend on <code>tenferro-runtime</code>, a backend such as <code>tenferro-cpu</code>, and the operation crates you use. Operations take an explicit backend; create it once and reuse it, since it carries the buffer pool.</li>
     <li><strong>Providers.</strong> On the CPU, <code>tenferro-einsum</code> and <code>tenferro-cpu</code> execute through cpueinsum (and so tcontract), and <code>tenferro-linalg</code> adapts tlinalg and tlinalg-blas to an interface tenferro defines. The providers do not depend on tenferro.</li>
   </ul>
-  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts. A release is on crates.io; the main branch already builds on the unpublished providers described below.</p>
+  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts.</p>
 
   <h2 id="cpueinsum">cpueinsum: N-ary einsum in a given order</h2>
   <p><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> runs an einsum over integer labels with a contraction order supplied by the caller in SSA form. For each binary step it plans a tcontract call. On top it decides which labels every intermediate must keep (those in the output or needed later; everything else is summed as early as possible) and places all intermediates in one reusable scratch buffer.</p>
@@ -172,7 +171,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
 
   <h2 id="strided">strided-rs: the shared vocabulary</h2>
   <p><a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines <code>StridedView</code>, <code>StridedViewMut</code> and the raw descriptors that every CPU layer passes across crate boundaries, plus fast permutation and elementwise kernels. Arbitrary strides are allowed, including negative and zero (broadcast).</p>
-  <p>Because these types cross crate boundaries, every crate in a build must resolve to the same strided-rs release; two copies would produce two incompatible view types. To make this cheap for downstream users, the plan is to version the core types and traits separately from the permutation engine and stabilize them toward 1.0 (<a href="https://github.com/tensor4all/strided-rs/issues/296">strided-rs#296</a>). A longer term direction is to make strided-rs embeddable from other languages through its own C API (<a href="https://github.com/tensor4all/strided-rs/issues/234">strided-rs#234</a>).</p>
+  <p>Because these types cross crate boundaries, every crate in a build must resolve to the same strided-rs release; two copies would produce two incompatible view types.</p>
 
   <h3>The faer fork</h3>
   <p>The pure Rust dense kernels come from <a href="https://github.com/tensor4all/faer">tensor4all/faer</a>, a fork of <a href="https://codeberg.org/sarah-quinones/faer">faer</a> developed independently and published as the <code>t4a-faer</code> crates. It is where workload specific changes are tried quickly: strided and batched entry points, uninitialized output destinations, caller-owned workspaces, an explicit thread policy, and numerical fixes such as the unpivoted QR fix that tlinalg relies on. Many of these are not in upstream faer. Every change is recorded in <a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a>; the fork keeps upstream's license and attribution, and consumers pin a revision or a published <code>t4a-faer</code> version.</p>
@@ -184,7 +183,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
     <li>tlinalg takes a <code>Parallel</code> token with a thread budget; tlinalg-blas leaves threading to the vendor.</li>
     <li>tenferro carries these inside its backend object, and tensor4all-rs wraps that in a <code>CpuExecutionContext</code>.</li>
   </ul>
-  <p>Something has to own the processes and threads at the top. That is <a href="https://tensor4all.org/hataori-rs/">hataori</a>: <code>map</code> and a dynamically scheduled <code>pmap</code> over serial, Rayon, MPI and hybrid execution, inspired by Distributed.jl. hataori splits the machine into ranks and thread domains and passes each task the pool it may use, which flows down through the contexts above. MPI can be linked at build time or loaded at run time (through <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a>), so a Rust extension can share the MPI library of a Julia or Python host. The synchronous API is usable now; an asynchronous runtime with futures, remote objects and migration is in development in the same repository.</p>
+  <p>Something has to own the processes and threads at the top. That is <a href="https://tensor4all.org/hataori-rs/">hataori</a>: <code>map</code> and a dynamically scheduled <code>pmap</code> over serial, Rayon, MPI and hybrid execution, inspired by Distributed.jl. hataori splits the machine into ranks and thread domains and passes each task the pool it may use, which flows down through the contexts above. MPI can be linked at build time or loaded at run time (through <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a>), so a Rust extension can share the MPI library of a Julia or Python host.</p>
 
   <h2 id="qc">For quantum chemistry and other host codes</h2>
   <p>Coupled cluster, integral transformations, density fitting and many-body perturbation theory spend their time in contractions of tensors whose index order rarely matches what GEMM wants. The usual workaround (permute, call GEMM, permute back) costs memory traffic and extra buffers. tcontract is built to avoid exactly that, in the same spirit as TBLIS, and is designed to be called from code that has its own tensor containers.</p>
@@ -194,7 +193,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
     <li><strong>From Rust:</strong> depend on <code>tcontract</code> directly for binary contractions, on <code>cpueinsum</code> if you already have a contraction order for a multi-tensor expression, and on <code>tlinalg</code> for batched factorizations of the resulting matrices. None of them require tenferro.</li>
     <li><strong>Threads:</strong> pass your own pool. Nothing in these libraries competes with OpenMP or MPI in your code behind your back.</li>
   </ul>
-  <div class="note warm"><p>None of tcontract, cpueinsum and tlinalg is on crates.io yet, and their interfaces may still change. Pin a git revision. If you are evaluating them for a production code, opening an issue with your typical tensor shapes is the most useful thing you can do: it feeds directly into the benchmark campaigns below.</p></div>
+  <div class="note warm"><p>If you are evaluating them for a production code, opening an issue with your typical tensor shapes is the most useful thing you can do: it feeds directly into the benchmark campaigns below.</p></div>
 
   <h2 id="bench">Benchmarks</h2>
   <div class="table-wrap"><table>
@@ -207,19 +206,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
     </tbody>
   </table></div>
 
-  <h2 id="status">Status and contributing</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Component</th><th>State</th></tr></thead>
-    <tbody>
-      <tr><td>tenferro-rs</td><td><span class="pill ok">crates.io</span> main depends on the unpublished providers</td></tr>
-      <tr><td>cpueinsum, tcontract</td><td><span class="pill wip">git only</span> early, interfaces settling</td></tr>
-      <tr><td>tlinalg, tlinalg-blas</td><td><span class="pill wip">git only</span> extraction from tenferro in progress</td></tr>
-      <tr><td>strided-rs</td><td><span class="pill ok">crates.io</span> core versioning split planned</td></tr>
-      <tr><td>faer fork</td><td><span class="pill ok">crates.io (t4a-faer)</span> independent of upstream, no compatibility promise</td></tr>
-      <tr><td>computegraph</td><td><span class="pill ok">crates.io</span></td></tr>
-      <tr><td>hataori</td><td><span class="pill wip">git only</span> synchronous API usable, runtime in development</td></tr>
-    </tbody>
-  </table></div>
+  <h2 id="contributing">Contributing</h2>
   <p>All repositories accept issues and pull requests, including AI assisted contributions; each one documents its rules in <code>AGENTS.md</code> and its contributing guide. Good first contributions are benchmark cases from real applications, kernels for hardware we have not tuned for, and bindings for other languages.</p>
 </main>
 </div>
