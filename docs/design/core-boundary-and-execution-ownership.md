@@ -646,6 +646,9 @@ workspace queries, which need the size but not the authority.
   item with the item's sub-team, so each call runs on its share and no call
   reserves anything.
 
+The threads under threadteam, Rayon in threadteam 0.2.0 and its own threads on `develop`, and how the
+two interoperate, are recorded in [threading-substrate.md](./threading-substrate.md).
+
 ### Example: nested parallelism in hataori
 
 This example uses hataori's vocabulary, which tenferro does not share. A
