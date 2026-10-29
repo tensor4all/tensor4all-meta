@@ -89,7 +89,7 @@ Rayon schedules jobs that run "sometime", and a task is not guaranteed to run co
 | `barrier` among the members of a team | conflicts | No guarantee that N jobs run at the same time, so N jobs waiting for each other can deadlock. |
 | `parallel` as a concurrent team, with `single` and `masked` | conflicts | `broadcast` runs one closure per worker but gives no team, no leader role and no barrier. |
 | sub-teams (nested `parallel num_threads(k)`) with their own barriers | conflicts | `join` splits independent work; a barrier inside the half has the problem of `barrier`. |
-| bitwise reproducible reductions | conflicts | Splitting is adaptive and depends on stealing, so a floating-point sum can differ in its last bits between runs at one thread count. A fixed index and a fixed combining tree need static ownership by a stable thread index. |
+| bitwise reproducible reductions | buildable, not by default | Rayon's own `reduce` splits adaptively, depending on stealing, so a floating-point sum can differ in its last bits between runs at one thread count. A reproducible sum is built on the static partition above: fixed chunks owned by a stable thread index, combined in a fixed order. |
 | low-latency wake and `OMP_WAIT_POLICY`, `GOMP_SPINCOUNT`, `KMP_BLOCKTIME` | conflicts | Workers spin a fixed number of rounds, then sleep, and the policy is not adjustable. threadteam's own `spin_polls` waits are layered on top for team members only. |
 | `priority` on tasks | conflicts | No priority queue. `spawn_fifo` gives order, not priority. |
 | `affinity` clause, `omp_get_place_num` | conflicts | Stealing is indifferent to where a job runs. |
