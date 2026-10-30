@@ -18,6 +18,11 @@ by [`.github/workflows/pages.yml`](.github/workflows/pages.yml):
 - [tenferro-rs design index](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/index.md): tenferro internals
 - [Tensor4all.jl design](https://github.com/tensor4all/Tensor4all.jl/tree/main/docs/design): the Julia frontend
 
+## Benchmarks
+
+- [Benchmarks of the tensor4all stack](docs/benchmarks/README.md): the campaigns and their sites, the weekly full CPU run and its
+  [agent procedure](skills/weekly-cpu-benchmark/SKILL.md), and how to recreate the monitoring cron
+
 ## Essays
 
 Hypothetical explorations, not implementation plans:
