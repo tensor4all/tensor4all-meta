@@ -1,0 +1,7 @@
+# Narrow-core cases (plan #76, Phase 7, step 3, item 1): the representative cases of decision D4,
+# measured first so that an anomaly is reported before the full run starts.
+# One case per line: <stage><TAB><record_run script and arguments>.
+# No case is declared yet: D4 names the cases, but the campaigns do not declare them (campaign.yaml
+# `trend:`, plan item 1.4 / Phase 2), and run.sh does not translate a case name into record_run
+# --families/--shapes flags by guesswork. `run narrow` therefore records "skipped" until entries are
+# added and run_narrow learns to execute them.
