@@ -25,6 +25,8 @@ import sys
 import time
 import urllib.request
 
+PROFILE = os.environ.get("WEEKLY_PROFILE", "zen5-cpu")
+
 AGENT_COMMS = ("claude", "pi", "codex", "gemini", "opencode", "aider", "herdr")
 
 
@@ -82,7 +84,10 @@ def cmd_cpusets(argv):
         path = os.path.join(root, "benchmarks", "suites", suite + ".yaml")
         data = yaml.safe_load(open(path))
         for run in data.get("runs", []):
-            for spec in run.get("cpu_sets", []) or []:
+            specs = run.get("cpu_sets", []) or []
+            if isinstance(specs, dict):  # per profile since campaign-toolkit#50
+                specs = specs.get(PROFILE, []) or []
+            for spec in specs:
                 cpus |= parse_cpus(str(spec))
     if not cpus:
         print(f"no cpu_sets declared by {suites} in {root}", file=sys.stderr)
