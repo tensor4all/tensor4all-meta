@@ -50,6 +50,21 @@ If a variable is unknown: STOP, report "executor record incomplete".
 The work directory is printed by every command (`~/.local/state/tensor4all-weekly/<UTC date>`);
 `WEEKLY_WORK_DIR` overrides it. Its JSON files are the record `summary.py` reads.
 
+
+### The Zen 5 host has two L3 domains, and only one of them is measured
+
+evo is 12 cores with two L3 domains: `0-3,12-15` (4 Zen 5 cores, the measured domain) and
+`4-11,16-23` (8 Zen 5c cores, 16 threads). Timing runs own the measured domain
+(`taskset -c 0-3,12-15`). Everything else, meaning builds, tests, agents, git and helper scripts,
+belongs on the observer domain with `taskset -apc 4-11,16-23`. Use `-apc` and not `-pc`: `-pc` moves
+the main thread and leaves the workers where they were, and `observer_audit` will name them.
+
+Then a publication and a development build can run at the same time, which is what makes the "one
+machine, everything waits" schedule unnecessary. `campaign_toolkit` supports this directly:
+`python3 -m campaign_toolkit.observer_audit --observer 4-11,16-23` before a run, `--confine` to move
+what strays. Measurements themselves stay serial, one at a time in the measured domain, and the
+profile is tied to this host: the 64 core EPYC is Zen 2 and cannot produce `zen5-cpu` pages.
+
 ## Step 1. Preflight (timeout 300000 ms)
 
 ```sh
