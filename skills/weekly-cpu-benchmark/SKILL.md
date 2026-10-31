@@ -65,6 +65,16 @@ machine, everything waits" schedule unnecessary. `campaign_toolkit` supports thi
 what strays. Measurements themselves stay serial, one at a time in the measured domain, and the
 profile is tied to this host: the 64 core EPYC is Zen 2 and cannot produce `zen5-cpu` pages.
 
+
+> **Correction:** the sets in the paragraph above are inverted. The suites declare
+> `cpu_sets: {zen5-cpu: ["4-11"]}`, and the guard logs show `cpus=4`, `cpus=4-7`. So the **measured**
+> side is `4-11` (L3 domain 1, 8 Zen 5c cores) and the **observer** side is `0-3,12-15` (L3 domain 0),
+> which is what `publish.sh`'s `taskset -c 0-3,12-15` pins. Moving the measurement to `0-3,12-15` is
+> not a pin change: it turns tlinalg's 8T case from eight physical cores into four plus SMT, which is a
+> different claim. The observer side is four physical cores and also carries the recorder, so
+> development there is possible but small. On an APU the iGPU shares the memory controller with the
+> CPU, so a measurement window wants the GPU idle as well.
+
 ## Step 1. Preflight (timeout 300000 ms)
 
 ```sh
