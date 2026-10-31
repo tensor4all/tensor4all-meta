@@ -471,6 +471,30 @@ gives each task its own engine, and an engine is used by whoever holds it.
 * Threads started by a vendor BLAS or LAPACK are outside tenferro's control,
   as before.
 
+
+### Work units and rates
+
+Sizing decisions inside the libraries are made on a machine independent work quantity, not on time.
+Two numbers are public and the rate that turns them into a duration is not.
+
+* **The unit.** One weighted multiply-add is one multiply-add on a real scalar. A complex scalar
+  counts four, because that is what a complex multiply-add costs in real ones. Every estimate in the
+  stack uses this unit, so a GEMM and a factorization can be compared without conversion.
+* **What is public.** `estimate_work()` returns the weighted multiply-adds of one call and
+  `estimate_payback_work()` returns the part a team working inside one item can pay back. Both are
+  `f64`, both are O(1), and neither depends on the thread width or on the strategy, which the plan
+  fixed when it was built.
+* **What is not public.** A duration. Turning work into seconds needs a rate in weighted multiply-adds
+  per second, and that rate belongs to the machine rather than to the library: the hosts measured in
+  this project differ by two to three times in it. The caller measures the rate on the machine it will
+  run on and divides.
+* **Where a shared rate lives.** Not in tlinalg and not in tcontract. Those two must not depend on
+  each other, so a rate that a scheduler shares across families lives in the caller or in a small
+  shared crate above both.
+* **Rounding.** A real shape count is exact as an integer internally. Converting it to `f64` for the
+  public estimate rounds beyond 2^53 weighted multiply-adds, which no shape we run reaches; the
+  conversion is documented rather than widening the public type.
+
 ### Where placement is decided
 
 One borrowed token decides where CPU work runs and how many tasks may run at
