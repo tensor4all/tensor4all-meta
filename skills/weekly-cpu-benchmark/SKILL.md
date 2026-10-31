@@ -187,6 +187,50 @@ reply with the exit code and the last preflight line.
 
 `summary.py --selftest` checks the summariser on a synthetic work directory (no measurement).
 
+## Step 7. Publish (after the pull requests, and it is a separate run)
+
+A merged raw run PR is not a publication. For faer, tlinalg, cpueinsum and tcontract the site draws
+**publication runs only**: a run labelled `pub-<rev8>-<date>` at the current pin. Weekly runs are
+recorded with `record_run ... --no-publish` (see Step 3), so they are stored, merged and never
+rendered. That is the behaviour you will see as `Nothing recorded at the current pin on this
+profile` while `pins/<lib>.rev` matches the run's recorded `library.commit` exactly. When you hit
+that, the cause is the label and the flag, not the pin, and not the merge.
+
+Never relabel a weekly run to make a page appear. It is the protocol being faked, and the numbers
+then carry a claim (a publication with its guard set and timing policy) that nobody measured.
+
+| repository | publication command | what one publication covers | cost |
+| --- | --- | --- | --- |
+| cpueinsum-benchmark | `scripts/v2/publish.sh` | `einsum-opt_size`, then `einsum-opt_flops` | about 10 min |
+| tcontract-benchmark | `scripts/v2/publish.sh` (needs `TBLIS_ROOT`; it refuses a suite that measures the external provider without its identity) | `tcbench` (aa 3), then `per-shape` (aa 2), reps 5 | about 16 min |
+| tlinalg-benchmark | `scripts/publish.sh` | competition on both vendor arms, then scaling, aa 4, reps 5 | about 1 h 15 m |
+| faer-benchmark | `scripts/publish.sh` | faer-kernels for mkl (3 engines, aa 3) and openblas (2 engines, aa 6), 14 families plus the 1024 tier | **about 11 h both arms** |
+| tenferro-benchmark | no publication run. `publish-results` renders tracked run records (`ingest-results` runs on push and on schedule) | the CPU and GPU pages from `data/results/**` | minutes, a workflow |
+
+Costs are the weekly arms measured in `~/.local/state/tensor4all-weekly/<utc-date>/summary*.md`, so
+they scale with the suite, not with the machine.
+
+Order matters when the clock is short. The three cheap ones (cpueinsum, tcontract, tlinalg, about
+1 h 40 m together) publish as soon as the machine is free. Hold faer until any known performance gap
+is fixed, because publishing freezes numbers that are about to change (2026-10-31 decision: faer
+waits for the MKL gap, see faer#168 and the MKL comparison in faer#160).
+
+Only `zen5-cpu` exists as a profile here, and only the Zen 5 host can produce its pages. The 64 core
+EPYC is `zen2-cpu`: a publication run there fills a different profile and leaves the zen5 pages
+untouched.
+
+Verify by reading the site, never by the pipeline: a green Pages workflow and a merged PR are not
+evidence.
+
+```bash
+curl -sL http://tensor4all.org/faer-benchmark/ | grep -o 'updated [0-9:. \-]*Z[^<]*'
+# tenferro spells it differently:
+curl -sL http://tensor4all.org/tenferro-benchmark/ | grep -o 'updated 20[0-9:. \-]*Z[^<]*'
+```
+
+Quote that line with the run name in the report. If it did not move, say so and give the reason
+(machine busy, publication not run, workflow skipped) rather than reporting success.
+
 ## Reference
 
 - Order, rows and budget: tensor4all-meta#76, Phase 7. The cap is `WEEKLY_CAP_HOURS` (default 14).
