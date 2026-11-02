@@ -434,12 +434,18 @@ new_run_dirs() {  # repo-path marker
     (cd "$1" && find data -name run.yaml -newer "$2" -printf '%h\n' 2>/dev/null | sort -u)
 }
 
+# tenferro's blas-openblas arm needs an OpenBLAS prefix. On Linux it is the system one, /usr (the value
+# the 2026-10-30 run had to pass by hand after setup_extern_deps.sh refused to start without it); on
+# macOS that script finds the prefix with brew, so nothing is defaulted there.
+openblas_env_default() { if [[ $(uname -s) == Linux ]]; then export OPENBLAS_ROOT=${OPENBLAS_ROOT:-/usr}; fi; }
+openblas_env_prefix()  { if [[ $(uname -s) == Linux ]]; then printf 'OPENBLAS_ROOT=%s ' "${OPENBLAS_ROOT:-/usr}"; fi; }
+
 materialise() {  # stage: bring the checkout of the measured library to its pin (no build)
     local d; d=$(repo_path "$1")
     case $1 in
         faer|tlinalg|cpueinsum) plan bash -c "cd $(printf %q "$d") && scripts/setup_extern_deps.sh";;
         tcontract)              plan bash -c "cd $(printf %q "$d") && scripts/setup_v2_extern_deps.sh";;
-        tenferro)               plan bash -c "cd $(printf %q "$d") && TENFERRO_UPDATE=1 TENFERRO_REF=$(tenferro_pin) scripts/setup_extern_deps.sh";;
+        tenferro)               plan bash -c "cd $(printf %q "$d") && $(openblas_env_prefix)TENFERRO_UPDATE=1 TENFERRO_REF=$(tenferro_pin) scripts/setup_extern_deps.sh";;
         *) return 0;;
     esac
 }
@@ -497,6 +503,7 @@ run_toolkit_unit() {  # stage unit
 run_build_unit() {  # stage
     local stage=$1 d start log=$WORK/logs/${stage}__build.log code=0 obs f
     d=$(repo_path "$stage"); start=$(now); unit_spec "$stage" build
+    [[ $stage == tenferro ]] && openblas_env_default
     obs=$(resolve_row 1 | cut -d' ' -f2)
     isolate "$obs" "$stage build" || { record_unit "$stage" build failed "isolation failed" "$start" "$(now)" 1; return 1; }
     if (( DRY )); then
@@ -504,8 +511,8 @@ run_build_unit() {  # stage
             tensor4all) say "[dry-run] + (cd $d && taskset -c $obs cargo build --release --locked --bins)";;
             tenferro)
                 f=blas-mkl
-                say "[dry-run] + (cd $d && MKLROOT=\${MKLROOT:-/opt/intel/oneapi/mkl/latest} taskset -c $obs cargo build --release --no-default-features --features $f --bins)"
-                say "[dry-run] + (cd $d && taskset -c $obs cargo build --release --no-default-features --features $f,strided-rs,hptt --bin benchmark_permutation)"
+                say "[dry-run] + (cd $d && $(openblas_env_prefix)MKLROOT=\${MKLROOT:-/opt/intel/oneapi/mkl/latest} taskset -c $obs cargo build --release --no-default-features --features $f --bins)"
+                say "[dry-run] + (cd $d && $(openblas_env_prefix)taskset -c $obs cargo build --release --no-default-features --features $f,strided-rs,hptt --bin benchmark_permutation)"
                 say "[dry-run] + (cd $d && taskset -c $obs uv sync --frozen)";;
         esac
         record_unit "$stage" build dry-run "" "$start" "$start" 0; return 0
@@ -577,17 +584,19 @@ handshake_follow() {  # dir
 run_tenferro_measure() {
     local stage=tenferro unit=measure d log start end code=0 hs marker pid fpid dirs n row
     d=$(repo_path tenferro); log=$WORK/logs/${stage}__${unit}.log; start=$(now); unit_spec tenferro measure
+    openblas_env_default
     if ! deadline_ok "$U_EST"; then record_unit "$stage" "$unit" deferred "past the ${CAP_HOURS} h cap: left for next week" "$start" "$start" 0; return 0; fi
     hs=$WORK/tenferro/handshake; marker=$WORK/tenferro.measure.marker
     export BENCHMARK_TARGET_PROFILE=$PROFILE TENFERRO_CPU_FEATURES=${TENFERRO_CPU_FEATURES:-blas-mkl} \
            PUBLICATION_GATE_FEATURES=${TENFERRO_CPU_FEATURES:-blas-mkl} PUBLICATION_GATE_PROFILE=full \
            PERMUTATION_EXTRA_FEATURES=hptt MKLROOT=${MKLROOT:-/opt/intel/oneapi/mkl/latest} \
            BENCHMARK_OBSERVER_HANDSHAKE=$hs
+    export OPENBLAS_ROOT   # Linux default from openblas_env_default; a no-op where it stays unset
     for n in 1 4 8; do row=$(resolve_row $n); say "[$stage/$unit] row $n: measured ${row% *}, observer ${row#* }"; done
     if (( DRY )); then
         say "[dry-run] + mkdir -p $hs   # handshake directory"
         say "[dry-run] + handshake_follow $hs &   # answers each row's request: isolate (executor tree minus the runner subtree) to the row's observer set, verify, then ack"
-        say "[dry-run] + (cd $d && ./scripts/run_all.sh 1 4 8)   # env: BENCHMARK_TARGET_PROFILE=$PROFILE TENFERRO_CPU_FEATURES=$TENFERRO_CPU_FEATURES PUBLICATION_GATE_PROFILE=full BENCHMARK_OBSERVER_HANDSHAKE=$hs"
+        say "[dry-run] + (cd $d && $(openblas_env_prefix)./scripts/run_all.sh 1 4 8)   # env: BENCHMARK_TARGET_PROFILE=$PROFILE TENFERRO_CPU_FEATURES=$TENFERRO_CPU_FEATURES PUBLICATION_GATE_PROFILE=full BENCHMARK_OBSERVER_HANDSHAKE=$hs"
         for n in 1 4 8; do
             row=$(resolve_row $n); ISO_EXCLUDE_FILE=""; isolate "${row#* }" "tenferro row $n (planned handshake answer)"
         done
