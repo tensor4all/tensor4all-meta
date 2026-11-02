@@ -29,6 +29,10 @@
 #   WEEKLY_TOOLKIT        campaign-toolkit checkout (default: $WEEKLY_ROOT/campaign-toolkit)
 #   WEEKLY_DATE           UTC date stamp YYYYMMDD (default: today)
 #   WEEKLY_WORK_DIR       work directory (default: ${XDG_STATE_HOME:-~/.local/state}/tensor4all-weekly/$WEEKLY_DATE)
+#   WEEKLY_LOCK           the measurement lock (default: run.lock beside the work directory's parent)
+#                         A measurement that is not a weekly run (a probe, a one-off re-measure) sets
+#                         WEEKLY_WORK_DIR under its own root, e.g. ~/.local/state/tensor4all-probes/,
+#                         so that it takes its own run.lock instead of the weekly run's.
 #   WEEKLY_CAP_HOURS      wall-clock cap from the start of preflight (default 14)
 #   WEEKLY_MIN_FREE_GB    disk-space floor (default 100)
 #   WEEKLY_PYTHON         python used for the recorders (default python3; use the venv that has the pinned toolkit)
@@ -41,6 +45,10 @@ TOOLKIT=${WEEKLY_TOOLKIT:-$ROOT/campaign-toolkit}
 DATE=${WEEKLY_DATE:-$(date -u +%Y%m%d)}
 WORK=${WEEKLY_WORK_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tensor4all-weekly/$DATE}
 WORK_GIVEN=${WEEKLY_WORK_DIR:+1}
+# The lock is what excludes a second measurement; the *file* is not the lock. flock releases on process
+# exit, so a leftover run.lock never blocks the next run (`flock -n` on an unheld file succeeds) -- the
+# file only carries the holder's identity, so a failure names the holder instead of guessing.
+LOCK=${WEEKLY_LOCK:-$(dirname "$WORK")/run.lock}
 PY=${WEEKLY_PYTHON:-python3}
 HELP="python3 $HERE/helpers.py"
 # python for a repository's recorder: WEEKLY_PYTHON_<STAGE> (e.g. WEEKLY_PYTHON_FAER) overrides WEEKLY_PYTHON
@@ -163,6 +171,34 @@ have_checkout() { [[ -d $(repo_path "$1")/.git ]]; }
 CHECKS_TSV=""
 chk() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >>"$CHECKS_TSV"; printf '%-5s %-22s %s\n' "$2" "$1" "$3"; }
 
+# The identity the holder writes into the lock, and the one line a failure reads back.
+lock_holder_line() { printf 'pid=%s host=%s user=%s date=%s work=%s\n' "$$" "$(hostname 2>/dev/null || echo '?')" "$(id -un 2>/dev/null || echo '?')" "$DATE" "$WORK"; }
+lock_holder() { head -1 "$LOCK" 2>/dev/null | tr -d '\n'; }
+# A record left by a process that has since exited. The flock is what excludes, so this is a hint for
+# the operator (and for the message), never a reason to refuse: pid reuse is why it is not a test.
+lock_record_is_stale() {
+    local rec pid
+    rec=$(lock_holder) || return 1
+    pid=${rec#pid=}; pid=${pid%% *}
+    [[ $pid =~ ^[0-9]+$ ]] || return 1
+    [[ -d /proc/$pid ]] && return 1
+    return 0
+}
+acquire_run_lock() {
+    exec 9>"$LOCK" || return 1
+    flock -n 9 || return 1
+    lock_holder_line >&9
+}
+lock_message() {
+    local rec
+    rec=$(lock_holder)
+    if [[ -n $rec ]]; then
+        printf 'another measurement holds %s (holder: %s); one measurement at a time' "$LOCK" "$rec"
+    else
+        printf 'another measurement holds %s (no holder recorded; the file was locked by a process that did not write one); one measurement at a time' "$LOCK"
+    fi
+}
+
 measured_sets() {
     # every distinct measured CPU set: the profile's rows plus the sets the toolkit suites declare
     local n r
@@ -219,6 +255,19 @@ cmd_preflight() {
                 fi
             fi
         done < <(measured_sets)
+    fi
+
+    # the measurement lock: free, held by a live run, or a record whose process is gone
+    if [[ ! -e $LOCK ]]; then
+        chk lock PASS "no $LOCK yet (the next run creates it)"
+    elif flock -n "$LOCK" true; then
+        if lock_record_is_stale; then
+            chk lock PASS "free; the record from $(lock_holder) is from a process that is gone (harmless: flock is the lock, not the file)"
+        else
+            chk lock PASS "free$( [[ -n $(lock_holder) ]] && printf '; last holder %s' "$(lock_holder)")"
+        fi
+    else
+        chk lock FAIL "held: $(lock_message)"
     fi
 
     # disk
@@ -658,7 +707,7 @@ cmd_run() {
         record_unit "$stage" "(stage)" failed "pins check FAILed (see $WORK/pins.json); not measured" "$(now)" "$(now)" 1; return 1
     fi
     setup_iso_roots || die "cannot identify the executor process; set WEEKLY_EXECUTOR_PID"
-    (( DRY )) || { exec 9>"$(dirname "$WORK")/run.lock"; flock -n 9 || die "another weekly run holds $(dirname "$WORK")/run.lock (one measurement at a time)"; }
+    (( DRY )) || { acquire_run_lock || die "$(lock_message)"; }
     : >"$WORK/$stage.rundirs"
     if (( DRY )); then materialise "$stage"
     else materialise "$stage" >>"$WORK/logs/${stage}__setup.log" 2>&1 \
