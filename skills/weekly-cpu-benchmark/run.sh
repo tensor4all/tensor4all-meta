@@ -13,6 +13,7 @@
 #   run.sh [--dry-run] pr <stage>
 #   run.sh [--dry-run] summary
 #   run.sh selftest-affinity
+#   run.sh selftest-lock      the lock acquisition path against a live holder (no measurement)
 #
 # Exit codes: 0 ok; 1 a check or a unit failed (the cause is in the work directory); 2 refused
 # (usage, missing executor record, lock held, deadline); 3 no checkout for the stage.
@@ -185,8 +186,13 @@ lock_record_is_stale() {
     return 0
 }
 acquire_run_lock() {
-    exec 9>"$LOCK" || return 1
+    # Append, never truncate: opening with `>` empties the file before flock decides, which wipes
+    # the live holder's record and leaves the failure with nothing to name. flock does not stop
+    # that write -- it is the opener's own truncation.
+    exec 9>>"$LOCK" || return 1
     flock -n 9 || return 1
+    # The lock is ours now, so the record is ours to replace with a single line.
+    : >"$LOCK"
     lock_holder_line >&9
 }
 lock_message() {
@@ -803,6 +809,40 @@ cmd_summary() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# selftest-lock: the acquisition path against a live holder, on a throwaway lock file
+cmd_selftest_lock() {
+    local tmp rc=0 holder line
+    tmp=$(mktemp -d)
+    LOCK=$tmp/run.lock
+    # A holder that acquires the way a real run does: take the lock, then write the record.
+    # `$$` inside a subshell is the parent's pid, so the expectation comes from the record the
+    # holder wrote itself, not from `$!`.
+    ( exec 9>>"$LOCK"; flock 9; lock_holder_line >"$tmp/holder.record"; lock_holder_line >&9; sleep 30 ) &
+    holder=$!
+    sleep 1
+    local expect; expect=$(cat "$tmp/holder.record" 2>/dev/null)
+    if acquire_run_lock; then
+        say "FAIL: acquired while $LOCK was held (holder $expect)"; rc=1
+    else
+        line=$(lock_message)
+        say "held: $line"
+        if [[ -n $expect && $line == *"$expect"* && $line != *"no holder recorded"* ]]; then
+            say "OK: the failure names the live holder ($expect)"
+        else
+            say "FAIL: the failure does not name the holder (expected '$expect')"; rc=1
+        fi
+    fi
+    kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    if acquire_run_lock; then
+        if [[ $(lock_holder) == "pid=$$ "* ]]; then say "OK: reacquired and recorded pid=$$"; else say "FAIL: reacquired without recording pid=$$: $(lock_holder)"; rc=1; fi
+    else
+        say "FAIL: could not reacquire a released lock"; rc=1
+    fi
+    rm -rf "$tmp"
+    if (( rc == 0 )); then say "SELFTEST OK"; else say "SELFTEST FAILED"; fi
+    return $rc
+}
+
 # selftest-affinity: the isolation functions on a throwaway process tree, nothing else is touched
 # ---------------------------------------------------------------------------------------------
 cmd_selftest() {
@@ -853,10 +893,11 @@ set -- "${args[@]:-}"
 sub=${1:-}; shift || true
 case $sub in
     selftest-affinity) cmd_selftest; exit $?;;
+    selftest-lock) cmd_selftest_lock; exit $?;;
     ""|-h|--help|help) sed -n '2,26p' "$0"; exit 0;;
     plan) cmd_plan; exit 0;;
     preflight|pins|run|pr|summary|bg|await) ;;
-    *) die "unknown subcommand '$sub' (preflight pins plan run pr summary selftest-affinity)";;
+    *) die "unknown subcommand '$sub' (preflight pins plan run pr summary selftest-affinity selftest-lock)";;
 esac
 require_executor
 # a dry run never shares a work directory (or a cap clock) with a real week
