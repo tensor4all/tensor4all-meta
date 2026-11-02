@@ -75,6 +75,14 @@ profile is tied to this host: the 64 core EPYC is Zen 2 and cannot produce `zen5
 > development there is possible but small. On an APU the iGPU shares the memory controller with the
 > CPU, so a measurement window wants the GPU idle as well.
 
+**Measurements that are not the weekly run** (a probe, a one-off re-measure of one revision) keep
+their own state root and their own lock: set `WEEKLY_WORK_DIR=~/.local/state/tensor4all-probes/<name>`
+(and `WEEKLY_LOCK` beside it if you want it explicit). Writing such a directory under
+`~/.local/state/tensor4all-weekly/` makes it share the weekly run's `run.lock`, so a long probe
+blocks the weekly start and its leftovers clutter the weekly record. The lock is a `flock`, not the
+file: a leftover `run.lock` never blocks anything (preflight shows it as free), and a failure names
+the holder (`pid= host= user= date= work=`) written into the file when the lock was taken.
+
 ## Step 1. Preflight (timeout 300000 ms)
 
 ```sh
