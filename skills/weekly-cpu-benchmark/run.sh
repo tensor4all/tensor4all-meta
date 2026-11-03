@@ -143,8 +143,8 @@ resolve_row() { python3 "$IDLE_SCRIPT" resolve --profile "$PROFILE" --threads "$
 # ---------------------------------------------------------------------------------------------
 require_executor() {
     [[ -n ${WEEKLY_EXECUTOR:-} && -n ${WEEKLY_EXECUTOR_VERSION:-} && -n ${WEEKLY_EXECUTOR_MODEL:-} ]] \
-        || die "set WEEKLY_EXECUTOR (pi or claude-code), WEEKLY_EXECUTOR_VERSION and WEEKLY_EXECUTOR_MODEL; refusing to start without the executor record"
-    case $WEEKLY_EXECUTOR in pi|claude-code) ;; *) die "WEEKLY_EXECUTOR must be pi or claude-code, got '$WEEKLY_EXECUTOR'";; esac
+        || die "set WEEKLY_EXECUTOR (pi, claude-code or hermes), WEEKLY_EXECUTOR_VERSION and WEEKLY_EXECUTOR_MODEL; refusing to start without the executor record"
+    case $WEEKLY_EXECUTOR in pi|claude-code|hermes) ;; *) die "WEEKLY_EXECUTOR must be pi, claude-code or hermes, got '$WEEKLY_EXECUTOR'";; esac
 }
 
 init_work() {

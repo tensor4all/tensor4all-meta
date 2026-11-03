@@ -39,7 +39,7 @@ The executor record is mandatory; `run.sh` refuses to start without it. Set it o
 `export` it in a file you `source`):
 
 ```sh
-export WEEKLY_EXECUTOR=pi                      # or claude-code
+export WEEKLY_EXECUTOR=pi                      # pi, claude-code or hermes
 export WEEKLY_EXECUTOR_VERSION=<agent version> # e.g. output of `pi --version` / `claude --version`
 export WEEKLY_EXECUTOR_MODEL=<model name>      # e.g. the model id the session runs on
 export WEEKLY_EXECUTOR_PID=<pid of your agent process>   # optional: run.sh finds the nearest ancestor named pi/node/claude
