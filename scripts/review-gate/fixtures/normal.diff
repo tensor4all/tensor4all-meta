@@ -1,0 +1,11 @@
+diff --git a/deprecated/strided-old/src/lib.rs b/deprecated/strided-old/src/lib.rs
+index af697a1..572f232 100644
+--- a/deprecated/strided-old/src/lib.rs
++++ b/deprecated/strided-old/src/lib.rs
+@@ -1,4 +1,5 @@
+ pub fn old_entry() {
+     let value = 1;
+-    value + 1
++    let added_marker = value * 2;
++    added_marker
+ }

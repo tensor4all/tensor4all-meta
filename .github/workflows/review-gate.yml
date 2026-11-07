@@ -1,0 +1,26 @@
+name: review-gate reference implementation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/review-gate.yml"
+  pull_request:
+    paths:
+      - "scripts/**"
+      - ".github/workflows/review-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: diff parser tests (no network, stdlib only)
+        run: python3 scripts/test-review-gate.py
+      - name: waiver decision tests (node:test, fixture JSON)
+        run: node --test scripts/test-waiver.js
