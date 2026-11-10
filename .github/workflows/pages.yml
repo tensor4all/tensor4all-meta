@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "branding/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -26,6 +27,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # The logo gallery (site/logos/) shows the files under branding/.
+      - name: Copy logo files into the site
+        run: |
+          mkdir -p site/branding
+          for d in branding/*/; do
+            name=$(basename "$d")
+            mkdir -p "site/branding/$name"
+            cp -R "$d"svg "$d"png "site/branding/$name/" 2>/dev/null || true
+          done
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
