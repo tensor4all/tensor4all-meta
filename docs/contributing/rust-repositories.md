@@ -16,11 +16,17 @@ were the project's rules and which were that repository's local habits. Measured
 
 ```sh
 for r in $(grep -v '^#' docs/contributing/repos.txt | grep -v fork); do
-  gh api "repos/tensor4all/$r/contents/CONTRIBUTING.md" --jq .name 2>/dev/null || echo "$r none"
+  out=$(gh api "repos/tensor4all/$r/contents/CONTRIBUTING.md" 2>&1) || {
+    case "$out" in *404*) echo none ;; *) echo UNREADABLE ;; esac; continue; }
+  echo CONTRIBUTING.md
 done | sort | uniq -c
-#   2 CONTRIBUTING.md      (tensor4all-rs, tenferro-rs)
+#   2 CONTRIBUTING.md
 #  16 none
 ```
+
+`404` is what produces `none`; any other failure prints `UNREADABLE`, because a rate limit or an outage is not
+evidence that a file is absent. (Two rounds of this page got that wrong in different ways — first by recalling the
+count, then by printing a `none` that a failed call would also have produced.)
 
 The rules below are the ones that were already true in the repositories that had written them down; this page is the
 first place they are all in one place, and the checker below is what keeps the list honest.

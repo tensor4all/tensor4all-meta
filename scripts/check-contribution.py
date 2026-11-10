@@ -6,8 +6,8 @@ marker the template writes:
 
     <!-- unified contribution policy: ../../docs/contributing/rust-repositories.md in tensor4all/tensor4all-meta -->
 
-Why a checker and not a paragraph: the policy is only unified if a repository cannot quietly not have it. Fourteen of
-the twenty-three Rust repositories had no `CONTRIBUTING.md` at all before this, and nothing noticed.
+Why a checker and not a paragraph: the policy is only unified if a repository cannot quietly not have it. Sixteen of
+the eighteen Rust repositories this list covers had no `CONTRIBUTING.md` at all before this, and nothing noticed.
 
 Usage:
     python3 scripts/check-contribution.py [--repo-root <dir with checkouts>] [--json]
