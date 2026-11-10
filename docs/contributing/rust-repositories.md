@@ -10,10 +10,20 @@ The list of repositories this applies to is in [`repos.txt`](repos.txt), and
 
 ## Why a single page
 
-Fourteen of the twenty-three Rust repositories in the organisation had no `CONTRIBUTING.md` at all, and the two that
-did described the same practices in different words — so a contributor who had read one of them could not tell which
-parts were the project's rules and which were that repository's local habits. The rules below are the parts that were
-already true everywhere but written nowhere.
+Sixteen of the eighteen Rust repositories this policy covers had no `CONTRIBUTING.md` at all, and the two that did
+described the same practices in different words — so a contributor who had read one of them could not tell which parts
+were the project's rules and which were that repository's local habits. Measured on 2026-11-10:
+
+```sh
+for r in $(grep -v '^#' docs/contributing/repos.txt | grep -v fork); do
+  gh api "repos/tensor4all/$r/contents/CONTRIBUTING.md" --jq .name 2>/dev/null || echo "$r none"
+done | sort | uniq -c
+#   2 CONTRIBUTING.md      (tensor4all-rs, tenferro-rs)
+#  16 none
+```
+
+The rules below are the ones that were already true in the repositories that had written them down; this page is the
+first place they are all in one place, and the checker below is what keeps the list honest.
 
 ## 1. Work starts from an issue, and the issue is claimed
 
