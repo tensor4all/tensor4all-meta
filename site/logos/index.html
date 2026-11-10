@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tensor4all logos</title>
+<meta name="description" content="Logos of the tensor4all project and its libraries: marks, wordmarks, avatars and favicons, with colors and download links.">
+<link rel="icon" href="../branding/logo/svg/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../stack/assets/style.css">
+<style>
+  .logo-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+  .logo-head h2 { margin-bottom: 0; }
+  .tag.proposal { background: var(--warn-soft); color: var(--warn); margin: 0; }
+  .tag.adopted { background: var(--ok-soft); color: var(--ok); margin: 0; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin: 20px 0 12px; }
+  .tile {
+    border: 1px solid var(--line); border-radius: var(--radius); margin: 0;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .tile .stage { flex: 1; display: grid; place-items: center; padding: 28px 24px; min-height: 150px; }
+  .tile .stage.on-light { background: #ffffff; }
+  .tile .stage.on-dark { background: #14171b; }
+  .tile .stage.on-site { background: var(--bg); }
+  .tile img { display: block; max-width: 100%; height: auto; }
+  .tile figcaption { font-size: 13px; color: var(--muted); padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface); }
+  .tiles.small { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 0; }
+  .tiles.small .stage { min-height: 120px; padding: 20px; }
+  .favicons { display: flex; align-items: end; gap: 16px; }
+  .favicons img { image-rendering: pixelated; }
+
+  .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -2px; margin-right: 6px; }
+  .files { columns: 2 280px; column-gap: 32px; padding-left: 18px; max-width: none; font-size: 15px; }
+  .files li { break-inside: avoid; }
+</style>
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="brand" href="https://tensor4all.org/">tensor4all</a>
+  <nav>
+    <a href="../stack/">Stack overview</a>
+    <a href="../stack/users.html">For tensor network users</a>
+    <a href="../stack/backend.html">For backend developers</a>
+    <a href="./" aria-current="page">Logos</a>
+  </nav>
+</div></header>
+
+<div class="layout with-toc">
+<aside class="toc" aria-label="On this page">
+  <p class="label">Logos</p>
+  <ol>
+    <li><a href="#tensor4all">tensor4all</a></li>
+    <li><a href="#tenferro">tenferro</a></li>
+    <li><a href="#using">In a README</a></li>
+    <li><a href="#adding">Adding a logo</a></li>
+  </ol>
+</aside>
+
+<main>
+  <section class="hero">
+    <p class="eyebrow">Branding</p>
+    <h1>tensor4all logos</h1>
+    <p class="lead">Logos of the tensor4all project and its libraries, with the files to download, their colors, and how to put them in a README. The sources live under <a href="https://github.com/tensor4all/tensor4all-meta/tree/main/branding"><code>branding/</code></a> in tensor4all-meta.</p>
+  </section>
+
+  <div class="note warm"><p>Every logo on this page is a proposal. None has been adopted yet, so expect changes before you put one on a release.</p></div>
+
+  <!-- tensor4all -->
+  <div class="logo-head">
+    <h2 id="tensor4all">tensor4all</h2>
+    <span class="tag proposal">Proposal</span>
+  </div>
+  <p>The organization logo. The mark is a tesseract, a four-dimensional hypercube drawn as a cube inside a cube. A rank-4 tensor carries the <strong>4</strong> in the name, and the mark shows a tensor itself rather than a network diagram.</p>
+
+  <div class="tiles">
+    <figure class="tile"><div class="stage on-light"><img src="../branding/logo/svg/tensor4all-wordmark.svg" alt="tensor4all wordmark on a light background" width="360"></div><figcaption>Wordmark, light</figcaption></figure>
+    <figure class="tile"><div class="stage on-dark"><img src="../branding/logo/svg/tensor4all-wordmark-dark.svg" alt="tensor4all wordmark on a dark background" width="360"></div><figcaption>Wordmark, dark</figcaption></figure>
+  </div>
+  <div class="tiles small">
+    <figure class="tile"><div class="stage on-site"><img src="../branding/logo/svg/tensor4all-mark-auto.svg" alt="tensor4all mark" width="96"></div><figcaption>Mark, follows theme</figcaption></figure>
+    <figure class="tile"><div class="stage on-light"><img src="../branding/logo/svg/tensor4all-avatar.svg" alt="tensor4all avatar" width="96" style="border-radius: 50%"></div><figcaption>Avatar, circle crop</figcaption></figure>
+    <figure class="tile"><div class="stage on-light"><div class="favicons"><img src="../branding/logo/png/favicon-48.png" alt="tensor4all favicon, 48 px" width="48" height="48"><img src="../branding/logo/png/favicon-32.png" alt="tensor4all favicon, 32 px" width="32" height="32"><img src="../branding/logo/png/favicon-16.png" alt="tensor4all favicon, 16 px" width="16" height="16"></div></div><figcaption>Favicons, 48 / 32 / 16 px</figcaption></figure>
+  </div>
+
+  <h3>Colors</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Role</th><th>Light</th><th>Dark</th></tr></thead>
+    <tbody>
+      <tr><td>Outer cube</td><td><span class="swatch" style="background:#1f5fa8"></span><code>#1f5fa8</code></td><td><span class="swatch" style="background:#79b0ee"></span><code>#79b0ee</code></td></tr>
+      <tr><td>Inner cube</td><td><span class="swatch" style="background:#8fb0d8"></span><code>#8fb0d8</code></td><td><span class="swatch" style="background:#4a6f99"></span><code>#4a6f99</code></td></tr>
+      <tr><td>Fourth-axis edges</td><td><span class="swatch" style="background:#b9c9dc"></span><code>#b9c9dc</code></td><td><span class="swatch" style="background:#34506f"></span><code>#34506f</code></td></tr>
+      <tr><td>Wordmark text</td><td><span class="swatch" style="background:#1d2126"></span><code>#1d2126</code></td><td><span class="swatch" style="background:#e6e8eb"></span><code>#e6e8eb</code></td></tr>
+      <tr><td>Wordmark <strong>4</strong></td><td><span class="swatch" style="background:#a3521a"></span><code>#a3521a</code></td><td><span class="swatch" style="background:#f0a46b"></span><code>#f0a46b</code></td></tr>
+    </tbody>
+  </table></div>
+  <p>Wordmark type: IBM Plex Sans SemiBold, tracking -0.03 em, outlined.</p>
+
+  <h3>Files</h3>
+  <ul class="files">
+    <li><a href="../branding/logo/svg/tensor4all-wordmark.svg" download>tensor4all-wordmark.svg</a></li>
+    <li><a href="../branding/logo/svg/tensor4all-wordmark-dark.svg" download>tensor4all-wordmark-dark.svg</a></li>
+    <li><a href="../branding/logo/svg/tensor4all-mark.svg" download>tensor4all-mark.svg</a></li>
+    <li><a href="../branding/logo/svg/tensor4all-mark-dark.svg" download>tensor4all-mark-dark.svg</a></li>
+    <li><a href="../branding/logo/svg/tensor4all-mark-auto.svg" download>tensor4all-mark-auto.svg</a></li>
+    <li><a href="../branding/logo/svg/tensor4all-avatar.svg" download>tensor4all-avatar.svg</a></li>
+    <li><a href="../branding/logo/svg/tensor4all-avatar-dark.svg" download>tensor4all-avatar-dark.svg</a></li>
+    <li><a href="../branding/logo/svg/favicon.svg" download>favicon.svg</a></li>
+    <li><a href="../branding/logo/png/tensor4all-wordmark-240h.png" download>tensor4all-wordmark-240h.png</a></li>
+    <li><a href="../branding/logo/png/tensor4all-wordmark-dark-240h.png" download>tensor4all-wordmark-dark-240h.png</a></li>
+    <li><a href="../branding/logo/png/tensor4all-avatar-512.png" download>tensor4all-avatar-512.png</a></li>
+    <li><a href="../branding/logo/png/tensor4all-avatar-1024.png" download>tensor4all-avatar-1024.png</a></li>
+    <li><a href="../branding/logo/png/favicon-32.png" download>favicon-32.png</a></li>
+    <li><a href="../branding/logo/png/apple-touch-icon.png" download>apple-touch-icon.png</a></li>
+  </ul>
+  <p>Details and regeneration: <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/branding/logo/README.md">branding/logo/README.md</a>.</p>
+
+  <!-- tenferro -->
+  <div class="logo-head">
+    <h2 id="tenferro">tenferro</h2>
+    <span class="tag proposal">Proposal</span>
+  </div>
+  <p>The logo of <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a>, the tensor runtime. The mark is a hex nut with a tensor-product sign as its hole. <em>Ferro</em> is iron, and iron rusts: the nut and the copper-rust color say that tenferro is written in Rust. The tensor product stands for general tensor computation rather than any one method.</p>
+
+  <div class="tiles">
+    <figure class="tile"><div class="stage on-light"><img src="../branding/tenferro/svg/tenferro-wordmark.svg" alt="tenferro wordmark on a light background" width="320"></div><figcaption>Wordmark, light</figcaption></figure>
+    <figure class="tile"><div class="stage on-dark"><img src="../branding/tenferro/svg/tenferro-wordmark-dark.svg" alt="tenferro wordmark on a dark background" width="320"></div><figcaption>Wordmark, dark</figcaption></figure>
+  </div>
+  <div class="tiles small">
+    <figure class="tile"><div class="stage on-site"><img src="../branding/tenferro/svg/tenferro-mark-auto.svg" alt="tenferro mark" width="96"></div><figcaption>Mark, follows theme</figcaption></figure>
+    <figure class="tile"><div class="stage on-light"><img src="../branding/tenferro/svg/tenferro-avatar.svg" alt="tenferro avatar" width="96" style="border-radius: 50%"></div><figcaption>Avatar, circle crop</figcaption></figure>
+    <figure class="tile"><div class="stage on-light"><div class="favicons"><img src="../branding/tenferro/png/favicon-48.png" alt="tenferro favicon, 48 px" width="48" height="48"><img src="../branding/tenferro/png/favicon-32.png" alt="tenferro favicon, 32 px" width="32" height="32"><img src="../branding/tenferro/png/favicon-16.png" alt="tenferro favicon, 16 px" width="16" height="16"></div></div><figcaption>Favicons, 48 / 32 / 16 px</figcaption></figure>
+  </div>
+
+  <h3>Colors</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Role</th><th>Light</th><th>Dark</th></tr></thead>
+    <tbody>
+      <tr><td>Nut, wordmark <strong>ten</strong></td><td><span class="swatch" style="background:#1e2126"></span><code>#1e2126</code></td><td><span class="swatch" style="background:#f2f2f0"></span><code>#f2f2f0</code></td></tr>
+      <tr><td>Circled cross, wordmark <strong>ferro</strong></td><td><span class="swatch" style="background:#995629"></span><code>#995629</code></td><td><span class="swatch" style="background:#c47a45"></span><code>#c47a45</code></td></tr>
+    </tbody>
+  </table></div>
+  <p>Wordmark type: IBM Plex Sans Bold, tracking -0.01 em, outlined.</p>
+
+  <h3>Files</h3>
+  <ul class="files">
+    <li><a href="../branding/tenferro/svg/tenferro-wordmark.svg" download>tenferro-wordmark.svg</a></li>
+    <li><a href="../branding/tenferro/svg/tenferro-wordmark-dark.svg" download>tenferro-wordmark-dark.svg</a></li>
+    <li><a href="../branding/tenferro/svg/tenferro-mark.svg" download>tenferro-mark.svg</a></li>
+    <li><a href="../branding/tenferro/svg/tenferro-mark-dark.svg" download>tenferro-mark-dark.svg</a></li>
+    <li><a href="../branding/tenferro/svg/tenferro-mark-auto.svg" download>tenferro-mark-auto.svg</a></li>
+    <li><a href="../branding/tenferro/svg/tenferro-avatar.svg" download>tenferro-avatar.svg</a></li>
+    <li><a href="../branding/tenferro/svg/tenferro-avatar-dark.svg" download>tenferro-avatar-dark.svg</a></li>
+    <li><a href="../branding/tenferro/svg/favicon.svg" download>favicon.svg</a></li>
+    <li><a href="../branding/tenferro/png/tenferro-wordmark-240h.png" download>tenferro-wordmark-240h.png</a></li>
+    <li><a href="../branding/tenferro/png/tenferro-wordmark-dark-240h.png" download>tenferro-wordmark-dark-240h.png</a></li>
+    <li><a href="../branding/tenferro/png/tenferro-avatar-512.png" download>tenferro-avatar-512.png</a></li>
+    <li><a href="../branding/tenferro/png/tenferro-avatar-1024.png" download>tenferro-avatar-1024.png</a></li>
+    <li><a href="../branding/tenferro/png/favicon-32.png" download>favicon-32.png</a></li>
+    <li><a href="../branding/tenferro/png/apple-touch-icon.png" download>apple-touch-icon.png</a></li>
+  </ul>
+  <p>Details and regeneration: <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/branding/tenferro/README.md">branding/tenferro/README.md</a>.</p>
+
+  <h2 id="using">Putting a logo in a README</h2>
+  <p>Use a <code>&lt;picture&gt;</code> element so the logo follows the reader's light or dark theme on GitHub. Replace <code>tenferro</code> with the project you need.</p>
+<pre><code>&lt;picture&gt;
+  &lt;source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/tensor4all/tensor4all-meta/main/branding/tenferro/svg/tenferro-wordmark-dark.svg"&gt;
+  &lt;img alt="tenferro" src="https://raw.githubusercontent.com/tensor4all/tensor4all-meta/main/branding/tenferro/svg/tenferro-wordmark.svg" height="64"&gt;
+&lt;/picture&gt;</code></pre>
+
+  <h2 id="adding">Adding a logo</h2>
+  <ol>
+    <li>Put the files under <code>branding/&lt;project&gt;/</code> with <code>svg/</code>, <code>png/</code>, <code>tools/</code> and a <code>README.md</code>, following <code>branding/tenferro/</code>.</li>
+    <li>Outline the text in every wordmark, so it renders without the font installed.</li>
+    <li>Add a section for the project to this page, <code>site/logos/index.html</code>. The Pages workflow copies <code>svg/</code> and <code>png/</code> from every folder under <code>branding/</code> into the site.</li>
+  </ol>
+</main>
+</div>
+
+<footer><div class="inner">
+  Maintained in <a href="https://github.com/tensor4all/tensor4all-meta">tensor4all-meta</a>. Corrections are welcome as issues or pull requests there.
+</div></footer>
+</body>
+</html>

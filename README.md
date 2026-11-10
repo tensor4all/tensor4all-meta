@@ -11,6 +11,12 @@ by [`.github/workflows/pages.yml`](.github/workflows/pages.yml):
 - [For tensor network users](https://tensor4all.org/tensor4all-meta/stack/users.html): QTT, TCI, tree tensor networks
 - [For backend developers](https://tensor4all.org/tensor4all-meta/stack/backend.html): tenferro, cpueinsum, tcontract, tlinalg, strided-rs, hataori
 
+## Logos
+
+Published at <https://tensor4all.org/tensor4all-meta/logos/> from [`site/logos/`](site/logos/), with the files under
+[`branding/`](branding/): the [tensor4all logo](branding/logo/README.md) and the [tenferro logo](branding/tenferro/README.md),
+both proposals.
+
 ## Contribution rules
 
 - [Contribution rules for the Rust repositories](docs/contributing/rust-repositories.md): the rules that hold in every
