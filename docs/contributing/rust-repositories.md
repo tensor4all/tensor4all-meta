@@ -61,7 +61,9 @@ a reviewer enforces its honesty.
 
 ## 5. The gates a Rust repository runs
 
-Every Rust repository in the organisation runs, at minimum:
+Every Rust repository in the organisation runs at minimum the gates below. This is the rule the repositories are held
+to; it is not a measurement of each repository's CI in this change, and a repository that does not yet run one of them
+is a defect to report rather than a licence to keep the others:
 
 | gate | what it means |
 |---|---|
@@ -81,8 +83,10 @@ A repository may add gates; none may drop one of these without recording why in 
 - **An adversarial review of the head commit is required before merge, and it must name the commit.**
   The review states the SHA it read; a review of an older head does not count, because a head that moved is a
   different tree. `tensor4all-meta` holds the reference implementation
-  ([`.github/workflows/review-gate.yml`](../../.github/workflows/review-gate.yml)) and
-  [`scripts/check-contribution.py`](../scripts/check-contribution.py) reports which repositories require it.
+  ([`.github/workflows/review-gate.yml`](../../.github/workflows/review-gate.yml)). Whether a repository makes it a
+  required check is a branch-protection setting that no file records, so this page states the rule and
+  [`scripts/check-contribution.py`](../../scripts/check-contribution.py) reports only the part that is in the tree:
+  which repositories carry the pointer to this page.
 - **Whoever wrote the change does not merge it alone.** The author may merge after the review, but a change merged
   before its review lands is a change nobody reviewed — that has happened, and it is why the gate is a status check
   and not a habit.

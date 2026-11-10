@@ -43,22 +43,29 @@ def read_list(root: pathlib.Path) -> list[str]:
     return out
 
 
-def from_api(repo: str) -> str | None:
-    """The repository's CONTRIBUTING.md, or None when it does not have one."""
+def from_api(repo: str) -> tuple[str | None, str]:
+    """(text, state): the repository's CONTRIBUTING.md, and how retrieval went.
+
+    A 404 means the file is absent; any other failure means we do not know — a rate limit or a 503 reported as
+    "no CONTRIBUTING.md" would be a diagnostic that lies about the repository rather than about the network.
+    """
     res = subprocess.run(
         ["gh", "api", f"repos/{ORG}/{repo}/contents/CONTRIBUTING.md", "--jq", ".content"],
         capture_output=True, text=True,
     )
     if res.returncode != 0:
-        return None
+        err = (res.stderr or "") + (res.stdout or "")
+        if "Not Found" in err or "404" in err:
+            return None, "absent"
+        return None, "unretrieved"
     import base64
     try:
-        return base64.b64decode(res.stdout).decode("utf-8", "replace")
+        return base64.b64decode(res.stdout).decode("utf-8", "replace"), "read"
     except Exception:  # noqa: BLE001
-        return None
+        return None, "unretrieved"
 
 
-def from_disk(repo_root: pathlib.Path, repo: str) -> str | None:
+def from_disk(repo_root: pathlib.Path, repo: str) -> str | None:  # noqa: D401
     path = repo_root / repo / "CONTRIBUTING.md"
     return path.read_text(errors="replace") if path.exists() else None
 
@@ -76,8 +83,13 @@ def main(argv: list[str]) -> int:
         if is_fork:
             rows.append((repo, "fork", "upstream project: its own contribution rules apply"))
             continue
-        text = from_disk(repo_root, repo) if repo_root else from_api(repo)
-        if text is None:
+        if repo_root:
+            text, how = from_disk(repo_root, repo), "read"
+        else:
+            text, how = from_api(repo)
+        if how == "unretrieved":
+            rows.append((repo, "error", "could not read the repository (rate limit or network), not proof of absence"))
+        elif text is None:
             rows.append((repo, "missing", "no CONTRIBUTING.md"))
         elif MARKER not in text:
             rows.append((repo, "unpointed", "CONTRIBUTING.md does not point at the policy"))
@@ -86,6 +98,7 @@ def main(argv: list[str]) -> int:
 
     ok = [r for r in rows if r[1] == "ok"]
     exempt = [r for r in rows if r[1] == "fork"]
+    errored = [r for r in rows if r[1] == "error"]
     if as_json:
         print(json.dumps([{"repo": r[0], "state": r[1], "detail": r[2]} for r in rows], indent=1))
     else:
@@ -94,8 +107,11 @@ def main(argv: list[str]) -> int:
             print(f"{repo:{width}}  {state:9s}  {detail}")
         print(f"\n{len(ok)}/{len(rows) - len(exempt)} of our repositories point at {POLICY}"
               f" ({len(exempt)} forks exempt)")
+        if errored:
+            print(f"{len(errored)} could not be read at all — fix that before trusting the count: "
+                  + ", ".join(r[0] for r in errored))
 
-    return 0 if len(ok) == len(rows) - len(exempt) else 1
+    return 0 if len(ok) == len(rows) - len(exempt) and not errored else 1
 
 
 if __name__ == "__main__":
