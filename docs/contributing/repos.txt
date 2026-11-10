@@ -17,7 +17,6 @@ hello-world-runpod
 hdf5-rt
 tensor4all-benchmark
 computegraph-rs
-cubek
 elem-simd-math-rs
 
 # forks: upstream rules, not ours
@@ -25,4 +24,5 @@ faer  # fork
 t4a-gemm  # fork
 t4a-private-gemm-x86  # fork
 cubecl  # fork
+cubek  # fork
 rsmpi-rt  # fork
