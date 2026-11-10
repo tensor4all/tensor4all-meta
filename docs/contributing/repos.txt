@@ -1,0 +1,28 @@
+# Rust repositories the unified contribution policy applies to (non-archived, 2026-11-10).
+# Add a repository when it is created; check-contribution.py reads this list.
+# A fork keeps its upstream project's contribution rules; ours do not apply there.
+tensor4all-rs
+tenferro-rs
+strided-rs
+tcontract-rs
+t4a-cuda-kernels
+cpueinsum-rs
+t4a-gpu-backend
+strided-rs-benchmark-suite
+threadteam-rs
+hataori-rs
+tlinalg-rs
+quanticsgrids-rs
+hello-world-runpod
+hdf5-rt
+tensor4all-benchmark
+computegraph-rs
+cubek
+elem-simd-math-rs
+
+# forks: upstream rules, not ours
+faer  # fork
+t4a-gemm  # fork
+t4a-private-gemm-x86  # fork
+cubecl  # fork
+rsmpi-rt  # fork

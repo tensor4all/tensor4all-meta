@@ -11,6 +11,15 @@ by [`.github/workflows/pages.yml`](.github/workflows/pages.yml):
 - [For tensor network users](https://tensor4all.org/tensor4all-meta/stack/users.html): QTT, TCI, tree tensor networks
 - [For backend developers](https://tensor4all.org/tensor4all-meta/stack/backend.html): tenferro, cpueinsum, tcontract, tlinalg, strided-rs, hataori
 
+## Contribution rules
+
+- [Contribution rules for the Rust repositories](docs/contributing/rust-repositories.md): the rules that hold in every
+  Rust repository here — issue-first and claimed work, one decision per pull request, evidence in the body, red-first
+  tests, the gates each repository runs, the review requirement, and the version policy. A repository's own
+  `CONTRIBUTING.md` records only its local facts (MSRV, feature matrix, platforms) and points at that page.
+- [`scripts/check-contribution.py`](scripts/check-contribution.py) reports which repositories carry the pointer.
+  Forks are exempt: an upstream project's own contribution rules apply there.
+
 ## Design documents
 
 - [Cross-repository design](docs/design/): decisions that span several repositories,
