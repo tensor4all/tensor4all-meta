@@ -9,7 +9,7 @@ Status: proposal, not yet adopted.
 
 ## Concept
 
-The mark is a small tensor network drawn as a circuit: open legs, hollow nodes, and bonds with rounded corners.
+The mark is a small tensor network drawn as a circuit: open legs, solid nodes, and bonds with rounded corners.
 
 - Its bonds on the left, middle and right mimic the letter t, numeral 4 and letter a in the name, and the copper color used for 4 is the same as for the 4 in the wordmark.
 - Line art in ink and copper only, matching the tenferro and colmat logos.
@@ -33,7 +33,15 @@ At 16 px only the copper 4 is kept.
 | `png/tensor4all-avatar-{512,1024}.png` | GitHub organization avatar, social cards |
 | `png/favicon-{16,32,48}.png`, `png/apple-touch-icon.png` | Raster favicons for browsers that do not use SVG |
 
-The node rings are hollow: the bonds are masked out under them, so the mark works on any background.
+## Print
+
+The mark is drawn to survive screen printing and embroidery on clothing, where fine lines break up and small holes fill in. Common printer minimums are about 0.3 to 0.5 mm for a printed line and 1 mm for a gap; embroidery needs about 1.3 mm for a line.
+
+- Bonds are 10 units wide in a mark about 320 units across, and nodes are solid dots with a radius of 1.6 bond widths. Hollow rings are avoided because their holes close up.
+- The a-shaped bond is a semicircle set clear of the copper 4, so the narrowest gap in the mark is 2.4 bond widths.
+- With the whole wordmark 80 mm wide (a left-chest print), bonds are about 0.6 mm, node dots about 2 mm and the narrowest gap about 1.5 mm.
+
+For embroidery, use the mark alone at 45 mm or wider, or the wordmark at 165 mm or wider.
 
 ## Colors
 
