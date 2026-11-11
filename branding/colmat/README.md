@@ -16,7 +16,7 @@ There are two layouts and two palettes, all generated from the same pattern:
 | Layout | Files | Shows |
 | --- | --- | --- |
 | Plain | `colmat-wordmark*.svg` | Only the nonzero entries |
-| Grid | `colmat-wordmark-grid*.svg` | The full 5 by 13 matrix, zeros in a pale tone |
+| Grid | `colmat-wordmark-grid*.svg` | The full 4 by 9 matrix, zeros in a pale tone |
 
 | Palette | Files | Colors |
 | --- | --- | --- |
@@ -24,6 +24,8 @@ There are two layouts and two palettes, all generated from the same pattern:
 | Fresh | `-fresh` | The original navy and amber |
 
 Favicons use a smaller matrix (4 by 7, and 3 by 5 at 16 px) with the same two peaks and col.
+
+The matrix is kept small (26 entries) so it prints on clothing: with the wordmark 80 mm wide, a left-chest size, each entry is about 2 mm across and the gaps between entries about 1.1 mm, above the usual 1 mm printer minimum for a gap.
 
 ## Files
 

@@ -164,10 +164,12 @@ def t4a_four(colors=None, cls=False):
 # A hex nut (ferro: iron, which rusts: Rust) with a tensor product as its hole.
 
 TF_NUT = "110,60 85,103.3 35,103.3 10,60 35,16.7 85,16.7"
-TF_BOX = (7.75, 14.45, 112.25, 105.55)
+TF_STROKE = 7.0       # heavy enough for embroidery at a left-chest size
+TF_STROKE_SMALL = 10.5
+TF_BOX = (10 - TF_STROKE / 2, 16.7 - TF_STROKE / 2, 110 + TF_STROKE / 2, 103.3 + TF_STROKE / 2)
 
 
-def tf_mark(colors=None, cls=False, sw=4.5, cross_only=False):
+def tf_mark(colors=None, cls=False, sw=TF_STROKE, cross_only=False):
     def paint(role):
         return f'class="{role}"' if cls else f'stroke="{colors[role]}"'
 
@@ -183,12 +185,11 @@ def tf_mark(colors=None, cls=False, sw=4.5, cross_only=False):
 # The m of colmat drawn as matrix entries: two peaks and the col (mountain
 # pass, saddle point) between them, marked in the accent color.
 
-COLMAT_M = [  # 5 x 13; '#' entry, 'o' the col, '.' zero
-    "....#...#....",
-    "...###.###...",
-    "..####o####..",
-    ".###########.",
-    "#############",
+COLMAT_M = [  # 4 x 9; '#' entry, 'o' the col, '.' zero. Few, large entries print cleanly.
+    "..#...#..",
+    ".###.###.",
+    "####o####",
+    "#########",
 ]
 COLMAT_SMALL = [  # 4 x 7, for favicons
     ".#...#.",
@@ -201,7 +202,7 @@ COLMAT_TINY = [  # 3 x 5, for 16 px
     "##o##",
     "#####",
 ]
-DOT_RATIO = 0.36  # dot radius / pitch
+DOT_RATIO = 0.32  # dot radius / pitch: gaps of 0.36 pitch, over 1 mm at a left-chest size
 DOT_RATIO_SMALL = 0.42  # fuller dots for favicons
 
 
@@ -288,10 +289,10 @@ def main():
         write(p, f"tenferro-avatar{sfx}.svg", svg(square_around(TF_BOX, side=180), bg + tf_mark(c), "tenferro"))
     tf_auto = auto_style(FAMILY, {"ink": ("stroke", "ink"), "accent": ("stroke", "accent")})
     write(p, "tenferro-mark-auto.svg", svg(square_around(TF_BOX, 4), tf_mark(cls=True), "tenferro", tf_auto))
-    write(p, "favicon.svg", svg(square_around(TF_BOX, 6), tf_mark(cls=True, sw=9), "tenferro", tf_auto))
+    write(p, "favicon.svg", svg(square_around(TF_BOX, 6), tf_mark(cls=True, sw=TF_STROKE_SMALL), "tenferro", tf_auto))
     c = FAMILY["light"]
     bg = f'<rect x="-100" y="-100" width="400" height="400" fill="{c["bg"]}"/>'
-    write(p, "tenferro-icon-small.svg", svg((0, 0, 120, 120), bg + tf_mark(c, sw=9), "tenferro"))
+    write(p, "tenferro-icon-small.svg", svg((0, 0, 120, 120), bg + tf_mark(c, sw=TF_STROKE_SMALL), "tenferro"))
     write(p, "tenferro-icon-16.svg", svg((0, 0, 120, 120), bg + tf_mark(c, sw=12, cross_only=True), "tenferro"))
 
     # ---- colmat
