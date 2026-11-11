@@ -15,6 +15,8 @@ The mark is a hex nut drawn as line art, with a tensor-product sign (a circled c
 - tenferro is a general tensor computation engine (einsum over any algebra, autodiff, linear algebra), not a tensor network library, so the mark uses the tensor product rather than a network diagram.
 - A nut is a part you bolt into something larger, which fits a runtime that other libraries and languages build on through its C API.
 
+The strokes are 7 units in a 120-unit box, so with the wordmark 80 mm wide (a left-chest size) they are about 1.3 mm, enough for screen printing and embroidery.
+
 The nut is in the ink color and the circled cross in copper. In the wordmark, **ferro** is in copper. At 16 px the circle is dropped.
 
 ## Files

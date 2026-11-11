@@ -107,38 +107,50 @@ def text_paths(glyphs, color_of):
 # A tensor network drawn as a circuit. Its bonds on the left, middle and right
 # mimic the t, the 4 (in copper) and the a of the name.
 
-T4A_STROKE = 5.0
-T4A_NODE_R = 10.0
+# Drawn for print: about 2.4 lines per mm at a left-chest size, no enclosed
+# holes narrower than 1 mm, and solid nodes instead of hollow rings, which
+# fill in on fabric. See branding/logo/README.md, "Print".
+T4A_STROKE = 10.0
+T4A_NODE_R = 1.6           # node radius in stroke widths
 T4A_INK_LINES = [
-    "M68 24V193A17 17 0 0 0 85 210H110",     # left leg, bottom-left corner
+    "M68 24V193A17 17 0 0 0 85 210H110",     # the t: left leg, bottom-left corner
     "M36 56H296A15 15 0 0 1 311 71V210",     # top line, right side
-    "M259 118H342M259 210H342",               # right legs
-    "M259 118A51 51 0 0 0 259 210",          # the D-shaped bond
+    "M269 118H342M269 210H342",               # right legs
+    "M269 118A46 46 0 0 0 269 210",          # the a: a semicircular bond
 ]
-T4A_ACCENT_LINES = ["M110 210L189 56V239M110 210H259"]  # the 4
+T4A_ACCENT_LINES = ["M110 210L189 56V252M110 210H269"]  # the 4
 T4A_INK_NODES = [(68, 56), (311, 118), (311, 210)]
 T4A_ACCENT_NODES = [(189, 56), (110, 210), (189, 210)]
-T4A_BOX = (33.5, 21.5, 344.5, 241.5)   # outer edge of strokes and rings
+T4A_TEXT_H = 225.0         # mark height that sets the wordmark text size
+
+
+def t4a_box(weight=1.0):
+    """Outer edge of strokes and nodes."""
+    h = T4A_STROKE * weight / 2
+    return (36 - h, 24 - h, 342 + h, 252 + h)
+
+
+T4A_BOX = t4a_box()
 
 
 def t4a_mark(colors=None, cls=False, weight=1.0, uid="t4a"):
-    """Lines are cut out under the node rings, so nodes stay hollow on any background."""
-    sw, r = T4A_STROKE * weight, T4A_NODE_R * (1 + 0.3 * (weight - 1))
-    nodes = T4A_INK_NODES + T4A_ACCENT_NODES
+    """Bonds as strokes, nodes as solid dots; `weight` scales both for small sizes."""
+    sw = T4A_STROKE * weight
+    r = T4A_NODE_R * sw
 
-    def paint(role):
+    def stroke(role):
         return f'class="{role}"' if cls else f'stroke="{colors[role]}"'
 
-    holes = "".join(f'<circle cx="{x}" cy="{y}" r="{r:.2f}"/>' for x, y in nodes)
-    mask = (f'<mask id="{uid}-m" maskUnits="userSpaceOnUse" x="0" y="0" width="400" height="300">'
-            f'<rect x="0" y="0" width="400" height="300" fill="#fff"/><g fill="#000">{holes}</g></mask>')
+    def fill(role):
+        return f'class="{role}f"' if cls else f'fill="{colors[role]}"'
+
     ink = "".join(f'<path d="{d}"/>' for d in T4A_INK_LINES)
     acc = "".join(f'<path d="{d}"/>' for d in T4A_ACCENT_LINES)
-    rings_ink = "".join(f'<circle cx="{x}" cy="{y}" r="{r:.2f}"/>' for x, y in T4A_INK_NODES)
-    rings_acc = "".join(f'<circle cx="{x}" cy="{y}" r="{r:.2f}"/>' for x, y in T4A_ACCENT_NODES)
-    return (f'<defs>{mask}</defs><g fill="none" stroke-width="{sw:.2f}" stroke-linejoin="round">'
-            f'<g mask="url(#{uid}-m)"><g {paint("ink")}>{ink}</g><g {paint("accent")}>{acc}</g></g>'
-            f'<g {paint("ink")}>{rings_ink}</g><g {paint("accent")}>{rings_acc}</g></g>')
+    dots_ink = "".join(f'<circle cx="{x}" cy="{y}" r="{r:.2f}"/>' for x, y in T4A_INK_NODES)
+    dots_acc = "".join(f'<circle cx="{x}" cy="{y}" r="{r:.2f}"/>' for x, y in T4A_ACCENT_NODES)
+    return (f'<g fill="none" stroke-width="{sw:.2f}" stroke-linejoin="round">'
+            f'<g {stroke("ink")}>{ink}</g><g {stroke("accent")}>{acc}</g></g>'
+            f'<g {fill("ink")}>{dots_ink}</g><g {fill("accent")}>{dots_acc}</g>')
 
 
 def t4a_four(colors=None, cls=False):
@@ -152,10 +164,12 @@ def t4a_four(colors=None, cls=False):
 # A hex nut (ferro: iron, which rusts: Rust) with a tensor product as its hole.
 
 TF_NUT = "110,60 85,103.3 35,103.3 10,60 35,16.7 85,16.7"
-TF_BOX = (7.75, 14.45, 112.25, 105.55)
+TF_STROKE = 7.0       # heavy enough for embroidery at a left-chest size
+TF_STROKE_SMALL = 10.5
+TF_BOX = (10 - TF_STROKE / 2, 16.7 - TF_STROKE / 2, 110 + TF_STROKE / 2, 103.3 + TF_STROKE / 2)
 
 
-def tf_mark(colors=None, cls=False, sw=4.5, cross_only=False):
+def tf_mark(colors=None, cls=False, sw=TF_STROKE, cross_only=False):
     def paint(role):
         return f'class="{role}"' if cls else f'stroke="{colors[role]}"'
 
@@ -171,12 +185,11 @@ def tf_mark(colors=None, cls=False, sw=4.5, cross_only=False):
 # The m of colmat drawn as matrix entries: two peaks and the col (mountain
 # pass, saddle point) between them, marked in the accent color.
 
-COLMAT_M = [  # 5 x 13; '#' entry, 'o' the col, '.' zero
-    "....#...#....",
-    "...###.###...",
-    "..####o####..",
-    ".###########.",
-    "#############",
+COLMAT_M = [  # 4 x 9; '#' entry, 'o' the col, '.' zero. Few, large entries print cleanly.
+    "..#...#..",
+    ".###.###.",
+    "####o####",
+    "#########",
 ]
 COLMAT_SMALL = [  # 4 x 7, for favicons
     ".#...#.",
@@ -189,7 +202,7 @@ COLMAT_TINY = [  # 3 x 5, for 16 px
     "##o##",
     "#####",
 ]
-DOT_RATIO = 0.36  # dot radius / pitch
+DOT_RATIO = 0.32  # dot radius / pitch: gaps of 0.36 pitch, over 1 mm at a left-chest size
 DOT_RATIO_SMALL = 0.42  # fuller dots for favicons
 
 
@@ -228,7 +241,7 @@ def main():
 
     # ---- tensor4all
     p = "logo"
-    mark_h = T4A_BOX[3] - T4A_BOX[1]
+    mark_h = T4A_TEXT_H
     for theme in ("light", "dark"):
         c = FAMILY[theme]
         sfx = "" if theme == "light" else "-dark"
@@ -244,15 +257,16 @@ def main():
         bg = f'<rect x="-1000" y="-1000" width="3000" height="3000" fill="{c["bg"]}"/>'
         write(p, f"tensor4all-avatar{sfx}.svg",
               svg(square_around(T4A_BOX, side=470), bg + t4a_mark(c, uid=f"a{sfx}"), "tensor4all"))
-    t4a_auto = auto_style(FAMILY, {"ink": ("stroke", "ink"), "accent": ("stroke", "accent")})
+    t4a_auto = auto_style(FAMILY, {"ink": ("stroke", "ink"), "accent": ("stroke", "accent"),
+                                   "inkf": ("fill", "ink"), "accentf": ("fill", "accent")})
     write(p, "tensor4all-mark-auto.svg",
           svg(square_around(T4A_BOX, 8), t4a_mark(cls=True, uid="auto"), "tensor4all", t4a_auto))
     write(p, "favicon.svg",
-          svg(square_around(T4A_BOX, 14), t4a_mark(cls=True, weight=2.6, uid="fav"), "tensor4all", t4a_auto))
+          svg(square_around(t4a_box(1.3), 10), t4a_mark(cls=True, weight=1.3, uid="fav"), "tensor4all", t4a_auto))
     c = FAMILY["light"]
     bg = f'<rect x="-1000" y="-1000" width="3000" height="3000" fill="{c["bg"]}"/>'
     write(p, "tensor4all-icon-small.svg",
-          svg(square_around(T4A_BOX, 16), bg + t4a_mark(c, weight=2.6, uid="s"), "tensor4all"))
+          svg(square_around(t4a_box(1.3), 14), bg + t4a_mark(c, weight=1.3, uid="s"), "tensor4all"))
     write(p, "tensor4all-icon-16.svg",
           svg(square_around((95, 41, 274, 254), 6), bg + t4a_four(c), "tensor4all"))
 
@@ -275,10 +289,10 @@ def main():
         write(p, f"tenferro-avatar{sfx}.svg", svg(square_around(TF_BOX, side=180), bg + tf_mark(c), "tenferro"))
     tf_auto = auto_style(FAMILY, {"ink": ("stroke", "ink"), "accent": ("stroke", "accent")})
     write(p, "tenferro-mark-auto.svg", svg(square_around(TF_BOX, 4), tf_mark(cls=True), "tenferro", tf_auto))
-    write(p, "favicon.svg", svg(square_around(TF_BOX, 6), tf_mark(cls=True, sw=9), "tenferro", tf_auto))
+    write(p, "favicon.svg", svg(square_around(TF_BOX, 6), tf_mark(cls=True, sw=TF_STROKE_SMALL), "tenferro", tf_auto))
     c = FAMILY["light"]
     bg = f'<rect x="-100" y="-100" width="400" height="400" fill="{c["bg"]}"/>'
-    write(p, "tenferro-icon-small.svg", svg((0, 0, 120, 120), bg + tf_mark(c, sw=9), "tenferro"))
+    write(p, "tenferro-icon-small.svg", svg((0, 0, 120, 120), bg + tf_mark(c, sw=TF_STROKE_SMALL), "tenferro"))
     write(p, "tenferro-icon-16.svg", svg((0, 0, 120, 120), bg + tf_mark(c, sw=12, cross_only=True), "tenferro"))
 
     # ---- colmat
