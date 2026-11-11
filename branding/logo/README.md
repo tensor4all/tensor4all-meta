@@ -11,7 +11,7 @@ Status: proposal, not yet adopted.
 
 The mark is a small tensor network drawn as a circuit: open legs, hollow nodes, and bonds with rounded corners.
 
-- The copper bonds form the numeral **4**, the 4 in the name. The same copper colors the **4** in the wordmark.
+- Its bonds on the left, middle and right mimic the letter t, numeral 4 and letter a in the name, and the copper color used for 4 is the same as for the 4 in the wordmark.
 - Line art in ink and copper only, matching the tenferro and colmat logos.
 
 At 16 px only the copper 4 is kept.

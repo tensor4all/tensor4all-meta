@@ -104,7 +104,8 @@ def text_paths(glyphs, color_of):
 
 
 # ------------------------------------------------------------------ tensor4all
-# A tensor network drawn as a circuit. The copper lines form the numeral 4.
+# A tensor network drawn as a circuit. Its bonds on the left, middle and right
+# mimic the t, the 4 (in copper) and the a of the name.
 
 T4A_STROKE = 5.0
 T4A_NODE_R = 10.0
