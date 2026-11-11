@@ -163,10 +163,14 @@ def t4a_four(colors=None, cls=False):
 # -------------------------------------------------------------------- tenferro
 # A hex nut (ferro: iron, which rusts: Rust) with a tensor product as its hole.
 
-TF_NUT = "110,60 85,103.3 35,103.3 10,60 35,16.7 85,16.7"
+TF_NUT = "100,60 80,94.64 40,94.64 20,60 40,25.36 80,25.36"  # circumradius 40, snug around the hole
 TF_STROKE = 7.0       # heavy enough for embroidery at a left-chest size
-TF_STROKE_SMALL = 10.5
-TF_BOX = (10 - TF_STROKE / 2, 16.7 - TF_STROKE / 2, 110 + TF_STROKE / 2, 103.3 + TF_STROKE / 2)
+TF_STROKE_SMALL = 9.0
+def tf_box(sw=TF_STROKE):
+    return (20 - sw / 2, 25.36 - sw / 2, 100 + sw / 2, 94.64 + sw / 2)
+
+
+TF_BOX = tf_box()
 
 
 def tf_mark(colors=None, cls=False, sw=TF_STROKE, cross_only=False):
@@ -286,14 +290,14 @@ def main():
         box = (TF_BOX[0] - 4, TF_BOX[1] - 4, gb[2] + 4, TF_BOX[3] + 4)
         write(p, f"tenferro-wordmark{sfx}.svg", svg(box, tf_mark(c) + text, "tenferro"))
         bg = f'<rect x="-100" y="-100" width="400" height="400" fill="{c["bg"]}"/>'
-        write(p, f"tenferro-avatar{sfx}.svg", svg(square_around(TF_BOX, side=180), bg + tf_mark(c), "tenferro"))
+        write(p, f"tenferro-avatar{sfx}.svg", svg(square_around(TF_BOX, side=146), bg + tf_mark(c), "tenferro"))
     tf_auto = auto_style(FAMILY, {"ink": ("stroke", "ink"), "accent": ("stroke", "accent")})
     write(p, "tenferro-mark-auto.svg", svg(square_around(TF_BOX, 4), tf_mark(cls=True), "tenferro", tf_auto))
-    write(p, "favicon.svg", svg(square_around(TF_BOX, 6), tf_mark(cls=True, sw=TF_STROKE_SMALL), "tenferro", tf_auto))
+    write(p, "favicon.svg", svg(square_around(tf_box(TF_STROKE_SMALL), 4), tf_mark(cls=True, sw=TF_STROKE_SMALL), "tenferro", tf_auto))
     c = FAMILY["light"]
     bg = f'<rect x="-100" y="-100" width="400" height="400" fill="{c["bg"]}"/>'
-    write(p, "tenferro-icon-small.svg", svg((0, 0, 120, 120), bg + tf_mark(c, sw=TF_STROKE_SMALL), "tenferro"))
-    write(p, "tenferro-icon-16.svg", svg((0, 0, 120, 120), bg + tf_mark(c, sw=12, cross_only=True), "tenferro"))
+    write(p, "tenferro-icon-small.svg", svg(square_around(tf_box(TF_STROKE_SMALL), 4), bg + tf_mark(c, sw=TF_STROKE_SMALL), "tenferro"))
+    write(p, "tenferro-icon-16.svg", svg(square_around(tf_box(12), 4), bg + tf_mark(c, sw=12, cross_only=True), "tenferro"))
 
     # ---- colmat
     p = "colmat"
