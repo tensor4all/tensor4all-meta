@@ -169,8 +169,9 @@ footer .inner { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; }
 .sm-link:hover .sm-box { stroke: var(--accent); stroke-width: 2; }
 .sm-title { fill: var(--text); font: 600 13.5px var(--sans); }
 .sm-desc { fill: var(--muted); font: 11.5px var(--sans); }
-.sm-arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+.sm-arrow { stroke: var(--muted); stroke-width: 2.2; fill: none; }
 .sm-head { fill: var(--muted); }
+.sm-verb { fill: var(--muted); font: italic 11.5px var(--sans); text-anchor: middle; }
 .sm-side { fill: var(--ok-soft); stroke: var(--ok); stroke-dasharray: 4 3; }
 .sm-sidetitle { fill: var(--ok); font: 700 14px var(--sans); }
 .sm-dim { opacity: 0.38; }
@@ -180,3 +181,19 @@ footer .inner { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; }
 }
 .sm-link .sm-title { fill: var(--accent); }
 .sm-link:hover .sm-title { text-decoration: underline; }
+
+/* flagship projects: tensor4all-rs and tenferro-rs */
+.star { color: var(--warm); }
+.tag.flagship { background: var(--warm-soft); color: var(--warm); }
+.card.flagship { border: 2px solid var(--warm); }
+main > .card.flagship { margin: 20px 0; max-width: 46em; }
+.card.flagship h3 a { color: var(--text); text-decoration: none; }
+.card.flagship h3 a:hover { text-decoration: underline; }
+.card.flagship ul { margin: 0 0 14px; padding-left: 20px; color: var(--muted); font-size: 15px; }
+.card.flagship .links { display: flex; gap: 16px; flex-wrap: wrap; margin-top: auto; font-weight: 600; }
+.card.flagship .links a { text-decoration: none; }
+tr.flagship td { background: color-mix(in srgb, var(--warm-soft) 60%, var(--surface)); }
+tr.flagship td:first-child a { font-weight: 700; }
+.sm-box.star { stroke: var(--warm); stroke-width: 2; }
+.sm-link:hover .sm-box.star { stroke: var(--warm); stroke-width: 3; }
+.sm-star { fill: var(--warm); }

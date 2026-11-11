@@ -42,6 +42,17 @@
     <p class="lead">You work with quantics tensor trains, tensor cross interpolation or tree tensor networks. This guide tells you which tensor4all-rs crate does what, how it lines up with the Julia packages you may know, and how much of the backend you need to care about (very little).</p>
   </section>
 
+  <div class="card flagship">
+    <span class="tag flagship">&#9733; Flagship</span>
+    <h3><a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a></h3>
+    <p>Everything on this page lives in one repository: quantics TCI, QTT operators, tensor trains, tree tensor networks with DMRG, TDVP and linear solve, adaptive patching and HDF5 I/O, with C, Julia and Python frontends. Dense work runs on the <span class="star">&#9733;</span> tenferro-rs runtime underneath.</p>
+    <div class="links">
+      <a href="https://tensor4all.org/tensor4all-rs/">User guide &rarr;</a>
+      <a href="https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_core/">API reference &rarr;</a>
+      <a href="https://github.com/tensor4all/tensor4all-rs">Repository &rarr;</a>
+    </div>
+  </div>
+
   <figure class="figure">
     <div class="map-scroll"><div class="stack-map" data-focus="users"></div></div>
     <figcaption>Your code sits at the top two layers. The highlighted bands are the subject of this guide; the rest is covered in the <a href="backend.html">backend guide</a>.</figcaption>
@@ -53,7 +64,7 @@
     <li><strong>Describe a grid.</strong> Map continuous variables to binary digits with a <code>DiscretizedGrid</code> (from quanticsgrids-rs, re-exported by <code>tensor4all-quanticstci</code>), choosing bounds, resolution and how variables are interleaved.</li>
     <li><strong>Learn a QTT from a function.</strong> Run quantics TCI on your function with <code>tensor4all-quanticstci</code>. The function is sampled in batches, so it can be an expensive solver call. The result can be evaluated, summed and integrated.</li>
     <li><strong>Transform it.</strong> Apply QTT operators from <code>tensor4all-quanticstransform</code>: Fourier transform, shift, flip, phase rotation, cumulative sum and affine coordinate maps, with multivariable variants.</li>
-    <li><strong>Contract and compress.</strong> Multiply, contract and truncate with <code>tensor4all-treetn</code> (zip-up, variational fit, randomized SRC), or with <code>tensor4all-simplett</code> for plain tensor trains. Elementwise products of QTTs use <code>tensor4all-aci</code>. Save results in an ITensors.jl compatible HDF5 file with <code>tensor4all-hdf5</code>.</li>
+    <li><strong>Contract and compress.</strong> Multiply, contract and truncate with <code>tensor4all-treetn</code> (zip-up, variational fit, randomized SRC), or with <code>tensor4all-simplett</code> for plain tensor trains. Elementwise products of QTTs use <code>tensor4all-aci</code>. Save results in an ITensors.jl compatible HDF5 file with <code>tensor4all-hdf5</code>, which can load the HDF5 library at run time (through <a href="https://github.com/tensor4all/hdf5-rt">hdf5-rt</a>) to share it with a Julia or Python host.</li>
   </ol>
 
   <h2 id="julia">Coming from Julia</h2>
@@ -71,7 +82,7 @@
       <tr><td>TreeTCI.jl</td><td><code>tensor4all-treetci</code></td><td>cross interpolation on trees</td></tr>
       <tr><td>AlternatingCrossInterpolation.jl</td><td><code>tensor4all-aci</code></td><td>elementwise products of tensor trains</td></tr>
       <tr><td>InterpolativeQTT.jl</td><td><code>tensor4all-interpolativeqtt</code></td><td>multiscale interpolative QTT construction</td></tr>
-      <tr><td>PartitionedMPSs.jl, TCIAlgorithms.jl (patching)</td><td><code>tensor4all-partitionedtreetn</code></td><td>masked subdomains, adaptive patching; replaces the deprecated <code>tensor4all-partitionedtt</code></td></tr>
+      <tr><td>PartitionedMPSs.jl, TCIAlgorithms.jl (patching)</td><td><code>tensor4all-partitionedtreetn</code></td><td>masked subdomains, adaptive patching</td></tr>
     </tbody>
   </table></div>
   <div class="note"><p>If you want to stay in Julia, <a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a> calls tensor4all-rs through its C API. It is maintained on a best effort basis and is meant for light use and teaching. For production runs or anything performance sensitive, use the Rust crates directly.</p></div>
@@ -143,16 +154,16 @@ let integral = qtci.integral().unwrap();</code></pre>
   <h2 id="underneath">What runs underneath</h2>
   <p>You rarely need to look below tensor4all-rs, but knowing the shape helps when reading performance numbers or error messages.</p>
   <ul>
-    <li>Every dense operation (contraction, SVD, QR) goes through <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a>, reached through one adapter crate, <code>tensor4all-tensorbackend</code>. tenferro chooses CPU or GPU kernels and provides automatic differentiation.</li>
+    <li>Every dense operation (contraction, SVD, QR) goes through <span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a>, the flagship tensor runtime, reached through one adapter crate, <code>tensor4all-tensorbackend</code>. tenferro chooses CPU or GPU kernels and provides automatic differentiation.</li>
     <li>On the CPU, tenferro hands contractions to <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> and factorizations to <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> (pure Rust, using tensor4all's fork of faer) or optionally to a vendor LAPACK.</li>
-    <li>There is no hidden global thread pool. Parallelism comes from an execution context that the caller creates (in tensor4all-rs, a <code>CpuExecutionContext</code>) and that is reused across calls. If you construct a new context in a tight loop, you throw away its buffers.</li>
+    <li>There is no hidden global thread pool. Parallelism comes from an execution context that the caller creates (in tensor4all-rs, a <code>CpuExecutionContext</code>) and that is reused across calls; underneath, every CPU thread comes from one <a href="https://github.com/tensor4all/threadteam-rs">threadteam</a> pool. If you construct a new context in a tight loop, you throw away its buffers.</li>
     <li>CUDA contraction of dense tree networks exists as an experimental path with explicit upload and download; see the <a href="https://tensor4all.org/tensor4all-rs/tutorials/gpu/cuda-tree-contraction.html">CUDA tutorial</a>.</li>
   </ul>
   <p>The <a href="backend.html">backend guide</a> explains these layers in detail.</p>
 
   <h2 id="parallel">Parallel runs with hataori</h2>
   <p>Many tensor network studies are embarrassingly parallel at the outer level: a parameter scan, a set of momenta, independent patches. <a href="https://tensor4all.org/hataori-rs/">hataori</a> provides <code>map</code> and a dynamically scheduled <code>pmap</code> (in the spirit of Distributed.jl) over serial, Rayon, MPI and hybrid MPI plus threads execution. Its MPI support can load the MPI library at run time, so the same binary can share the MPI installation used by MPI.jl or mpi4py.</p>
-  <p>hataori owns the processes and threads, and lends them to each task through the same explicit contexts described above, so outer and inner parallelism do not fight over cores. Adapters for tenferro and tensor4all exist in the hataori repository.</p>
+  <p>hataori splits the machine into MPI ranks and thread domains and lends each task its share, so the explicit contexts described above stay inside that share and outer and inner parallelism do not fight over cores. Adapters for tenferro and tensor4all exist in the hataori repository.</p>
 
   <h2 id="help">Getting help</h2>
   <p>Using a coding agent? Install the tensor4all-rs agent skill, which teaches it the crate map and conventions:</p>

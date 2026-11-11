@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tensor4all Rust stack</title>
-<meta name="description" content="How the tensor4all Rust libraries fit together, from QTT and TCI algorithms down to dense tensor contraction and linear algebra.">
+<meta name="description" content="How the tensor4all Rust libraries fit together: the flagship projects tensor4all-rs and tenferro-rs, and the contraction, linear algebra and threading layers underneath, from QTT and TCI down to dense kernels.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -26,26 +26,62 @@
   <section class="hero">
     <p class="eyebrow">Stack overview</p>
     <h1>The tensor4all Rust stack</h1>
-    <p class="lead">A family of Rust libraries for tensor networks (quantics tensor trains, tensor cross interpolation, tree tensor networks) and the dense tensor backend they run on. This page shows how the pieces fit together and where to start reading.</p>
+    <p class="lead">Rust libraries for scientific computing that grew out of tensor networks. At the top are quantics tensor trains, tensor cross interpolation and tree tensor networks; underneath are a tensor runtime with automatic differentiation, tensor contraction, batched linear algebra and the thread model they all share. Every layer can be used on its own.</p>
   </section>
 
+  <h2 id="flagships"><span class="star">&#9733;</span> Flagship projects</h2>
+  <p>Two projects carry the stack. Start with one of them; the rest of this page shows what they stand on.</p>
+  <div class="cards">
+    <div class="card big flagship">
+      <span class="tag flagship">&#9733; Flagship &middot; algorithms</span>
+      <h3><a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a></h3>
+      <p>Tensor network algorithms in Rust, ported from the tensor4all Julia ecosystem and grown beyond it.</p>
+      <ul>
+        <li>Quantics TCI: learn a QTT from an expensive function, then integrate or evaluate it</li>
+        <li>QTT operators: Fourier transform, shift, flip, affine maps</li>
+        <li>Tree tensor networks: contraction, DMRG, TDVP, linear solve</li>
+        <li>Adaptive patching, ITensors.jl compatible HDF5, C API, Julia and Python frontends</li>
+      </ul>
+      <div class="links">
+        <a href="https://tensor4all.org/tensor4all-rs/">User guide &rarr;</a>
+        <a href="users.html">Stack guide for users &rarr;</a>
+      </div>
+    </div>
+    <div class="card big flagship">
+      <span class="tag flagship">&#9733; Flagship &middot; tensor runtime</span>
+      <h3><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a></h3>
+      <p>A Rust-native tensor runtime with opt-in automatic differentiation for scientific workloads.</p>
+      <ul>
+        <li>Typed and dynamic dense tensors, einsum, linear algebra, FFT</li>
+        <li>Eager AD with PyTorch-style <code>backward()</code>; traced AD with JAX-style VJP, JVP and Hessian vector products</li>
+        <li>CPU and CUDA, with an experimental XLA path</li>
+        <li>One explicit engine carries the thread pool, plan cache and buffers: no global state</li>
+      </ul>
+      <div class="links">
+        <a href="https://tensor4all.org/tenferro-rs/">Documentation &rarr;</a>
+        <a href="https://tensor4all.org/tenferro-benchmark/">Benchmarks &rarr;</a>
+      </div>
+    </div>
+  </div>
+
+  <h2 id="guides">Two guides</h2>
   <div class="cards">
     <div class="card big">
       <span class="tag user">Guide A</span>
       <h3>For tensor network users</h3>
-      <p>You want to compress a function into a QTT, run TCI, apply Fourier or shift operators, or contract tree tensor networks. You may be coming from the Julia packages. This guide maps what you know onto the Rust crates and tells you which entry point to use.</p>
+      <p>You want to compress a function into a QTT, run TCI, apply Fourier or shift operators, or contract tree tensor networks. You may be coming from the Julia packages. This guide maps what you know onto the <span class="star">&#9733;</span> tensor4all-rs crates and tells you which entry point to use.</p>
       <a class="go" href="users.html">Read the user guide &rarr;</a>
     </div>
     <div class="card big">
       <span class="tag backend">Guide B</span>
       <h3>For backend developers</h3>
-      <p>You care about what happens below the algorithms: tensor contraction, batched linear algebra, execution contexts, C ABIs. Quantum chemistry codes that need fast strided contractions are a target audience. This guide goes down to tcontract and tlinalg.</p>
+      <p>You care about what happens below the algorithms: the <span class="star">&#9733;</span> tenferro-rs runtime, tensor contraction, batched linear algebra, thread ownership, C ABIs. First-principles, quantum chemistry and HPC codes that need fast strided contractions are a target audience.</p>
       <a class="go" href="backend.html">Read the backend guide &rarr;</a>
     </div>
   </div>
 
   <h2 id="map">The layer map</h2>
-  <p>Each layer depends only on layers below it. Bands are layers, named by their role; boxes are libraries, and each name links to its GitHub repository. hataori sits beside the stack: it does not compute anything itself, it owns processes and threads and lends them to the layers that do.</p>
+  <p>Each layer depends only on layers below it. Bands are layers, named by their role; boxes are libraries, and each name links to its GitHub repository. <span class="star">&#9733;</span> marks the two flagship projects. hataori sits beside the stack: it does not compute anything itself, it splits the machine into MPI ranks and thread domains and lends them to the layers that do.</p>
   <figure class="figure">
     <div class="map-scroll"><div class="stack-map" data-focus="all"></div></div>
     <figcaption>Blue bands are what tensor network users touch; orange bands are the backend. On a narrow screen, scroll the map sideways.</figcaption>
@@ -54,39 +90,68 @@
   <h2 id="layers">The layers in brief</h2>
   <ul>
     <li><strong>Frontends.</strong> Rust programs use tensor4all-rs directly. <a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a> is a Julia frontend over the C API, maintained on a best effort basis for light use and teaching. Python bindings (<code>tensor4all-py</code>) live in the tensor4all-rs repository.</li>
-    <li><strong>Algorithms.</strong> <a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a> holds the algorithms: tensor trains, TCI, quantics grids and operators, tree tensor networks, patching, HDF5 I/O. It keeps two stacks on purpose (a TT and TCI stack and a network stack) with an explicit bridge between them. Grid and coordinate conversion lives in the standalone <a href="https://github.com/tensor4all/quanticsgrids-rs">quanticsgrids-rs</a>.</li>
-    <li><strong>Tensor runtime.</strong> <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a> is the tensor runtime: typed and dynamic tensors, eager and traced automatic differentiation, and CPU, GPU and XLA backends. tensor4all-rs reaches it through one adapter crate. <a href="https://github.com/tensor4all/computegraph-rs">computegraph-rs</a> supplies the graph IR that traced AD builds on.</li>
-    <li><strong>Kernel providers.</strong> Tensor-free numerical libraries that tenferro calls: <a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> for N-ary einsum, <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> for binary contraction over arbitrary strides, and <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> for batched factorizations. They take borrowed strided views and an explicit execution context, so they are usable on their own, including from C.</li>
-    <li><strong>Foundation.</strong> <a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines the strided view types every layer above passes around; faer and, optionally, a vendor BLAS and LAPACK do the dense arithmetic. tensor4all develops <a href="https://github.com/tensor4all/faer">its own fork of faer</a>, published as <code>t4a-faer</code>, which carries strided and batched entry points, caller-owned workspaces, an explicit thread policy and fixes that upstream does not have.</li>
-    <li><strong>Beside the stack.</strong> <a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a> provides data-parallel map and pmap over serial, Rayon, MPI and hybrid execution. Since no layer in the stack owns a global thread pool, hataori is where pools and MPI ranks come from.</li>
+    <li><strong>Algorithms.</strong> <span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a> holds the algorithms: tensor trains, TCI, quantics grids and operators, tree tensor networks, patching, HDF5 I/O. It keeps two stacks on purpose (a TT and TCI stack and a network stack) with an explicit bridge between them. Grid and coordinate conversion lives in the standalone <a href="https://github.com/tensor4all/quanticsgrids-rs">quanticsgrids-rs</a>.</li>
+    <li><strong>Tensor runtime.</strong> <span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a> is the tensor runtime: typed and dynamic tensors, eager and traced automatic differentiation, CPU and CUDA backends and an experimental XLA path. tensor4all-rs reaches it through one adapter crate. <a href="https://github.com/tensor4all/computegraph-rs">computegraph-rs</a> supplies the graph IR that traced AD builds on.</li>
+    <li><strong>Kernel providers.</strong> Tensor-free numerical libraries that tenferro calls: <a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> for N-ary einsum, <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> for binary contraction over arbitrary strides, and <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> for batched factorizations. They take borrowed strided views and an explicit execution token, so they are usable on their own, including from C.</li>
+    <li><strong>Foundation.</strong> <a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines the strided view types every layer above passes around. <a href="https://github.com/tensor4all/threadteam-rs">threadteam-rs</a> owns the CPU threads: it is the only place in the stack where parallel tasks start. Dense arithmetic comes from <a href="https://github.com/tensor4all/faer">tensor4all's fork of faer</a>, published as <code>t4a-faer</code>, and optionally from a vendor BLAS and LAPACK.</li>
+    <li><strong>Beside the stack.</strong> <a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a> provides data-parallel map and pmap over serial, Rayon, MPI and hybrid execution, for the outer level of a study: parameter scans, momenta, independent patches.</li>
   </ul>
+
+  <h2 id="beyond">Beyond tensor networks</h2>
+  <p>The stack started as the backend of tensor network algorithms, and its lower layers are now general tools for dense numerical work in Rust. None of them requires tenferro or tensor4all-rs.</p>
+  <ul>
+    <li><strong>Linear algebra.</strong> <code>t4a-faer</code> is a pure Rust dense and sparse linear algebra library. It is validated nightly against LAPACK 3.12's own test suites, its steady-state calls are tested to allocate nothing, and its results are bitwise reproducible at a fixed thread count. In the <a href="https://tensor4all.org/faer-benchmark/zen5-cpu/faer-kernels/71b25ffb7ae3-comparison.html">published comparison on a Zen 5 host</a> it is faster than both MKL and OpenBLAS in most of the measured cases. Migration guides cover LAPACK, Eigen, NumPy and SciPy users.</li>
+    <li><strong>Tensor contraction.</strong> tcontract contracts tensors in any index order without transposing them first, and speaks <a href="https://arxiv.org/abs/2601.07827">TAPP</a>, the community C interface for tensor products, so C, C++ and Fortran codes can call it.</li>
+    <li><strong>Batched factorizations.</strong> tlinalg runs SVD, QR, LU, Cholesky and eigensolvers over whole batches of matrices and decides how to spread them over threads.</li>
+    <li><strong>Threads that cooperate.</strong> threadteam gives a caller one pool to hand down, so a library call never competes with the OpenMP, MPI or Julia threads of the host program.</li>
+  </ul>
+  <div class="note warm"><p>First-principles, quantum chemistry and HPC developers: the <a href="backend.html#qc">host code section of the backend guide</a> shows how to call these libraries from an existing code, and the essay <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/docs/why_rusty_openmx.md">Why rewrite first-principles codes in Rust</a> argues the case. Issues with your typical shapes are very welcome.</p></div>
 
   <h2 id="repos">Repositories</h2>
   <p>Each repository's README says how to depend on it.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Repository</th><th>Role</th><th>Docs</th></tr></thead>
     <tbody>
-      <tr><td><a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a></td><td>TT, TCI, QTT, tree tensor networks, C API</td><td><a href="https://tensor4all.org/tensor4all-rs/">user guide</a></td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a></td><td>flagship: TT, TCI, QTT, tree tensor networks, C API</td><td><a href="https://tensor4all.org/tensor4all-rs/">user guide</a></td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a></td><td>flagship: tensor runtime, autodiff, CPU and CUDA backends</td><td><a href="https://tensor4all.org/tenferro-rs/">docs</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/quanticsgrids-rs">quanticsgrids-rs</a></td><td>quantics grids and coordinate conversion</td><td>README</td></tr>
       <tr><td><a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a></td><td>Julia frontend, best effort</td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a></td><td>tensor runtime, autodiff, backends</td><td><a href="https://tensor4all.org/tenferro-rs/">docs</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/computegraph-rs">computegraph-rs</a></td><td>graph IR used by traced AD</td><td>rustdoc</td></tr>
       <tr><td><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum-rs</a></td><td>N-ary einsum with caller-supplied order</td><td>README</td></tr>
       <tr><td><a href="https://github.com/tensor4all/tcontract-rs">tcontract-rs</a></td><td>binary strided contraction, TAPP C ABI</td><td>README</td></tr>
       <tr><td><a href="https://github.com/tensor4all/tlinalg-rs">tlinalg-rs</a></td><td>batched SVD, QR, LU, Cholesky, eigensolvers</td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/strided-rs">strided-rs</a></td><td>strided view types, permutation, kernels</td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/faer">t4a-faer</a></td><td>tensor4all fork of <a href="https://github.com/sarah-quinones/faer-rs">faer</a> by Sarah Quinones, tuned for the stack</td><td><a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/strided-rs">strided-rs</a></td><td>strided view types, permutation and elementwise kernels</td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/threadteam-rs">threadteam-rs</a></td><td>the CPU thread pool and execution token every layer takes</td><td>README</td></tr>
+      <tr><td><a href="https://github.com/tensor4all/faer">t4a-faer</a></td><td>tensor4all fork of <a href="https://codeberg.org/sarah-quinones/faer">faer</a> by Sarah Quinones: caller-owned thread teams, validated against LAPACK</td><td><a href="https://github.com/tensor4all/faer#readme">README</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a></td><td>map and pmap over Rayon and MPI</td><td><a href="https://tensor4all.org/hataori-rs/">docs</a></td></tr>
     </tbody>
   </table></div>
-  <p>Benchmarks are kept in separate repositories so results can be keyed by commit and hardware: <a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a>, <a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a>, <a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a> and <a href="https://github.com/tensor4all/tensor4all-benchmark">tensor4all-benchmark</a>.</p>
+  <p>Supporting repositories: <a href="https://github.com/tensor4all/hdf5-rt">hdf5-rt</a> and <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a> load HDF5 and MPI at run time so a Rust extension can share them with Julia or Python; <a href="https://github.com/tensor4all/elem-simd-math-rs">elem-simd-math-rs</a> provides vectorized elementwise math; <a href="https://github.com/tensor4all/tensor-ad-oracles">tensor-ad-oracles</a> is a database of derivative-correctness oracles for the AD rules; <a href="https://github.com/tensor4all/t4a-gemm">t4a-gemm</a> is the matrix multiply fork under t4a-faer, with Apple Silicon SME kernels; <a href="https://github.com/tensor4all/t4a-gpu-backend">t4a-gpu-backend</a> and <a href="https://github.com/tensor4all/t4a-cuda-kernels">t4a-cuda-kernels</a> are GPU runtimes and kernels developed and validated on their own before tenferro adopts them.</p>
+
+  <h2 id="bench">Benchmarks</h2>
+  <p>Performance claims are measured, not assumed. Each campaign lives in its own repository, keys its results by library commit and hardware profile, and publishes a site:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Campaign</th><th>Compares</th><th>Results</th></tr></thead>
+    <tbody>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a></td><td>tenferro against PyTorch and JAX, CPU and GPU</td><td><a href="https://tensor4all.org/tenferro-benchmark/">site</a></td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tensor4all-benchmark">tensor4all-benchmark</a></td><td>tensor network algorithms: QTT elementwise products, MPO MPO contraction</td><td><a href="https://github.com/tensor4all/tensor4all-benchmark/blob/main/result/INDEX.md">results</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/faer-benchmark">faer-benchmark</a></td><td>t4a-faer against upstream faer, MKL and OpenBLAS</td><td><a href="https://tensor4all.org/faer-benchmark/">site</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a></td><td>batched factorizations against vendor LAPACK</td><td><a href="https://tensor4all.org/tlinalg-benchmark/">site</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a></td><td>binary contraction against TBLIS</td><td><a href="https://tensor4all.org/tcontract-benchmark/">site</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/cpueinsum-benchmark">cpueinsum-benchmark</a></td><td>N-ary einsum over a standard corpus of einsum instances</td><td><a href="https://tensor4all.org/cpueinsum-benchmark/">site</a></td></tr>
+    </tbody>
+  </table></div>
+  <p>The campaigns share their tooling in <a href="https://github.com/tensor4all/campaign-toolkit">campaign-toolkit</a>; how they are run is described in <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/docs/benchmarks/README.md">Benchmarks of the tensor4all stack</a>.</p>
 
   <h2 id="principles">Three ideas that run through every layer</h2>
   <ol>
-    <li><strong>Explicit execution.</strong> No library in the stack starts a hidden global thread pool or changes behavior through environment variables. The caller creates a context (a Rayon pool, a backend, scratch memory) and passes it down. This is what lets an MPI program, a Julia session and a Rust test share one machine predictably.</li>
+    <li><strong>Explicit execution.</strong> No library in the stack starts a hidden global thread pool or changes behavior through environment variables. The caller builds one thread pool (a threadteam <code>Pool</code>) and passes a token for it down; tenferro bundles that pool with its scratch memory and plan cache in an engine. This is what lets an MPI program, a Julia session and a Rust test share one machine predictably.</li>
     <li><strong>Tensor-free providers.</strong> The numerical kernels (tcontract, tlinalg) do not know about tensor types. They take borrowed strided views. The host above them owns allocation, dtype dispatch and placement. That keeps them small, testable on plain buffers and reusable from other codes.</li>
-    <li><strong>One shared vocabulary.</strong> All CPU layers exchange strided-rs views. A view made by tenferro can be handed to tcontract or tlinalg without conversion, which is why the whole stack pins the same strided-rs release.</li>
+    <li><strong>One shared vocabulary.</strong> All CPU layers exchange strided-rs views and threadteam tokens. A view made by tenferro can be handed to tcontract or tlinalg without conversion, which is why the whole stack resolves to the same strided-rs and threadteam releases.</li>
   </ol>
+
+  <h2 id="contributing">Join the community</h2>
+  <p>tensor4all is open to new developers, and AI assisted contributions are welcome. The rules that hold in every Rust repository are in the <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/docs/contributing/rust-repositories.md">contribution rules</a>; each repository adds its local facts in <code>AGENTS.md</code> and its contributing guide. Good first contributions are benchmark cases from real applications, kernels for hardware we have not tuned for, and bindings for other languages.</p>
 </main>
 </div>
 

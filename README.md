@@ -7,9 +7,9 @@ Meta-information for the [tensor4all](https://github.com/tensor4all) project.
 Published at <https://tensor4all.org/tensor4all-meta/stack/> from [`site/`](site/)
 by [`.github/workflows/pages.yml`](.github/workflows/pages.yml):
 
-- [Stack overview](https://tensor4all.org/tensor4all-meta/stack/): layer map, repositories, release status
+- [Stack overview](https://tensor4all.org/tensor4all-meta/stack/): flagship projects (tensor4all-rs, tenferro-rs), layer map, repositories, benchmarks
 - [For tensor network users](https://tensor4all.org/tensor4all-meta/stack/users.html): QTT, TCI, tree tensor networks
-- [For backend developers](https://tensor4all.org/tensor4all-meta/stack/backend.html): tenferro, cpueinsum, tcontract, tlinalg, strided-rs, hataori
+- [For backend developers](https://tensor4all.org/tensor4all-meta/stack/backend.html): tenferro, cpueinsum, tcontract, tlinalg, strided-rs, t4a-faer, threadteam, hataori
 
 ## Logos
 

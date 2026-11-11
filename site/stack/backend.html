@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stack for backend developers</title>
-<meta name="description" content="A guide to the backend of the tensor4all Rust stack: tenferro, cpueinsum, tcontract, tlinalg, strided-rs and explicit execution, including use from quantum chemistry codes.">
+<meta name="description" content="A guide to the backend of the tensor4all Rust stack: tenferro, cpueinsum, tcontract, tlinalg, strided-rs, threadteam and the faer fork, including use from first-principles and quantum chemistry codes.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -32,8 +32,10 @@
     <li><a href="#tcontract">tcontract</a></li>
     <li><a href="#tlinalg">tlinalg</a></li>
     <li><a href="#strided">strided-rs</a></li>
+    <li><a href="#faer">The faer fork</a></li>
+    <li><a href="#threadteam">threadteam</a></li>
     <li><a href="#execution">Execution and hataori</a></li>
-    <li><a href="#qc">For quantum chemistry codes</a></li>
+    <li><a href="#qc">For host codes</a></li>
     <li><a href="#bench">Benchmarks</a></li>
     <li><a href="#contributing">Contributing</a></li>
   </ol>
@@ -42,8 +44,19 @@
   <section class="hero">
     <p class="eyebrow">Guide B</p>
     <h1>The stack for backend developers</h1>
-    <p class="lead">What happens below the tensor network algorithms: a tensor runtime with automatic differentiation, and underneath it small, tensor-free libraries for strided contraction and batched linear algebra that you can use on their own, from Rust or from C. If you maintain a quantum chemistry or many-body code and need fast contractions without transposes, the middle of this page is for you.</p>
+    <p class="lead">What happens below the tensor network algorithms: the <span class="star">&#9733;</span> tenferro-rs tensor runtime with automatic differentiation, and underneath it small, tensor-free libraries for strided contraction, batched linear algebra, dense linear algebra and thread ownership that you can use on their own, from Rust or from C. If you maintain a first-principles, quantum chemistry or many-body code and need fast contractions without transposes, the middle of this page is for you.</p>
   </section>
+
+  <div class="card flagship">
+    <span class="tag flagship">&#9733; Flagship</span>
+    <h3><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a></h3>
+    <p>A Rust-native tensor runtime with opt-in automatic differentiation: typed and dynamic dense tensors, einsum, linear algebra and FFT; eager AD with PyTorch-style <code>backward()</code> and traced AD with JAX-style VJP, JVP and Hessian vector products; CPU and CUDA, with an experimental XLA path. It is benchmarked against PyTorch and JAX, and every library below this point exists to make it fast.</p>
+    <div class="links">
+      <a href="https://tensor4all.org/tenferro-rs/">Documentation &rarr;</a>
+      <a href="https://tensor4all.org/tenferro-benchmark/">Benchmarks &rarr;</a>
+      <a href="https://github.com/tensor4all/tenferro-rs">Repository &rarr;</a>
+    </div>
+  </div>
 
   <figure class="figure">
     <div class="map-scroll"><div class="stack-map" data-focus="backend"></div></div>
@@ -55,30 +68,38 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Layer</th><th>Owns</th><th>Leaves to others</th></tr></thead>
     <tbody>
-      <tr><td><strong>tenferro-rs</strong> (host)</td><td>tensor types, allocation, dtype dispatch, device placement, AD rules, graph tracing, gauge conventions, error wrapping</td><td>the inner loops of contraction and factorization</td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <strong>tenferro-rs</strong> (host)</td><td>tensor types, allocation, dtype dispatch, device placement, AD rules, graph tracing, gauge conventions, error wrapping; the engine that carries a thread pool, plans and buffers</td><td>the inner loops of contraction and factorization</td></tr>
       <tr><td><strong>cpueinsum</strong></td><td>executing an N-ary einsum in a given order: which labels each intermediate keeps, one reusable scratch buffer</td><td>choosing the order, parsing <code>"ij,jk-&gt;ik"</code>, GPUs</td></tr>
       <tr><td><strong>tcontract</strong></td><td>one binary contraction over arbitrary strides: planning, packing, microkernels, threading inside the call</td><td>N-ary einsum, ordering, linear algebra, AD</td></tr>
       <tr><td><strong>tlinalg</strong>, <strong>tlinalg-blas</strong></td><td>batched factorizations and solves, the batch loop and its lane fan-out</td><td>tensors, allocation policy, dtype and device dispatch</td></tr>
       <tr><td><strong>strided-rs</strong></td><td>the strided view types and traits everyone exchanges; permutation and elementwise kernels</td><td>everything above</td></tr>
+      <tr><td><strong>threadteam</strong></td><td>the CPU threads: the pool, the execution token handed down, and the cost model that sizes each parallel region</td><td>what runs on the threads</td></tr>
+      <tr><td><strong>t4a-faer</strong></td><td>dense and sparse matrix kernels: GEMM, factorizations, eigensolvers</td><td>batching, tensors</td></tr>
     </tbody>
   </table></div>
 
   <h2 id="principles">Design principles</h2>
   <ul>
-    <li><strong>Explicit execution, no ambient state.</strong> Threads and scratch memory come from a context the caller passes in. No library starts a global pool, and no environment variable changes results. Two consequences: the same call is reproducible regardless of what else runs in the process, and an outer scheduler (MPI, hataori, a Julia session) can partition the machine without fighting the libraries.</li>
+    <li><strong>Explicit execution, no ambient state.</strong> Threads come from one threadteam pool the caller builds, and scratch memory from a context the caller passes in. threadteam is the only place parallel tasks start; no library starts a global pool, and no environment variable changes results. Two consequences: the same call is reproducible regardless of what else runs in the process, and an outer scheduler (MPI, hataori, a Julia session) can partition the machine without fighting the libraries.</li>
     <li><strong>Tensor-free provider interfaces.</strong> Providers take borrowed strided views plus a few scalars and flags. They can be tested and benchmarked on plain buffers, and a different host (a quantum chemistry code, another tensor library) can call them without adopting tenferro.</li>
     <li><strong>Plan once, execute many times.</strong> Contractions and einsums have a plan object that fixes the strategy, kernel and blocking for given shapes and strides. Tensor network sweeps and iterative solvers repeat the same shapes thousands of times, so per-call overhead matters as much as peak throughput.</li>
-    <li><strong>Measured, not assumed.</strong> Performance claims live in benchmark repositories keyed by commit and hardware, with comparisons against PyTorch and JAX (for tenferro) and vendor LAPACK (for tlinalg).</li>
+    <li><strong>Measured, not assumed.</strong> Performance claims live in benchmark repositories keyed by commit and hardware, with comparisons against PyTorch and JAX (for tenferro), TBLIS (for tcontract), vendor LAPACK (for tlinalg), and MKL and OpenBLAS (for the faer fork).</li>
   </ul>
 
-  <h2 id="tenferro">tenferro: the host</h2>
-  <p><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a> is a Rust tensor runtime for scientific code: typed and dynamic dense tensors, einsum, linear algebra, FFT, and automatic differentiation, on CPU, CUDA (through a CubeCL fork) and experimental WebGPU, with an XLA path. tensor4all-rs uses it for every dense operation.</p>
+  <h2 id="tenferro"><span class="star">&#9733;</span> tenferro: the host</h2>
+  <p><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a> is a Rust-native tensor runtime for scientific code: typed and dynamic dense tensors, einsum, linear algebra, FFT, and automatic differentiation, on CPU and CUDA (with explicit upload and download), with an experimental XLA path that lowers traced graphs to StableHLO and runs them on a PJRT plugin loaded at run time. tensor4all-rs uses it for every dense operation.</p>
   <ul>
     <li><strong>Tensor types.</strong> <code>TypedTensor&lt;T&gt;</code> and dynamic <code>Tensor</code> for direct compute; <code>EagerTensor</code> adds PyTorch-style <code>backward()</code>; <code>TracedTensor</code> records a graph (in <a href="https://github.com/tensor4all/computegraph-rs">computegraph</a>) for JAX-style VJP, JVP and composed higher-order derivatives such as Hessian vector products.</li>
-    <li><strong>Conventions.</strong> Storage is column-major, matching LAPACK, Fortran and Julia. There is no facade crate: depend on <code>tenferro-runtime</code>, a backend such as <code>tenferro-cpu</code>, and the operation crates you use. Operations take an explicit backend; create it once and reuse it, since it carries the buffer pool.</li>
+    <li><strong>One engine.</strong> Every operation takes an explicit engine. A <code>CpuEngine</code> bundles a threadteam pool with the plan cache and the buffer pool, so build it once and reuse it: a new engine per call throws its buffers away. <code>CpuEngine::serial()</code> needs no pool at all.</li>
+    <li><strong>Conventions.</strong> Storage is column-major, matching LAPACK, Fortran and Julia. There is no facade crate: depend on <code>tenferro-runtime</code>, a backend such as <code>tenferro-cpu</code>, and the operation crates you use (<code>tenferro-ad</code> for traced AD).</li>
     <li><strong>Providers.</strong> On the CPU, <code>tenferro-einsum</code> and <code>tenferro-cpu</code> execute through cpueinsum (and so tcontract), and <code>tenferro-linalg</code> adapts tlinalg and tlinalg-blas to an interface tenferro defines. The providers do not depend on tenferro.</li>
   </ul>
-  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts.</p>
+  <p class="codecap">A pooled engine and an operation on it, abridged from the tenferro examples and README:</p>
+  <pre><code>use tenferro_cpu::{CpuEngine, Pool};
+
+let mut engine = CpuEngine::new(Pool::builder().threads(4).build()?);
+let product = a.matmul(&amp;b, &amp;mut engine)?;</code></pre>
+  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts, and <a href="https://tensor4all.org/tenferro-benchmark/">tenferro-benchmark</a> compares it with PyTorch and JAX workload by workload.</p>
 
   <h2 id="cpueinsum">cpueinsum: N-ary einsum in a given order</h2>
   <p><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> runs an einsum over integer labels with a contraction order supplied by the caller in SSA form. For each binary step it plans a tcontract call. On top it decides which labels every intermediate must keep (those in the output or needed later; everything else is summed as early as possible) and places all intermediates in one reusable scratch buffer.</p>
@@ -93,9 +114,9 @@ let cm = Layout::new(&amp;[2, 2], &amp;[1, 2])?;
 let plan = EinsumPlan::&lt;f64&gt;::new(&amp;spec, &amp;[cm, cm, cm], cm)?;
 let mut scratch = Scratch::new();
 // ... build StridedViews over your buffers, then:
-plan.execute_into(&amp;Exec::serial(), &amp;views, &amp;mut out, &amp;mut scratch)?;</code></pre>
-  <p>Threading is explicit: <code>Exec::rayon(&amp;Pool::borrow(&amp;pool))</code> runs on a Rayon pool you own. For workloads made of many small heterogeneous contractions, <code>BinaryPlan</code> and <code>GroupedPlan</code> prepare jobs once and run a whole group under one scheduler.</p>
-  <p>cpueinsum links no BLAS. The separate <code>cpueinsum-blas</code> crate can take over binary steps large enough to profit from a vendor GEMM (at least 2<sup>15</sup> multiply accumulates per GEMM) and leaves smaller steps on tcontract. It depends on <code>cblas-sys</code> only, so the final binary chooses the BLAS provider.</p>
+plan.execute_into(&amp;mut Exec::serial(), &amp;views, &amp;mut out, &amp;mut scratch)?;</code></pre>
+  <p>Threading is explicit: build a <code>threadteam::Pool</code> once, wrap it with <code>Pool::borrow(&amp;pool)</code>, and mint <code>Exec::new(&amp;pool, budget)?</code> for each call. For workloads made of many small heterogeneous contractions, <code>BinaryPlan</code> and <code>GroupedPlan</code> prepare jobs once and run a whole group under one scheduler.</p>
+  <p>cpueinsum links no BLAS. The separate <code>cpueinsum-blas</code> crate is a step backend that runs binary steps on a vendor GEMM. It depends on <code>cblas-sys</code> only, so the final binary chooses the BLAS provider.</p>
 
   <h2 id="tcontract">tcontract: binary contraction without transposes</h2>
   <p><a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> computes</p>
@@ -106,17 +127,17 @@ plan.execute_into(&amp;Exec::serial(), &amp;views, &amp;mut out, &amp;mut scratc
   <ol class="steps">
     <li><strong>Describe the problem.</strong> A <code>Problem</code> is built either from a <code>DotGeneral</code> (contracting and batch axes, as in XLA) or from index labels, together with the layouts (dims and strides) of A, B and D.</li>
     <li><strong>Plan once.</strong> <code>Plan&lt;T&gt;::new</code> validates the problem and chooses a strategy and a kernel. The plan is reusable for every call with the same layouts.</li>
-    <li><strong>Execute.</strong> <code>execute_into</code> takes an execution context (<code>Exec::serial()</code> or a Rayon pool the host owns) and the views. <code>contract_batched</code> runs many independent problems of one shape.</li>
+    <li><strong>Execute.</strong> <code>execute_into</code> takes an execution token (<code>Exec::serial()</code>, or <code>Exec::new</code> on a threadteam pool the host owns) and the views. <code>contract_batched</code> runs many independent problems of one shape.</li>
   </ol>
   <div class="table-wrap"><table>
     <thead><tr><th>Strategy</th><th>Used when</th><th>How</th></tr></thead>
     <tbody>
       <tr><td>packed</td><td>general strides and index orders</td><td>a TBLIS-style block-scatter driver packs strided operands straight into microkernel panels, with cache blocking</td></tr>
-      <tr><td>faer</td><td>the problem fuses into one batched GEMM without copies</td><td>calls faer's matrix multiply directly on the views</td></tr>
+      <tr><td>faer</td><td>the problem fuses into one batched GEMM without copies</td><td>calls faer's matrix multiply directly on the views, in parallel only through a threadteam team</td></tr>
       <tr><td>elementwise</td><td>every index is a batch index</td><td>a single elementwise pass</td></tr>
     </tbody>
   </table></div>
-  <p>Microkernel families cover AVX2, AVX-512 and NEON register tiles, native complex kernels, and portable reference kernels; the planner resolves the family for the target and freezes the blocking in the plan.</p>
+  <p>Microkernel families cover scalar, AVX2, AVX-512 and NEON register tiles, native complex kernels, and portable reference kernels; the planner resolves the family for the target and freezes the blocking in the plan. <a href="https://tensor4all.org/tcontract-benchmark/">tcontract-benchmark</a> compares it with TBLIS shape by shape.</p>
   <p class="codecap">D = A B with column-major 2 × 2 operands. Abridged from <code>crates/tcontract/examples/readme.rs</code>, which CI compiles and runs:</p>
   <pre><code>use strided_view::{StridedView, StridedViewMut};
 use tcontract::api::{DType, DotGeneral, LayoutSpec, OperandSpec, Problem};
@@ -137,7 +158,7 @@ let problem = Problem::from_dot_general(
 )?;
 let plan = Plan::&lt;f64&gt;::new(&amp;problem, &amp;PlanConfig::default())?;
 println!("strategy: {:?}", plan.report().algorithm);
-plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</code></pre>
+plan.execute_into(&amp;mut Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</code></pre>
 
   <h3>The C ABI</h3>
   <p>tcontract builds into one shared library, <code>libtcontract_capi</code>, that implements <a href="https://arxiv.org/abs/2601.07827">TAPP</a>, the community standard C interface for tensor products, declared by the pinned upstream headers. A C or C++ program that includes only <code>&lt;tapp.h&gt;</code> can create tensor descriptors, plan and execute a contraction serially. On top of the standard, operands can be passed as DLPack tensors, and a few named extensions expose executors for multithreaded runs. Because the ABI is a standard, a code written against TAPP can switch between implementations without source changes.</p>
@@ -161,7 +182,7 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
   <div class="cards">
     <div class="card">
       <h3><code>tlinalg</code></h3>
-      <p>Pure Rust, on <a href="https://github.com/tensor4all/faer">tensor4all's fork of faer</a>. Takes a <code>Parallel</code> token describing the threads it may use; with the default Auto policy the library decides between fanning out over batch items (for small matrices, up to 64 rows or columns) and letting faer parallelize inside one item.</p>
+      <p>Pure Rust, on <a href="https://github.com/tensor4all/faer">tensor4all's fork of faer</a>. Takes the same execution token as tcontract (<code>tcontract_exec::Exec</code>, built on threadteam); the library decides between fanning out over batch items (for small matrices) and letting faer parallelize inside one item, and derives faer's parallelism for each item from the token.</p>
     </div>
     <div class="card">
       <h3><code>tlinalg-blas</code></h3>
@@ -174,41 +195,64 @@ plan.execute_into(&amp;Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;</co
   <p><a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines <code>StridedView</code>, <code>StridedViewMut</code> and the raw descriptors that every CPU layer passes across crate boundaries, plus fast permutation and elementwise kernels. Arbitrary strides are allowed, including negative and zero (broadcast).</p>
   <p>Because these types cross crate boundaries, every crate in a build must resolve to the same strided-rs release; two copies would produce two incompatible view types.</p>
 
-  <h3>The faer fork</h3>
-  <p>The pure Rust dense kernels come from <a href="https://github.com/tensor4all/faer">tensor4all/faer</a>, a fork of <a href="https://codeberg.org/sarah-quinones/faer">faer</a> developed independently and published as the <code>t4a-faer</code> crates. It is where workload specific changes are tried quickly: strided and batched entry points, uninitialized output destinations, caller-owned workspaces, an explicit thread policy, and numerical fixes such as the unpivoted QR fix that tlinalg relies on. Many of these are not in upstream faer. Every change is recorded in <a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a>; the fork keeps upstream's license and attribution, and consumers pin a revision or a published <code>t4a-faer</code> version.</p>
+  <h2 id="faer">The faer fork: dense linear algebra</h2>
+  <p>The pure Rust dense kernels come from <a href="https://github.com/tensor4all/faer">tensor4all/faer</a>, a fork of <a href="https://codeberg.org/sarah-quinones/faer">faer</a> by Sarah Quinones, published as the <code>t4a-faer</code> crates. It provides dense and sparse linear algebra for scientific and HPC applications and is not API compatible with upstream: the caller owns a threadteam team and passes <code>Par::Team</code> for parallel work or <code>Par::Seq</code> for sequential work, and there is no implicit global thread pool. Its README lists why it can be trusted, each item one click from a file:</p>
+  <ul>
+    <li><strong>Differential validation against LAPACK.</strong> Sixteen families of LAPACK 3.12's own test suites are ported and run nightly; a run is green only when nothing fails outside an explicit list of known failures.</li>
+    <li><strong>Allocation contracts are tested.</strong> A counting allocator proves that steady-state calls (SVD, eigensolvers, LQ and others) allocate nothing.</li>
+    <li><strong>Bitwise reproducibility</strong> across fresh threads, processes and repeated runs at a fixed thread count.</li>
+    <li><strong>Upstream defects are reported back.</strong> Every defect that also reproduces in published upstream crates is kept as a standalone reproducer in <a href="https://github.com/tensor4all/faer/tree/main/upstream-reports">upstream-reports/</a> and linked from <a href="https://codeberg.org/sarah-quinones/faer/issues/340">one upstream issue</a>.</li>
+    <li><strong>Measured performance.</strong> <a href="https://tensor4all.org/faer-benchmark/">faer-benchmark</a> compares it with upstream faer, MKL and OpenBLAS; in the <a href="https://tensor4all.org/faer-benchmark/zen5-cpu/faer-kernels/71b25ffb7ae3-comparison.html">published comparison on a Zen 5 host</a> the fork is faster than both MKL and OpenBLAS in most of the measured cases.</li>
+  </ul>
+  <p>Matrix multiply comes from <a href="https://github.com/tensor4all/t4a-gemm">t4a-gemm</a>, a fork of gemm with Apple Silicon SME kernels. Migration guides cover Eigen, BLAS, LAPACK, Julia, NumPy and SciPy, nalgebra, ndarray and upstream faer users, with a table mapping LAPACK routines such as <code>?getrf</code> and <code>?syevd</code> to the call that replaces each. Every change is recorded in <a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a>; the fork keeps upstream's license and attribution.</p>
+
+  <h2 id="threadteam">threadteam: one owner of CPU threads</h2>
+  <p><a href="https://github.com/tensor4all/threadteam-rs">threadteam</a> is the only place in the stack where parallel tasks start. strided-rs, tcontract, cpueinsum, tlinalg, tenferro and t4a-faer all take their threads from it.</p>
+  <ul>
+    <li><strong><code>Pool</code></strong> is built once by the caller, with a fixed number of threads.</li>
+    <li><strong><code>Exec</code></strong> is the token a call receives: a budget of threads on a pool, which can be limited, reborrowed or split further down. <code>Exec::serial()</code> runs inline and never starts a thread.</li>
+    <li><strong><code>Team</code></strong> hands a pool to faer, which passes it on as <code>Par::Team</code>.</li>
+    <li><strong>A cost model</strong> sizes each parallel region from the amount of work, so a small contraction does not wake every thread.</li>
+  </ul>
+  <p>Today each pool runs on a private Rayon pool, but no Rayon type appears in any public signature, so the substrate can change without touching the libraries above.</p>
 
   <h2 id="execution">Execution contexts and hataori</h2>
-  <p>Each layer has its own explicit context, and the contexts nest:</p>
+  <p>Each layer takes its own explicit context, and they all carry the same threadteam pool:</p>
   <ul>
-    <li>tcontract and cpueinsum take an <code>Exec</code>: serial, or a borrowed, owned or shared Rayon pool. Width is chosen from the amount of work, so a small contraction does not wake every thread.</li>
-    <li>tlinalg takes a <code>Parallel</code> token with a thread budget; tlinalg-blas leaves threading to the vendor.</li>
-    <li>tenferro carries these inside its backend object, and tensor4all-rs wraps that in a <code>CpuExecutionContext</code>.</li>
+    <li>tcontract, cpueinsum and tlinalg take an <code>Exec</code> token; tlinalg-blas leaves threading to the vendor.</li>
+    <li>tenferro carries the pool inside its <code>CpuEngine</code>, and tensor4all-rs wraps that in a <code>CpuExecutionContext</code>.</li>
   </ul>
-  <p>Something has to own the processes and threads at the top. That is <a href="https://tensor4all.org/hataori-rs/">hataori</a>: <code>map</code> and a dynamically scheduled <code>pmap</code> over serial, Rayon, MPI and hybrid execution, inspired by Distributed.jl. hataori splits the machine into ranks and thread domains and passes each task the pool it may use, which flows down through the contexts above. MPI can be linked at build time or loaded at run time (through <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a>), so a Rust extension can share the MPI library of a Julia or Python host.</p>
+  <p>Above a single process, something has to split the machine. That is <a href="https://tensor4all.org/hataori-rs/">hataori</a>: <code>map</code> and a dynamically scheduled <code>pmap</code> over serial, Rayon, MPI and hybrid execution, inspired by Distributed.jl. hataori splits the machine into ranks and thread domains and lends each task its share. MPI can be linked at build time or loaded at run time (through <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a>), so a Rust extension can share the MPI library of a Julia or Python host.</p>
 
-  <h2 id="qc">For quantum chemistry and other host codes</h2>
-  <p>Coupled cluster, integral transformations, density fitting and many-body perturbation theory spend their time in contractions of tensors whose index order rarely matches what GEMM wants. The usual workaround (permute, call GEMM, permute back) costs memory traffic and extra buffers. tcontract is built to avoid exactly that, in the same spirit as TBLIS, and is designed to be called from code that has its own tensor containers.</p>
+  <h2 id="qc">For first-principles, quantum chemistry and other host codes</h2>
+  <p>Coupled cluster, integral transformations, density fitting, GW and many-body perturbation theory spend their time in contractions of tensors whose index order rarely matches what GEMM wants. The usual workaround (permute, call GEMM, permute back) costs memory traffic and extra buffers. tcontract is built to avoid exactly that, in the same spirit as TBLIS, and is designed to be called from code that has its own tensor containers.</p>
   <ul>
     <li><strong>From C, C++ or Fortran:</strong> link <code>libtcontract_capi</code> and program against the TAPP headers. Your arrays stay where they are; descriptors carry the strides. Fortran codes can call the C ABI through <code>iso_c_binding</code>, and column-major layouts are first class.</li>
     <li><strong>From Python:</strong> DLPack operands let arrays exported by NumPy, PyTorch, JAX or CuPy style libraries be described without copying, given a thin binding layer.</li>
     <li><strong>From Rust:</strong> depend on <code>tcontract</code> directly for binary contractions, on <code>cpueinsum</code> if you already have a contraction order for a multi-tensor expression, and on <code>tlinalg</code> for batched factorizations of the resulting matrices. None of them require tenferro.</li>
-    <li><strong>Threads:</strong> pass your own pool. Nothing in these libraries competes with OpenMP or MPI in your code behind your back.</li>
+    <li><strong>Dense linear algebra:</strong> <code>t4a-faer</code> replaces LAPACK calls one routine at a time; its LAPACK routine table says which call replaces <code>?getrf</code>, <code>?gesvd</code>, <code>?syevd</code> or <code>?potrf</code>.</li>
+    <li><strong>Threads:</strong> pass your own threadteam pool. Nothing in these libraries competes with OpenMP or MPI in your code behind your back.</li>
   </ul>
+  <p>The essay <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/docs/why_rusty_openmx.md">Why rewrite first-principles codes in Rust</a> discusses what this could mean for an existing DFT code.</p>
   <div class="note warm"><p>If you are evaluating them for a production code, opening an issue with your typical tensor shapes is the most useful thing you can do: it feeds directly into the benchmark campaigns below.</p></div>
 
   <h2 id="bench">Benchmarks</h2>
+  <p>Every campaign keys its results by library commit and hardware profile and publishes a site.</p>
   <div class="table-wrap"><table>
-    <thead><tr><th>Repository</th><th>What it measures</th></tr></thead>
+    <thead><tr><th>Repository</th><th>What it measures</th><th>Results</th></tr></thead>
     <tbody>
-      <tr><td><a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a></td><td>tenferro against PyTorch and JAX on CPU and GPU, per workload class</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a></td><td>binary contractions across shapes and strides, keyed by commit and hardware profile</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a></td><td>batched factorizations, faer provider against LAPACK, keyed by commit and hardware profile</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/tensor4all-benchmark">tensor4all-benchmark</a></td><td>tensor network level algorithms: QTT elementwise products, MPO MPO contraction</td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a></td><td>tenferro against PyTorch and JAX on CPU and GPU, per workload class</td><td><a href="https://tensor4all.org/tenferro-benchmark/">site</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/faer-benchmark">faer-benchmark</a></td><td>t4a-faer against upstream faer, MKL and OpenBLAS</td><td><a href="https://tensor4all.org/faer-benchmark/">site</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a></td><td>binary contractions against TBLIS, per shape</td><td><a href="https://tensor4all.org/tcontract-benchmark/">site</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a></td><td>batched factorizations, faer provider against vendor LAPACK</td><td><a href="https://tensor4all.org/tlinalg-benchmark/">site</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/cpueinsum-benchmark">cpueinsum-benchmark</a></td><td>N-ary einsum over a standard corpus of einsum instances</td><td><a href="https://tensor4all.org/cpueinsum-benchmark/">site</a></td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tensor4all-benchmark">tensor4all-benchmark</a></td><td>tensor network level algorithms: QTT elementwise products, MPO MPO contraction</td><td><a href="https://github.com/tensor4all/tensor4all-benchmark/blob/main/result/INDEX.md">results</a></td></tr>
     </tbody>
   </table></div>
+  <p>The campaigns share <a href="https://github.com/tensor4all/campaign-toolkit">campaign-toolkit</a> for run manifests, timing protocol and result pages.</p>
 
   <h2 id="contributing">Contributing</h2>
-  <p>All repositories accept issues and pull requests, including AI assisted contributions; each one documents its rules in <code>AGENTS.md</code> and its contributing guide. Good first contributions are benchmark cases from real applications, kernels for hardware we have not tuned for, and bindings for other languages.</p>
+  <p>All repositories accept issues and pull requests, including AI assisted contributions. The rules shared by every Rust repository are in the <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/docs/contributing/rust-repositories.md">contribution rules</a>; each repository adds its local facts in <code>AGENTS.md</code> and its contributing guide. Good first contributions are benchmark cases from real applications, kernels for hardware we have not tuned for, and bindings for other languages.</p>
 </main>
 </div>
 
