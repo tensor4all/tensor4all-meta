@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stack for backend developers</title>
-<meta name="description" content="A guide to the backend of the tensor4all Rust stack: tenferro, cpueinsum, tcontract, tlinalg, strided-rs, threadteam and the faer fork, including use from first-principles and quantum chemistry codes.">
+<meta name="description" content="A guide to the backend of the tensor4all Rust stack: tenferro, cpueinsum, tcontract, tlinalg, strided-rs, threadteam and colmat, including use from first-principles and quantum chemistry codes.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -32,7 +32,7 @@
     <li><a href="#tcontract">tcontract</a></li>
     <li><a href="#tlinalg">tlinalg</a></li>
     <li><a href="#strided">strided-rs</a></li>
-    <li><a href="#faer">The faer fork</a></li>
+    <li><a href="#colmat">colmat</a></li>
     <li><a href="#threadteam">threadteam</a></li>
     <li><a href="#execution">Execution and hataori</a></li>
     <li><a href="#qc">For host codes</a></li>
@@ -74,7 +74,7 @@
       <tr><td><strong>tlinalg</strong>, <strong>tlinalg-blas</strong></td><td>batched factorizations and solves, the batch loop and its lane fan-out</td><td>tensors, allocation policy, dtype and device dispatch</td></tr>
       <tr><td><strong>strided-rs</strong></td><td>the strided view types and traits everyone exchanges; permutation and elementwise kernels</td><td>everything above</td></tr>
       <tr><td><strong>threadteam</strong></td><td>the CPU threads: the pool, the execution token handed down, and the cost model that sizes each parallel region</td><td>what runs on the threads</td></tr>
-      <tr><td><strong>t4a-faer</strong></td><td>dense and sparse matrix kernels: GEMM, factorizations, eigensolvers</td><td>batching, tensors</td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <strong>colmat</strong></td><td>dense and sparse matrix kernels: GEMM, factorizations, eigensolvers</td><td>batching, tensors</td></tr>
     </tbody>
   </table></div>
 
@@ -83,7 +83,7 @@
     <li><strong>Explicit execution, no ambient state.</strong> Threads come from one threadteam pool the caller builds, and scratch memory from a context the caller passes in. threadteam is the only place parallel tasks start; no library starts a global pool, and no environment variable changes results. Two consequences: the same call is reproducible regardless of what else runs in the process, and an outer scheduler (MPI, hataori, a Julia session) can partition the machine without fighting the libraries.</li>
     <li><strong>Tensor-free provider interfaces.</strong> Providers take borrowed strided views plus a few scalars and flags. They can be tested and benchmarked on plain buffers, and a different host (a quantum chemistry code, another tensor library) can call them without adopting tenferro.</li>
     <li><strong>Plan once, execute many times.</strong> Contractions and einsums have a plan object that fixes the strategy, kernel and blocking for given shapes and strides. Tensor network sweeps and iterative solvers repeat the same shapes thousands of times, so per-call overhead matters as much as peak throughput.</li>
-    <li><strong>Measured, not assumed.</strong> Performance claims live in benchmark repositories keyed by commit and hardware, with comparisons against PyTorch and JAX (for tenferro), TBLIS (for tcontract), vendor LAPACK (for tlinalg), and MKL and OpenBLAS (for the faer fork).</li>
+    <li><strong>Measured, not assumed.</strong> Performance claims live in benchmark repositories keyed by commit and hardware, with comparisons against PyTorch and JAX (for tenferro), TBLIS (for tcontract), vendor LAPACK (for tlinalg), and MKL and OpenBLAS (for colmat).</li>
   </ul>
 
   <h2 id="tenferro"><span class="star">&#9733;</span> tenferro: the host</h2>
@@ -133,7 +133,7 @@ plan.execute_into(&amp;mut Exec::serial(), &amp;views, &amp;mut out, &amp;mut sc
     <thead><tr><th>Strategy</th><th>Used when</th><th>How</th></tr></thead>
     <tbody>
       <tr><td>packed</td><td>general strides and index orders</td><td>a TBLIS-style block-scatter driver packs strided operands straight into microkernel panels, with cache blocking</td></tr>
-      <tr><td>faer</td><td>the problem fuses into one batched GEMM without copies</td><td>calls faer's matrix multiply directly on the views, in parallel only through a threadteam team</td></tr>
+      <tr><td>faer</td><td>the problem fuses into one batched GEMM without copies</td><td>calls colmat's matrix multiply directly on the views, in parallel only through a threadteam team</td></tr>
       <tr><td>elementwise</td><td>every index is a batch index</td><td>a single elementwise pass</td></tr>
     </tbody>
   </table></div>
@@ -182,7 +182,7 @@ plan.execute_into(&amp;mut Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;
   <div class="cards">
     <div class="card">
       <h3><code>tlinalg</code></h3>
-      <p>Pure Rust, on <a href="https://github.com/tensor4all/faer">tensor4all's fork of faer</a>. Takes the same execution token as tcontract (<code>tcontract_exec::Exec</code>, built on threadteam); the library decides between fanning out over batch items (for small matrices) and letting faer parallelize inside one item, and derives faer's parallelism for each item from the token.</p>
+      <p>Pure Rust, on <a href="https://github.com/tensor4all/colmat-rs">colmat</a>. Takes the same execution token as tcontract (<code>tcontract_exec::Exec</code>, built on threadteam); the library decides between fanning out over batch items (for small matrices) and letting faer parallelize inside one item, and derives faer's parallelism for each item from the token.</p>
     </div>
     <div class="card">
       <h3><code>tlinalg-blas</code></h3>
@@ -195,23 +195,23 @@ plan.execute_into(&amp;mut Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;
   <p><a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines <code>StridedView</code>, <code>StridedViewMut</code> and the raw descriptors that every CPU layer passes across crate boundaries, plus fast permutation and elementwise kernels. Arbitrary strides are allowed, including negative and zero (broadcast).</p>
   <p>Because these types cross crate boundaries, every crate in a build must resolve to the same strided-rs release; two copies would produce two incompatible view types.</p>
 
-  <h2 id="faer">The faer fork: dense linear algebra</h2>
-  <p>The pure Rust dense kernels come from <a href="https://github.com/tensor4all/faer">tensor4all/faer</a>, a fork of <a href="https://codeberg.org/sarah-quinones/faer">faer</a> by Sarah Quinones, published as the <code>t4a-faer</code> crates. It provides dense and sparse linear algebra for scientific and HPC applications and is not API compatible with upstream: the caller owns a threadteam team and passes <code>Par::Team</code> for parallel work or <code>Par::Seq</code> for sequential work, and there is no implicit global thread pool. Its README lists why it can be trusted, each item one click from a file:</p>
+  <h2 id="colmat"><span class="star">&#9733;</span> colmat: dense linear algebra</h2>
+  <p>The pure Rust dense kernels come from <a href="https://github.com/tensor4all/colmat-rs">colmat</a>, tensor4all's library derived from <a href="https://codeberg.org/sarah-quinones/faer">faer</a> by Sarah Quinones. It was published as the <code>t4a-faer</code> crates up to 0.33.0 and continues as <code>colmat</code> from 0.34.0, unchanged apart from the name. It provides dense and sparse linear algebra for scientific and HPC applications and is not API compatible with upstream: the caller owns a threadteam team and passes <code>Par::Team</code> for parallel work or <code>Par::Seq</code> for sequential work, and there is no implicit global thread pool. Its README lists why it can be trusted, each item one click from a file:</p>
   <ul>
     <li><strong>Differential validation against LAPACK.</strong> Sixteen families of LAPACK 3.12's own test suites are ported and run nightly; a run is green only when nothing fails outside an explicit list of known failures.</li>
     <li><strong>Allocation contracts are tested.</strong> A counting allocator proves that steady-state calls (SVD, eigensolvers, LQ and others) allocate nothing.</li>
     <li><strong>Bitwise reproducibility</strong> across fresh threads, processes and repeated runs at a fixed thread count.</li>
-    <li><strong>Upstream defects are reported back.</strong> Every defect that also reproduces in published upstream crates is kept as a standalone reproducer in <a href="https://github.com/tensor4all/faer/tree/main/upstream-reports">upstream-reports/</a> and linked from <a href="https://codeberg.org/sarah-quinones/faer/issues/340">one upstream issue</a>.</li>
-    <li><strong>Measured performance.</strong> <a href="https://tensor4all.org/faer-benchmark/">faer-benchmark</a> compares it with upstream faer, MKL and OpenBLAS; in the <a href="https://tensor4all.org/faer-benchmark/zen5-cpu/faer-kernels/71b25ffb7ae3-comparison.html">published comparison on a Zen 5 host</a> the fork is faster than both MKL and OpenBLAS in most of the measured cases.</li>
+    <li><strong>Upstream defects are reported back.</strong> Every defect that also reproduces in published upstream crates is kept as a standalone reproducer in <a href="https://github.com/tensor4all/colmat-rs/tree/main/upstream-reports">upstream-reports/</a> and linked from <a href="https://codeberg.org/sarah-quinones/faer/issues/340">one upstream issue</a>.</li>
+    <li><strong>Measured performance.</strong> <a href="https://tensor4all.org/colmat-benchmark/">colmat-benchmark</a> compares it with upstream faer, MKL and OpenBLAS; in the <a href="https://tensor4all.org/colmat-benchmark/zen5-cpu/faer-kernels/71b25ffb7ae3-comparison.html">published comparison on a Zen 5 host</a> colmat is faster than both MKL and OpenBLAS in most of the measured cases.</li>
   </ul>
-  <p>Matrix multiply comes from <a href="https://github.com/tensor4all/t4a-gemm">t4a-gemm</a>, a fork of gemm with Apple Silicon SME kernels. Migration guides cover Eigen, BLAS, LAPACK, Julia, NumPy and SciPy, nalgebra, ndarray and upstream faer users, with a table mapping LAPACK routines such as <code>?getrf</code> and <code>?syevd</code> to the call that replaces each. Every change is recorded in <a href="https://github.com/tensor4all/faer/blob/main/PATCHSET.md">PATCHSET.md</a>; the fork keeps upstream's license and attribution.</p>
+  <p>Matrix multiply comes from <a href="https://github.com/tensor4all/t4a-gemm">t4a-gemm</a>, a fork of gemm with Apple Silicon SME kernels. Migration guides cover Eigen, BLAS, LAPACK, Julia, NumPy and SciPy, nalgebra, ndarray and upstream faer users, with a table mapping LAPACK routines such as <code>?getrf</code> and <code>?syevd</code> to the call that replaces each. Every change is recorded in <a href="https://github.com/tensor4all/colmat-rs/blob/main/PATCHSET.md">PATCHSET.md</a>; colmat keeps upstream's license and attribution.</p>
 
   <h2 id="threadteam">threadteam: one owner of CPU threads</h2>
-  <p><a href="https://github.com/tensor4all/threadteam-rs">threadteam</a> is the only place in the stack where parallel tasks start. strided-rs, tcontract, cpueinsum, tlinalg, tenferro and t4a-faer all take their threads from it.</p>
+  <p><a href="https://github.com/tensor4all/threadteam-rs">threadteam</a> is the only place in the stack where parallel tasks start. strided-rs, tcontract, cpueinsum, tlinalg, tenferro and colmat all take their threads from it.</p>
   <ul>
     <li><strong><code>Pool</code></strong> is built once by the caller, with a fixed number of threads.</li>
     <li><strong><code>Exec</code></strong> is the token a call receives: a budget of threads on a pool, which can be limited, reborrowed or split further down. <code>Exec::serial()</code> runs inline and never starts a thread.</li>
-    <li><strong><code>Team</code></strong> hands a pool to faer, which passes it on as <code>Par::Team</code>.</li>
+    <li><strong><code>Team</code></strong> hands a pool to colmat, which passes it on as <code>Par::Team</code>.</li>
     <li><strong>A cost model</strong> sizes each parallel region from the amount of work, so a small contraction does not wake every thread.</li>
   </ul>
   <p>Today each pool runs on a private Rayon pool, but no Rayon type appears in any public signature, so the substrate can change without touching the libraries above.</p>
@@ -230,7 +230,7 @@ plan.execute_into(&amp;mut Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;
     <li><strong>From C, C++ or Fortran:</strong> link <code>libtcontract_capi</code> and program against the TAPP headers. Your arrays stay where they are; descriptors carry the strides. Fortran codes can call the C ABI through <code>iso_c_binding</code>, and column-major layouts are first class.</li>
     <li><strong>From Python:</strong> DLPack operands let arrays exported by NumPy, PyTorch, JAX or CuPy style libraries be described without copying, given a thin binding layer.</li>
     <li><strong>From Rust:</strong> depend on <code>tcontract</code> directly for binary contractions, on <code>cpueinsum</code> if you already have a contraction order for a multi-tensor expression, and on <code>tlinalg</code> for batched factorizations of the resulting matrices. None of them require tenferro.</li>
-    <li><strong>Dense linear algebra:</strong> <code>t4a-faer</code> replaces LAPACK calls one routine at a time; its LAPACK routine table says which call replaces <code>?getrf</code>, <code>?gesvd</code>, <code>?syevd</code> or <code>?potrf</code>.</li>
+    <li><strong>Dense linear algebra:</strong> <code>colmat</code> replaces LAPACK calls one routine at a time; its LAPACK routine table says which call replaces <code>?getrf</code>, <code>?gesvd</code>, <code>?syevd</code> or <code>?potrf</code>.</li>
     <li><strong>Threads:</strong> pass your own threadteam pool. Nothing in these libraries competes with OpenMP or MPI in your code behind your back.</li>
   </ul>
   <p>The essay <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/docs/why_rusty_openmx.md">Why rewrite first-principles codes in Rust</a> discusses what this could mean for an existing DFT code.</p>
@@ -242,7 +242,7 @@ plan.execute_into(&amp;mut Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;
     <thead><tr><th>Repository</th><th>What it measures</th><th>Results</th></tr></thead>
     <tbody>
       <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a></td><td>tenferro against PyTorch and JAX on CPU and GPU, per workload class</td><td><a href="https://tensor4all.org/tenferro-benchmark/">site</a></td></tr>
-      <tr><td><a href="https://github.com/tensor4all/faer-benchmark">faer-benchmark</a></td><td>t4a-faer against upstream faer, MKL and OpenBLAS</td><td><a href="https://tensor4all.org/faer-benchmark/">site</a></td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/colmat-benchmark">colmat-benchmark</a></td><td>colmat against upstream faer, MKL and OpenBLAS</td><td><a href="https://tensor4all.org/colmat-benchmark/">site</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a></td><td>binary contractions against TBLIS, per shape</td><td><a href="https://tensor4all.org/tcontract-benchmark/">site</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a></td><td>batched factorizations, faer provider against vendor LAPACK</td><td><a href="https://tensor4all.org/tlinalg-benchmark/">site</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/cpueinsum-benchmark">cpueinsum-benchmark</a></td><td>N-ary einsum over a standard corpus of einsum instances</td><td><a href="https://tensor4all.org/cpueinsum-benchmark/">site</a></td></tr>

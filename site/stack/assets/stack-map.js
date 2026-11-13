@@ -4,7 +4,7 @@
   var GH = "https://github.com/tensor4all/";
   // Every row is one layer named by its role; every box is one library,
   // titled with its name and linked to its GitHub repository.
-  // star: true marks the two flagship projects.
+  // star: true marks the flagship projects.
   var T4A = GH + "tensor4all-rs/tree/main/crates/";
   var ROWS = [
     { id: "front", kind: "user", label: "Frontends", sub: "Julia, C, Python", boxes: [
@@ -23,7 +23,7 @@
       { t: "tlinalg-rs", d: "batched SVD, QR, eigh, LU", href: GH + "tlinalg-rs" } ] },
     { id: "found", kind: "backend", label: "Foundation", sub: "views, dense linalg", boxes: [
       { t: "strided-rs", d: "strided views", href: GH + "strided-rs" },
-      { t: "t4a-faer", d: "our faer fork", href: GH + "faer" },
+      { t: "colmat-rs", d: "linalg, from faer", href: GH + "colmat-rs", star: true },
       { t: "BLAS, LAPACK", d: "vendor, optional", href: null } ] },
     // wide: the band runs under hataori too, because every CPU thread in the
     // stack, and every thread a hataori lane computes on, comes from threadteam.
@@ -51,7 +51,7 @@
     var focus = host.getAttribute("data-focus") || "all";
     var H = TOP + ROWS.length * ROW_H + (ROWS.length - 1) * GAP + TOP;
     var svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img",
-      "aria-label": "Layer map of the tensor4all Rust stack, from frontends down to shared foundations, with hataori beside it. threadteam-rs is a full-width band under both the stack and hataori, since all CPU threads come from it. The flagship projects tensor4all-rs and tenferro-rs are starred." });
+      "aria-label": "Layer map of the tensor4all Rust stack, from frontends down to shared foundations, with hataori beside it. threadteam-rs is a full-width band under both the stack and hataori, since all CPU threads come from it. The flagship projects tensor4all-rs, tenferro-rs and colmat-rs are starred." });
     var title = el("title", {}, svg);
     title.textContent = "tensor4all Rust stack";
 

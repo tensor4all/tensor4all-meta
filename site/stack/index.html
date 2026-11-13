@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tensor4all Rust stack</title>
-<meta name="description" content="How the tensor4all Rust libraries fit together: the flagship projects tensor4all-rs and tenferro-rs, and the contraction, linear algebra and threading layers underneath, from QTT and TCI down to dense kernels.">
+<meta name="description" content="How the tensor4all Rust libraries fit together: the flagship projects tensor4all-rs, tenferro-rs and colmat-rs, and the contraction, linear algebra and threading layers underneath, from QTT and TCI down to dense kernels.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -30,7 +30,7 @@
   </section>
 
   <h2 id="flagships"><span class="star">&#9733;</span> Flagship projects</h2>
-  <p>Two projects carry the stack. Start with one of them; the rest of this page shows what they stand on.</p>
+  <p>Three projects carry the stack. Start with one of them; the rest of this page shows what they stand on.</p>
   <div class="cards">
     <div class="card big flagship">
       <span class="tag flagship">&#9733; Flagship &middot; algorithms</span>
@@ -62,6 +62,22 @@
         <a href="https://tensor4all.org/tenferro-benchmark/">Benchmarks &rarr;</a>
       </div>
     </div>
+    <div class="card big flagship">
+      <span class="tag flagship">&#9733; Flagship &middot; linear algebra</span>
+      <h3><a href="https://github.com/tensor4all/colmat-rs">colmat-rs</a></h3>
+      <p>Pure Rust dense and sparse linear algebra for scientific and HPC work, derived from <a href="https://codeberg.org/sarah-quinones/faer">faer</a> by Sarah Quinones and published as the <code>colmat</code> crate (formerly <code>t4a-faer</code>).</p>
+      <ul>
+        <li>Validated nightly against LAPACK 3.12's own test suites</li>
+        <li>Steady-state calls allocate nothing; results are bitwise reproducible at a fixed thread count</li>
+        <li>The caller owns the threadteam team: no implicit global thread pool</li>
+        <li>Faster than MKL and OpenBLAS in most cases of the <a href="https://tensor4all.org/colmat-benchmark/zen5-cpu/faer-kernels/71b25ffb7ae3-comparison.html">Zen 5 comparison</a></li>
+      </ul>
+      <div class="links">
+        <a href="https://docs.rs/colmat">API docs &rarr;</a>
+        <a href="https://tensor4all.org/colmat-benchmark/">Benchmarks &rarr;</a>
+        <a href="https://github.com/tensor4all/colmat-rs/blob/main/docs/migration/README.md">Migration guides &rarr;</a>
+      </div>
+    </div>
   </div>
 
   <h2 id="guides">Two guides</h2>
@@ -81,7 +97,7 @@
   </div>
 
   <h2 id="map">The layer map</h2>
-  <p>Each layer depends only on layers below it. Bands are layers, named by their role; boxes are libraries, and each name links to its GitHub repository. <span class="star">&#9733;</span> marks the two flagship projects. hataori sits beside the stack: it does not compute anything itself, it splits the machine into MPI ranks and thread domains and lends them to the layers that do. threadteam runs under everything, hataori included: every CPU thread that computes comes from a threadteam pool.</p>
+  <p>Each layer depends only on layers below it. Bands are layers, named by their role; boxes are libraries, and each name links to its GitHub repository. <span class="star">&#9733;</span> marks the flagship projects. hataori sits beside the stack: it does not compute anything itself, it splits the machine into MPI ranks and thread domains and lends them to the layers that do. threadteam runs under everything, hataori included: every CPU thread that computes comes from a threadteam pool.</p>
   <figure class="figure">
     <div class="map-scroll"><div class="stack-map" data-focus="all"></div></div>
     <figcaption>Blue bands are what tensor network users touch; orange bands are the backend. On a narrow screen, scroll the map sideways.</figcaption>
@@ -93,15 +109,15 @@
     <li><strong>Algorithms.</strong> <span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a> holds the algorithms: tensor trains, TCI, quantics grids and operators, tree tensor networks, patching, HDF5 I/O. It keeps two stacks on purpose (a TT and TCI stack and a network stack) with an explicit bridge between them. Grid and coordinate conversion lives in the standalone <a href="https://github.com/tensor4all/quanticsgrids-rs">quanticsgrids-rs</a>.</li>
     <li><strong>Tensor runtime.</strong> <span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a> is the tensor runtime: typed and dynamic tensors, eager and traced automatic differentiation, CPU and CUDA backends and an experimental XLA path. tensor4all-rs reaches it through one adapter crate. <a href="https://github.com/tensor4all/computegraph-rs">computegraph-rs</a> supplies the graph IR that traced AD builds on.</li>
     <li><strong>Kernel providers.</strong> Tensor-free numerical libraries that tenferro calls: <a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> for N-ary einsum, <a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> for binary contraction over arbitrary strides, and <a href="https://github.com/tensor4all/tlinalg-rs">tlinalg</a> for batched factorizations. They take borrowed strided views and an explicit execution token, so they are usable on their own, including from C.</li>
-    <li><strong>Foundation.</strong> <a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines the strided view types every layer above passes around. Dense arithmetic comes from <a href="https://github.com/tensor4all/faer">tensor4all's fork of faer</a>, published as <code>t4a-faer</code>, and optionally from a vendor BLAS and LAPACK.</li>
-    <li><strong>Thread substrate.</strong> <a href="https://github.com/tensor4all/threadteam-rs">threadteam-rs</a> owns the CPU threads and is the base of all thread parallelism in the stack: it is the only place where parallel tasks start, and strided-rs, t4a-faer, the kernel providers and tenferro all take their threads from it. hataori's tenferro lanes run on threadteam teams too, which is why its band spans the whole map.</li>
+    <li><strong>Foundation.</strong> <a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines the strided view types every layer above passes around. Dense arithmetic comes from <span class="star">&#9733;</span> <a href="https://github.com/tensor4all/colmat-rs">colmat-rs</a>, tensor4all's pure Rust linear algebra library derived from faer (formerly published as <code>t4a-faer</code>), and optionally from a vendor BLAS and LAPACK.</li>
+    <li><strong>Thread substrate.</strong> <a href="https://github.com/tensor4all/threadteam-rs">threadteam-rs</a> owns the CPU threads and is the base of all thread parallelism in the stack: it is the only place where parallel tasks start, and strided-rs, colmat, the kernel providers and tenferro all take their threads from it. hataori's tenferro lanes run on threadteam teams too, which is why its band spans the whole map.</li>
     <li><strong>Beside the stack.</strong> <a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a> provides data-parallel map and pmap over serial, Rayon, MPI and hybrid execution, for the outer level of a study: parameter scans, momenta, independent patches.</li>
   </ul>
 
   <h2 id="beyond">Beyond tensor networks</h2>
   <p>The stack started as the backend of tensor network algorithms, and its lower layers are now general tools for dense numerical work in Rust. None of them requires tenferro or tensor4all-rs.</p>
   <ul>
-    <li><strong>Linear algebra.</strong> <code>t4a-faer</code> is a pure Rust dense and sparse linear algebra library. It is validated nightly against LAPACK 3.12's own test suites, its steady-state calls are tested to allocate nothing, and its results are bitwise reproducible at a fixed thread count. In the <a href="https://tensor4all.org/faer-benchmark/zen5-cpu/faer-kernels/71b25ffb7ae3-comparison.html">published comparison on a Zen 5 host</a> it is faster than both MKL and OpenBLAS in most of the measured cases. Migration guides cover LAPACK, Eigen, NumPy and SciPy users.</li>
+    <li><strong>Linear algebra.</strong> <span class="star">&#9733;</span> <a href="https://github.com/tensor4all/colmat-rs">colmat</a> is a pure Rust dense and sparse linear algebra library. It is validated nightly against LAPACK 3.12's own test suites, its steady-state calls are tested to allocate nothing, and its results are bitwise reproducible at a fixed thread count. In the <a href="https://tensor4all.org/colmat-benchmark/zen5-cpu/faer-kernels/71b25ffb7ae3-comparison.html">published comparison on a Zen 5 host</a> it is faster than both MKL and OpenBLAS in most of the measured cases. Migration guides cover LAPACK, Eigen, NumPy and SciPy users.</li>
     <li><strong>Tensor contraction.</strong> tcontract contracts tensors in any index order without transposing them first, and speaks <a href="https://arxiv.org/abs/2601.07827">TAPP</a>, the community C interface for tensor products, so C, C++ and Fortran codes can call it.</li>
     <li><strong>Batched factorizations.</strong> tlinalg runs SVD, QR, LU, Cholesky and eigensolvers over whole batches of matrices and decides how to spread them over threads.</li>
     <li><strong>Threads that cooperate.</strong> threadteam gives a caller one pool to hand down, so a library call never competes with the OpenMP, MPI or Julia threads of the host program.</li>
@@ -123,11 +139,11 @@
       <tr><td><a href="https://github.com/tensor4all/tlinalg-rs">tlinalg-rs</a></td><td>batched SVD, QR, LU, Cholesky, eigensolvers</td><td>README</td></tr>
       <tr><td><a href="https://github.com/tensor4all/strided-rs">strided-rs</a></td><td>strided view types, permutation and elementwise kernels</td><td>README</td></tr>
       <tr><td><a href="https://github.com/tensor4all/threadteam-rs">threadteam-rs</a></td><td>the CPU thread pool and execution token every layer takes</td><td>README</td></tr>
-      <tr><td><a href="https://github.com/tensor4all/faer">t4a-faer</a></td><td>tensor4all fork of <a href="https://codeberg.org/sarah-quinones/faer">faer</a> by Sarah Quinones: caller-owned thread teams, validated against LAPACK</td><td><a href="https://github.com/tensor4all/faer#readme">README</a></td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/colmat-rs">colmat-rs</a></td><td>flagship: dense and sparse linear algebra derived from <a href="https://codeberg.org/sarah-quinones/faer">faer</a> by Sarah Quinones: caller-owned threadteam teams, validated against LAPACK</td><td><a href="https://docs.rs/colmat">docs</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/hataori-rs">hataori-rs</a></td><td>map and pmap over Rayon and MPI</td><td><a href="https://tensor4all.org/hataori-rs/">docs</a></td></tr>
     </tbody>
   </table></div>
-  <p>Supporting repositories: <a href="https://github.com/tensor4all/hdf5-rt">hdf5-rt</a> and <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a> load HDF5 and MPI at run time so a Rust extension can share them with Julia or Python; <a href="https://github.com/tensor4all/elem-simd-math-rs">elem-simd-math-rs</a> provides vectorized elementwise math; <a href="https://github.com/tensor4all/tensor-ad-oracles">tensor-ad-oracles</a> is a database of derivative-correctness oracles for the AD rules; <a href="https://github.com/tensor4all/t4a-gemm">t4a-gemm</a> is the matrix multiply fork under t4a-faer, with Apple Silicon SME kernels; <a href="https://github.com/tensor4all/t4a-gpu-backend">t4a-gpu-backend</a> and <a href="https://github.com/tensor4all/t4a-cuda-kernels">t4a-cuda-kernels</a> are GPU runtimes and kernels developed and validated on their own before tenferro adopts them.</p>
+  <p>Supporting repositories: <a href="https://github.com/tensor4all/hdf5-rt">hdf5-rt</a> and <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a> load HDF5 and MPI at run time so a Rust extension can share them with Julia or Python; <a href="https://github.com/tensor4all/elem-simd-math-rs">elem-simd-math-rs</a> provides vectorized elementwise math; <a href="https://github.com/tensor4all/tensor-ad-oracles">tensor-ad-oracles</a> is a database of derivative-correctness oracles for the AD rules; <a href="https://github.com/tensor4all/t4a-gemm">t4a-gemm</a> is the matrix multiply fork under colmat, with Apple Silicon SME kernels; <a href="https://github.com/tensor4all/t4a-gpu-backend">t4a-gpu-backend</a> and <a href="https://github.com/tensor4all/t4a-cuda-kernels">t4a-cuda-kernels</a> are GPU runtimes and kernels developed and validated on their own before tenferro adopts them.</p>
 
   <h2 id="bench">Benchmarks</h2>
   <p>Performance claims are measured, not assumed. Each campaign lives in its own repository, keys its results by library commit and hardware profile, and publishes a site:</p>
@@ -136,7 +152,7 @@
     <tbody>
       <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a></td><td>tenferro against PyTorch and JAX, CPU and GPU</td><td><a href="https://tensor4all.org/tenferro-benchmark/">site</a></td></tr>
       <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tensor4all-benchmark">tensor4all-benchmark</a></td><td>tensor network algorithms: QTT elementwise products, MPO MPO contraction</td><td><a href="https://github.com/tensor4all/tensor4all-benchmark/blob/main/result/INDEX.md">results</a></td></tr>
-      <tr><td><a href="https://github.com/tensor4all/faer-benchmark">faer-benchmark</a></td><td>t4a-faer against upstream faer, MKL and OpenBLAS</td><td><a href="https://tensor4all.org/faer-benchmark/">site</a></td></tr>
+      <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/colmat-benchmark">colmat-benchmark</a></td><td>colmat against upstream faer, MKL and OpenBLAS</td><td><a href="https://tensor4all.org/colmat-benchmark/">site</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a></td><td>batched factorizations against vendor LAPACK</td><td><a href="https://tensor4all.org/tlinalg-benchmark/">site</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a></td><td>binary contraction against TBLIS</td><td><a href="https://tensor4all.org/tcontract-benchmark/">site</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/cpueinsum-benchmark">cpueinsum-benchmark</a></td><td>N-ary einsum over a standard corpus of einsum instances</td><td><a href="https://tensor4all.org/cpueinsum-benchmark/">site</a></td></tr>
