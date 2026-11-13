@@ -182,7 +182,7 @@ footer .inner { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; }
 .sm-link .sm-title { fill: var(--accent); }
 .sm-link:hover .sm-title { text-decoration: underline; }
 
-/* flagship projects: tensor4all-rs and tenferro-rs */
+/* flagship projects: tensor4all-rs, tenferro-rs and colmat-rs */
 .star { color: var(--warm); }
 .tag.flagship { background: var(--warm-soft); color: var(--warm); }
 .card.flagship { border: 2px solid var(--warm); }

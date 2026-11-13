@@ -4,7 +4,7 @@
   var GH = "https://github.com/tensor4all/";
   // Every row is one layer named by its role; every box is one library,
   // titled with its name and linked to its GitHub repository.
-  // star: true marks the two flagship projects.
+  // star: true marks the flagship projects.
   var T4A = GH + "tensor4all-rs/tree/main/crates/";
   var ROWS = [
     { id: "front", kind: "user", label: "Frontends", sub: "Julia, C, Python", boxes: [
@@ -21,11 +21,14 @@
       { t: "cpueinsum-rs", d: "N-ary einsum, given order", href: GH + "cpueinsum-rs" },
       { t: "tcontract-rs", d: "contraction, TAPP C ABI", href: GH + "tcontract-rs" },
       { t: "tlinalg-rs", d: "batched SVD, QR, eigh, LU", href: GH + "tlinalg-rs" } ] },
-    { id: "found", kind: "backend", label: "Foundation", sub: "views, threads, linalg", boxes: [
+    { id: "found", kind: "backend", label: "Foundation", sub: "views, dense linalg", boxes: [
       { t: "strided-rs", d: "strided views", href: GH + "strided-rs" },
-      { t: "threadteam-rs", d: "CPU thread teams", href: GH + "threadteam-rs" },
-      { t: "t4a-faer", d: "our faer fork", href: GH + "faer" },
-      { t: "BLAS, LAPACK", d: "vendor, optional", href: null } ] }
+      { t: "colmat-rs", d: "linalg, from faer", href: GH + "colmat-rs", star: true },
+      { t: "BLAS, LAPACK", d: "vendor, optional", href: null } ] },
+    // wide: the band runs under hataori too, because every CPU thread in the
+    // stack, and every thread a hataori lane computes on, comes from threadteam.
+    { id: "threads", kind: "backend", label: "Thread substrate", sub: "under everything", wide: true, boxes: [
+      { t: "threadteam-rs", d: "the one owner of CPU threads: every parallel region above, and each hataori lane engine, runs on its teams", href: GH + "threadteam-rs" } ] }
   ];
   var NS = "http://www.w3.org/2000/svg";
   var W = 960, BAND_X = 16, BAND_W = 704, ROW_H = 72, GAP = 16, TOP = 16;
@@ -48,7 +51,7 @@
     var focus = host.getAttribute("data-focus") || "all";
     var H = TOP + ROWS.length * ROW_H + (ROWS.length - 1) * GAP + TOP;
     var svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img",
-      "aria-label": "Layer map of the tensor4all Rust stack, from frontends down to shared foundations, with hataori beside it. The flagship projects tensor4all-rs and tenferro-rs are starred." });
+      "aria-label": "Layer map of the tensor4all Rust stack, from frontends down to shared foundations, with hataori beside it. threadteam-rs is a full-width band under both the stack and hataori, since all CPU threads come from it. The flagship projects tensor4all-rs, tenferro-rs and colmat-rs are starred." });
     var title = el("title", {}, svg);
     title.textContent = "tensor4all Rust stack";
 
@@ -57,11 +60,13 @@
       var dim = (focus === "users" && row.kind === "backend" && row.id !== "tenferro") ||
                 (focus === "backend" && row.kind === "user");
       var g = el("g", { "class": dim ? "sm-dim" : "" }, svg);
-      el("rect", { x: BAND_X, y: y, width: BAND_W, height: ROW_H, rx: 10, "class": "sm-band " + row.kind }, g);
+      var bandW = row.wide ? SIDE_X + SIDE_W - BAND_X : BAND_W;
+      var boxX1 = row.wide ? SIDE_X + SIDE_W - 12 : BOX_X1;
+      el("rect", { x: BAND_X, y: y, width: bandW, height: ROW_H, rx: 10, "class": "sm-band " + row.kind }, g);
       text(g, BAND_X + 16, y + 32, "sm-label", row.label);
       text(g, BAND_X + 16, y + 50, "sm-sub", row.sub);
       var n = row.boxes.length;
-      var bw = (BOX_X1 - BOX_X0 - (n - 1) * BOX_GAP) / n;
+      var bw = (boxX1 - BOX_X0 - (n - 1) * BOX_GAP) / n;
       row.boxes.forEach(function (b, j) {
         var x = BOX_X0 + j * (bw + BOX_GAP);
         var parent = g;
@@ -96,6 +101,13 @@
         "class": "sm-head" }, svg);
       text(svg, (tipX + SIDE_X) / 2 + 6, cy - 8, "sm-verb", "lends");
     }
+    // hataori itself sits on threadteam: its lanes lead threadteam teams
+    var ax = SIDE_X + SIDE_W / 2, ay0 = sy + sh;
+    var ay1 = TOP + (ROWS.length - 1) * (ROW_H + GAP) - 2;
+    el("path", { d: "M" + ax + "," + ay0 + " L" + ax + "," + (ay1 - 12), "class": "sm-arrow" }, svg);
+    el("polygon", { points: ax + "," + ay1 + " " + (ax - 7) + "," + (ay1 - 14) + " " + (ax + 7) + "," + (ay1 - 14),
+      "class": "sm-head" }, svg);
+    text(svg, ax + 36, (ay0 + ay1) / 2 + 4, "sm-verb", "runs on");
     host.appendChild(svg);
   }
 
