@@ -7,6 +7,7 @@ Logos of tensor4all and its libraries. All are proposals. They are shown, with d
 | [`logo/`](logo/README.md) | tensor4all, the organization |
 | [`tenferro/`](tenferro/README.md) | tenferro-rs, the tensor runtime |
 | [`colmat/`](colmat/README.md) | colmat, the faer fork formerly published as `t4a-faer` |
+| [`threadteam/`](threadteam/README.md) | threadteam-rs, the one owner of CPU threads |
 
 ## One family
 
