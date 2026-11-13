@@ -48,7 +48,7 @@ The family palette shared with tensor4all, tenferro and colmat.
 | Role | Light | Dark |
 | --- | --- | --- |
 | Threads, wordmark **thread** | `#1d2126` | `#e6e8eb` |
-| Fork and join nodes, wordmark **team** | `#a3521a` | `#f0a46b` |
+| Fork and join nodes, wordmark **team** | `#b7510b` | `#f0a46b` |
 | Avatar background | `#fbfaf7` | `#14171b` |
 
 The wordmark is set in IBM Plex Sans SemiBold (SIL Open Font License 1.1) with tracking of -0.03 em and kerning, converted to outlines, like every tensor4all logo.

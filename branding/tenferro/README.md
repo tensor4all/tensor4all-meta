@@ -44,7 +44,7 @@ The family palette shared with tensor4all and colmat.
 | Role | Light | Dark |
 | --- | --- | --- |
 | Nut, wordmark **ten** | `#1d2126` | `#e6e8eb` |
-| Circled cross, wordmark **ferro** | `#a3521a` | `#f0a46b` |
+| Circled cross, wordmark **ferro** | `#b7510b` | `#f0a46b` |
 | Avatar background | `#fbfaf7` | `#14171b` |
 
 The wordmark is set in IBM Plex Sans SemiBold (SIL Open Font License 1.1) with tracking of -0.03 em and kerning, converted to outlines, like every tensor4all logo.

@@ -51,7 +51,7 @@ The family palette, taken from the tensor4all.org site and shared with tenferro 
 | Role | Light | Dark |
 | --- | --- | --- |
 | Ink: bonds, nodes, wordmark text | `#1d2126` | `#e6e8eb` |
-| Copper: ∀ in the mark, *4all* in the wordmark | `#a3521a` | `#f0a46b` |
+| Copper: ∀ in the mark, *4all* in the wordmark | `#b7510b` | `#f0a46b` |
 | Avatar background | `#fbfaf7` | `#14171b` |
 
 The wordmark is set in IBM Plex Sans SemiBold (SIL Open Font License 1.1) with tracking of -0.03 em and kerning, converted to outlines. All tensor4all logos use the same type.

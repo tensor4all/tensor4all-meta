@@ -27,7 +27,7 @@ TRACKING_EM = -0.03
 
 # The family palette is the tensor4all.org site palette.
 FAMILY = {
-    "light": {"ink": "#1d2126", "accent": "#a3521a", "pale": "#d6d2c8", "bg": "#fbfaf7"},
+    "light": {"ink": "#1d2126", "accent": "#b7510b", "pale": "#d6d2c8", "bg": "#fbfaf7"},
     "dark": {"ink": "#e6e8eb", "accent": "#f0a46b", "pale": "#3a414a", "bg": "#14171b"},
 }
 # colmat keeps its original fresh palette as an alternative.

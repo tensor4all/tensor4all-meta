@@ -49,7 +49,7 @@ The matrix is kept small (26 entries) so it prints on clothing: with the wordmar
 | Role | Family light | Family dark | Fresh light | Fresh dark |
 | --- | --- | --- | --- | --- |
 | Entries, text | `#1d2126` | `#e6e8eb` | `#25323e` | `#e3e8ec` |
-| The col | `#a3521a` | `#f0a46b` | `#dca240` | `#e8b24f` |
+| The col | `#b7510b` | `#f0a46b` | `#dca240` | `#e8b24f` |
 | Zeros (grid layout) | `#d6d2c8` | `#3a414a` | `#d3d6d8` | `#3a4450` |
 | Avatar background | `#fbfaf7` | `#14171b` | `#f7f6f3` | `#14171b` |
 
