@@ -39,8 +39,8 @@ The design comes from Xavier's T4∀ idea and Jan's earlier circuit mark; this f
 
 The mark is drawn to survive screen printing and embroidery on clothing, where fine lines break up and small holes fill in. Common printer minimums are about 0.3 to 0.5 mm for a printed line and 1 mm for a gap; embroidery needs about 1.3 mm for a line.
 
-- Bonds are 15 units wide on a cap height of 200, and nodes are solid dots with a radius of 1.6 bond widths. Hollow rings are avoided because their holes close up.
-- With the whole wordmark 80 mm wide (a left-chest print), bonds are about 1.0 mm and node dots about 3.2 mm.
+- Bonds are 15 units wide on a cap height of 155 (the letters are about as tall as wide), and nodes are solid dots with a radius of 1.6 bond widths. Hollow rings are avoided because their holes close up.
+- With the whole wordmark 80 mm wide (a left-chest print), bonds are about 1.0 mm and node dots about 3.3 mm.
 
 For embroidery, use the mark alone at 30 mm or wider, or the wordmark at 100 mm or wider.
 

@@ -117,10 +117,10 @@ def text_paths(glyphs, color_of):
 # in on fabric), and wide clear gaps. See branding/logo/README.md, "Print".
 T4A_STROKE = 15.0
 T4A_NODE_R = 1.6           # node radius in stroke widths
-T4A_TOP, T4A_BASE = 40.0, 240.0   # cap height 200, to the bond centres
-T4A_W = 150.0              # glyph width, 0.75 of the cap height
+T4A_TOP, T4A_BASE = 85.0, 240.0   # cap height 155, about as tall as wide
+T4A_W = 150.0              # glyph width
 T4A_GAP = 40.0             # T to ∀
-T4A_TEXT_XHEIGHT = 0.45 * (T4A_BASE - T4A_TOP)  # wordmark x-height: under half the cap height
+T4A_TEXT_XHEIGHT = 90.0    # wordmark x-height, 0.58 of the cap height
 
 
 def t4a_geometry(weight=1.0):

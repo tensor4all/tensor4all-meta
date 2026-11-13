@@ -15,7 +15,7 @@ Every logo uses the same type and palette, so they read as one family:
 
 - **Type:** IBM Plex Sans SemiBold, SIL Open Font License 1.1, tracking -0.03 em, kerning on, converted to outlines.
 - **Palette:** the tensor4all.org site palette. Ink `#1d2126` and copper `#b7510b` on light backgrounds; `#e6e8eb` and `#f0a46b` on dark ones. colmat also keeps its original navy and amber as the `-fresh` variant.
-- **Size:** in a horizontal wordmark the x-height is 0.47 of the mark height, and the gap between mark and text is 0.2 of it. The tensor4all mark is itself lettering, so its text sits on the mark's baseline with an x-height of 0.45 of the T∀ cap height.
+- **Size:** in a horizontal wordmark the x-height is 0.47 of the mark height, and the gap between mark and text is 0.2 of it. The tensor4all mark is itself lettering, so its text sits on the mark's baseline with an x-height of 0.58 of the T∀ cap height.
 
 ## Regenerating
 
