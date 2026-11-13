@@ -1,35 +1,37 @@
 # A next generation of dense linear algebra in colmat: prior work and design direction
 
-Status: Survey and proposal (2026-11). Not an implementation plan. Scope: [colmat](https://github.com/tensor4all/colmat-rs), the dense linear algebra library of the stack. This document covers how colmat's BLAS-like and LAPACK-like layers should be reorganised to support generic scalars (double-double first), a per-scalar cost model and a caller-owned thread token. The first step is extended precision and a redefinition of the primitives that covers the fused kernels; batched operations are deferred (section 9 keeps the survey for later). For who owns the threads, read [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) first.
+Status: Design under review (2026-11). Scope: [colmat](https://github.com/tensor4all/colmat-rs), the dense linear algebra library of the stack. The first target is double-double support with generic fallbacks, a per-scalar cost model, and caller-owned threads and workspace. Review the contracts and resolve the [open questions for the first design](#11-open-questions) here before implementing the redesign. Batched operations are deferred (section 9). See [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) for the stack's ownership model.
 
 The design discussion is in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171). This document records what already exists elsewhere, in papers and in code, so that colmat reuses it and does not reinvent it.
 
 ## 1. Why
 
-Hiroshi Shinaoka and Markus Wallerberger (2026-11) asked whether colmat's linear algebra can be written on top of a trait of BLAS-like primitives, with five requirements:
+Hiroshi Shinaoka and Markus Wallerberger (2026-11) discussed a common set of primitives for colmat's linear algebra. The design has these requirements:
 
-1. **Primitives as a trait.** LU, QR, EVD and SVD are written against a small set of primitives that a scalar type can override.
+1. **Generic primitives with optional specialisations.** LU, QR, EVD and SVD have generic implementations. The boundaries for independently specialised kernels are under review.
 2. **A per-scalar cost model.** Parallel width and block sizes come from a cost model that depends on the scalar. Today a non-native scalar borrows the `f64` constants.
 3. **Extended precision.** Support [xprec-rs](https://github.com/tuwien-cms/xprec-rs) (`Df64`, double-double).
-4. **A caller-owned thread token.** Every primitive receives the caller's team (`Par`) and never starts threads of its own.
-5. **Batched operations.** Many independent small or medium problems in one call. *Deferred* (Hiroshi, 2026-11-13): extended precision and the primitives come first.
+4. **A caller-owned thread token.** Operations that schedule parallel work borrow the caller's team (`Par`). Sequential leaves run within that schedule.
+5. **Caller-owned workspace.** Low-level routines borrow temporary storage from the caller, including storage used by packing and parallel subcalls.
+6. **Batched operations.** Many independent small or medium problems in one call. Deferred (Hiroshi, 2026-11-13).
 
-Four facts found while discussing this shape the design:
+Findings from the survey and the subsequent review:
 
 * **Inconsistent eps for double-double.** colmat's `fx128` (`qd::Quad`), xprec's `Df64` and qd itself define three different values for the same format: `8·Quad::EPSILON`, `f64::EPSILON²/2` and `f64::EPSILON²`.
 * **Hard-coded eps in a downstream caller.** sparse-ir-rs selects eps by downcasting through `Any`, with `1e-15` as the fallback for other types (`sparse-ir-basis/src/tsvd.rs` at `SpM-lab/sparse-ir-rs@2ea2f23`).
-* **The `fx128` SIMD hooks mix the parts of different elements.** The hooks load AoS memory into registers that the arithmetic reads as SoA (colmat-rs#173; upstream report faer-043, colmat-rs#175).
-* **`fx128` matmul panics outside `cfg(test)`** (colmat-rs#174; faer-044).
+* **`fx128` has raw and converting SIMD hooks.** The probe in [colmat-rs#173](https://github.com/tensor4all/colmat-rs/issues/173#issuecomment-6836382872) called the raw hooks. The normal path calls the converting hooks. [colmat-rs#177](https://github.com/tensor4all/colmat-rs/pull/177) adds coverage with nonzero low words.
+* **The former `fx128` matmul panic outside `cfg(test)` was fixed** in [colmat-rs#177](https://github.com/tensor4all/colmat-rs/pull/177), with an integration test exercising the downstream build path.
 
 ## 2. Summary: what exists, what colmat adds
 
 | Requirement | Closest prior work | What colmat takes | What is new in colmat |
 | --- | --- | --- | --- |
-| Generic scalars over one code base | \<T\>LAPACK (generic C++ templates with an optional optimised backend), BLAS++/LAPACK++, C++ `std::linalg` (P1673) | A generic reference body for every routine, plus a per-type fast path | Rust traits instead of templates; the fast path is chosen by the scalar type (an associated type), not by linking a BLAS |
-| Machine constants of non-IEEE types | MPLAPACK's per-type `Rlamch` (double-double: eps = 2⁻¹⁰⁴, emin = −968); \<T\>LAPACK derives its constants from `numeric_limits` | A minimal per-type contract: `eps`, `safe_min`, `safe_max`, declared by the type rather than derived | A trait of three items instead of `numeric_limits` or a `Float`-like trait |
+| Generic scalars over one code base | \<T\>LAPACK (generic C++ templates with an optional optimised backend), BLAS++/LAPACK++, C++ `std::linalg` (P1673) | A generic reference body for every routine, plus optional fast paths | Independently selectable kernel specialisations in Rust. Selection and trait boundaries are open |
+| Machine constants of non-IEEE types | MPLAPACK's per-type `Rlamch` (double-double: eps ≈ 2⁻¹⁰⁴, emin = −968); \<T\>LAPACK derives its constants from `numeric_limits` | Per-type precision and safe range | `eps`, `safe_min` and `safe_max` are the initial candidates. Check scaling and precision users before fixing the required set |
 | Double-double kernels | XBLAS, QD, Dot2 (Ogita–Rump–Oishi), Ozaki scheme, DD-AVX, sparse-ir-rs `ddgemm` | SoA high/low arrays for SIMD; Dot2-style accumulation; room for an Ozaki-type gemm | AoS storage with conversion at load and at packing, as one contract for every non-native scalar |
 | Coarse-grained primitives | BLIS (microkernel plus packing, five-loop structure); LAPACK on top of BLAS | Packing as the place where precision and layout are converted (BLIS mixed precision) | Primitives that take a team and return a cost estimate |
 | Thread token | BLIS `rntm_t` per call and `thrinfo_t`/`thrcomm_t` trees; P1673 execution policies; Kokkos serial/team/procedure | The token is passed per call and split per loop | Already in colmat: `Par::Team` is exclusive and borrowed, and regions run at the widest width that pays |
+| Workspace | colmat's `StackReq` / `MemStack` interface for factorisations | Query size and alignment before execution and lend disjoint scratch to concurrent work | Extend the contract through packing, reductions and nested kernels |
 | Cost model | OpenBLAS m·n·k thresholds, BLIS `sup` thresholds, analytical BLIS blocking, ML thread-count models | Shape-based gates; analytical block sizes | Rates per scalar and per kernel family against the dispatch cost of the token (colmat `cost.rs`) |
 | Many threads in factorizations | PLASMA tiles, SLATE, static look-ahead and malleable BLIS (Catalán et al.), CALU/TSQR | Look-ahead, worker sharing, reduction-tree panels | Already planned in colmat (tensor4all/t4a-faer#168): equal-area partitions, SPMD sections, look-ahead |
 | Batched operations | Batched BLAS standard (group API, `info` modes), oneMKL group/strided/compact, KokkosBatched compact kernels, LIBXSMM, BLASFEO, MAGMA batched | Group API with fixed-size and strided fast paths; per-problem error report; an interleaved family only for tiny sizes | Batches split with the caller's token (already the stack's rule) |
@@ -51,8 +53,8 @@ Not found: a Rust library that runs SIMD across a batch on CPU, a published pape
   * Argues that type-in-name interfaces (`sgemm`, `dgemm`) do not fit templated code, and proposes one generic name per routine. This became BLAS++ and LAPACK++.
   * SLATE Working Note 4 does the same for batched BLAS.
 * **C++ `std::linalg`**, P1673 (Hoemmen, Hollman, Trott et al.).
-  * A free-function BLAS interface over `mdspan`, voted into the C++26 working draft (P3809R0).
-  * Allows user-defined value types. Each algorithm takes an optional leading execution policy, which is a per-call thread specification.
+  * A free-function BLAS interface over `mdspan`, with support for user-defined value types.
+  * The optional execution policy provides a per-call hook for parallel execution, including hierarchical parallelism.
   * LAPACK-like functionality is excluded.
 
 ## 4. Test and reference implementations
@@ -101,9 +103,9 @@ The closest in spirit is \<T\>LAPACK: one generic code base whose routines a typ
   | Operation | Relative error bound |
   | --- | --- |
   | `DWPlusFP` | ≤ 2u² |
-  | accurate `DW + DW` | ≤ 3u²/(1−4u), attained |
+  | accurate `DW + DW` | ≤ 3u²/(1−4u) |
   | `DW × DW` (FMA) | < 5u² |
-  | sloppy `DW + DW` (QD's default) | no relative bound under cancellation |
+  | sloppy `DW + DW` (QD's default) | can have order-one relative error under cancellation |
 
 ### Current state in the stack
 
@@ -122,10 +124,8 @@ colmat's production code already queries eps generically (about 56 call sites of
 
 ### Direction
 
-* **A minimal colmat trait, `Precision`, rather than a `Float`-like trait.** `eps`, `safe_min` and `safe_max` are required and are declared by the type, as in MPLAPACK. Derived quantities (`digits`, `sqrt(safe_min)`, `safe_min/eps`) are provided methods.
-* **The six `*_impl` constants of `RealField` collapse into this supertrait.**
-* **Iteration caps and tolerance multipliers move into the `*Params` structs**, with defaults computed from `Precision`.
-* **eps must match the arithmetic.** With eps = 2⁻¹⁰⁴, the multiply bound (5u² ≈ 1.25·2⁻¹⁰⁴) slightly exceeds eps, and sloppy addition has no bound at all. Either the kernels use the accurate addition or eps is set to at least 5u². The scalar's author decides and documents it.
+* **Keep a minimal precision contract.** The working set is `eps`, `safe_min` and `safe_max`. Define `eps` as the type's precision parameter, safe bounds in terms of the operations they protect, and algorithm tolerances in the routine's parameters. Verify whether all existing users of `nbits` and scaled norms can derive their inputs from those three values before replacing the six `RealField` constants.
+* **Specify arithmetic error per operation.** `Df64::EPSILON = 2u²`. The [xprec README](https://github.com/tuwien-cms/xprec-rs/blob/mainline/README.md#L10-L36) gives rounded figures of 3u² for addition and 4u² for multiplication, and reports 6u² observed for division against a bound of 10u². The [addition implementation](https://github.com/tuwien-cms/xprec-rs/blob/mainline/src/arith.rs#L258-L267) documents the higher-order term. Raising `eps` to the multiplication bound still leaves sloppy addition with order-one relative error under cancellation. An optimized kernel must document its accuracy and valid range against the generic operation it replaces.
 
 ## 6. Memory layout: AoS storage, SoA at load and at packing
 
@@ -133,15 +133,23 @@ Prior work:
 
 * **BLIS** converts precision during packing, with no extra microkernels (Van Zee, Parikh, van de Geijn, ACM TOMS 47(2), 2021).
 * **DD-AVX** keeps separate `hi` and `lo` arrays for AVX.
-* **sparse-ir-rs `ddgemm`** splits its inputs into high and low arrays before the kernel.
+* **sparse-ir-rs [`ddgemm`](https://github.com/SpM-lab/sparse-ir-rs/blob/2ea2f23e10cdf1a936e969ac76615fd699953d61/sparse-ir-basis/src/ddgemm.rs#L27-L75)** splits the entire left operand into high and low arrays, reads the right operand by column, and allocates its output and column slice table. Its accumulation is a useful reference for colmat's packed kernel.
 * **GPU double-double BLAS** stores interleaved `double2` (Mukunoki and Takahashi, PARA 2010).
 
-Decision in colmat-rs#171:
+Storage agreed in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171#issuecomment-6848850641). The following load, store and packing contracts are for the redesign.
 
-* **Storage:** `Mat<T>` stays a contiguous array of `T`, so double-double is AoS. Strides, views, zero-copy conversion and the C API stay as they are. A planar storage (the old faer `Entity` model) is rejected.
-* **SIMD hooks:** the scalar's hooks deinterleave on load and interleave on store. They take an element pointer (`*const T`), not `*const SimdVec`; the latter reads as "memory already has the register layout", which is the root of colmat-rs#173.
-* **Packing:** level-3 kernels pack A and B panels into separate high and low parts, which is where `ddgemm` already does it.
-* **Lane order:** NEON `vld2q_f64` deinterleaves in one instruction. On x86, `unpacklo/hi_pd` permutes the lane order to `(0, 2, 1, 3)` within 256 bits. That is harmless for element-wise operations and sums when the store inverts it, but position-dependent operations (argmax pivot search, tail masks) need the full permutation or an index fix-up.
+* **Storage.** Each stored matrix element is one `T`, so a double-double matrix is AoS. Views describe the elements through strides. A raw word access path needs an explicit layout guarantee from the scalar type. A transparent wrapper around `xprec::Df64` has the same layout as its inner `Compensated`, whose Rust representation leaves field order unspecified. The initial design can load through `hi()` and `lo()` and store through a constructor with the normalization precondition satisfied.
+* **SIMD hooks.** The converting interface reads and writes scalar elements, using slices or element pointers with element-based masks. It deinterleaves on load and interleaves on store with fixed-size temporary storage. Only active elements may be accessed. The current raw hooks and their register-pointer interface are backend details.
+* **Packing.** A packed kernel can write high and low words of its panels into caller-provided workspace. The packed representation belongs to the selected kernel. Pack only the operands and tiles it needs.
+* **Lane order.** AArch64 has `vld2q_f64` for interleaved memory. The AVX2 two-register unpack can produce physical lane order `(0, 2, 1, 3)`. Values, masks and index vectors must agree on the mapping. A pivot search returns logical indices and applies its tie rule in that order. A numerical reduction also specifies whether reassociation is allowed.
+
+### Caller-owned workspace
+
+Use the existing [`StackReq` / `MemStack` convention](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/mod.rs#L6-L28) as the starting point. The low-level query returns the temporary size and alignment before execution. Query and execution use the same kernel selection, including any choice that depends on shape, layout, CPU capability or team width. A query may conservatively cover multiple paths. Execution borrows the destination and scratch, and borrows the caller's `Par` for work that can split the team.
+
+* **Ownership covers the full call tree.** Packing panels, partial reductions, job tables and factorisation temporaries use the supplied scratch. The caller or an explicit convenience layer may own and grow the buffer. Low-level execution performs no heap allocation or implicit thread-local allocation, growth or fallback. Fixed-size leaf temporaries can live in registers or on the stack. The guarantee applies to colmat and the kernel paths it calls. If a scalar's arithmetic itself allocates, that capability must be documented separately before claiming zero allocations for that scalar.
+* **Capacity and lifetime.** Validate size and alignment before changing outputs. A valid exact-size buffer must suffice. Return a capacity error if the selected path requires more storage than the caller supplied. Reuse space for sequential phases and give simultaneous workers disjoint scratch. Include alignment padding, nested calls and per-worker slices in the query.
+* **Current gaps.** [`matmul` has no scratch parameter](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/matmul/mod.rs#L1986-L2000). Its [parallel matvec reduction](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/matmul/mod.rs#L886-L932) and the [x86 GEMM job tables](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/utils/team.rs#L563-L596) use thread-local storage that can allocate. [Householder factor formation](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/householder.rs#L284-L303) can allocate a vector of partials. Include the packing and scratch behaviour of dependency kernels when selecting a backend for this contract.
 
 ## 7. Primitives and the choice of algorithm
 
@@ -219,20 +227,7 @@ What each kind does, in pictures. **Click a figure (or a kind in the table) for 
 
 [![P10: an unblocked leaf composed from P4, P7, P8 and P9](figures/prim_p10_leaf.svg)](#p10-leaf-factorisations)
 
-What each kind needs from an extended-precision scalar, and its cost character:
-
-| Kind | Needs from the scalar | Cost, `f64` / double-double |
-| --- | --- | --- |
-| P1–P3 | SoA packing, and an override such as Dot2 on packed panels or an Ozaki-type split | compute-bound / compute-bound |
-| P4, P5, P7, P8 | The SIMD hooks only (AoS↔SoA conversion, compare with index); a generic implementation suffices | memory-bound / closer to compute-bound |
-| P6 | The SIMD hooks; whether to fuse rotations (Van Zee et al. 2014) | memory-bound / closer to compute-bound |
-| P9 | `Precision` (safe_min, eps) and scalar math (sqrt, division, hypot); no SIMD | negligible time, but every scaling and threshold that decides correctness lives here |
-| P10 | Composed from P4, P8 and P9 | small; a natural override point |
-
-Two consequences:
-
-* **Only P1–P3 need a per-scalar override.** P4–P8 run on the generic implementation once the SIMD-hook contract (section 6) holds.
-* **P9 decides the correctness of double-double.** The ad-hoc `fx128` constants and sparse-ir-rs's eps-by-downcast are both P9-level problems, and P9 is the kind most tied to the `Precision` contract.
+Each kind describes the mathematical operation and data it touches. The same kind can use different kernels by shape or layout. P1 includes both large GEMM and thin products with different data reuse. P4 has fused sweeps whose data traffic matters. P8 includes dot, which can benefit from a different accumulation algorithm. P9 supplies scaling-sensitive scalar kernels. These distinctions motivate the implementation inventory in §7a.
 
 Still open (recommendation in brackets):
 
@@ -243,62 +238,48 @@ Still open (recommendation in brackets):
 
 ### Direction (colmat-rs#171)
 
-* **Two tiers.** A generic reference implementation for any `ComplexField`, and a per-scalar `Kernels` implementation chosen statically through an associated type. Without specialization in stable Rust, the associated type plays \<T\>LAPACK's trait-gated redirect.
-* **Primitives are the kinds above, coarse-grained and team-aware.** A BLAS-granular interface would lose colmat's fused kernels and splits.
-* **Every primitive pairs execution with an estimate**: serial time in the stack's work unit and the number of parallel sections. Callers compose parallel decisions from these, and a full-width path without a cost gate (the class of tensor4all/t4a-faer#94 and #399) cannot be written.
-* **The gemm primitive selects an algorithm per scalar, not only a kernel**, so a double-double scalar can implement gemm as Dot2 on packed SoA panels or by an Ozaki-type split.
+* **Keep the generic implementations.** Factorisations can compose the kinds above, including fused sweeps and team splits, for a scalar that supplies only arithmetic and precision.
+* **Expose estimates where the caller decides team width.** An estimate describes the selected path's serial work and sections. Register-level operations and sequential leaf kernels can run within a region that already has a team and an estimate.
+* **Let a selected kernel change the accumulation algorithm.** Packed Dot2 and an Ozaki-type split have different preparation, scratch requirements and error behaviour. Compare each against the generic operation's contract.
 
 ## 7a. Trait boundaries and API sketch (from colmat-rs#171)
 
-This section brings over the trait boundaries, the API sketch and the crate layout written in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171) (body of 2026-11-12, and the AoS/SoA comment). It maps them onto the primitive kinds above. Where the kinds now say something different from the issue, the difference is marked **Revised by the kinds**. Nothing here is implemented.
+The [original issue](https://github.com/tensor4all/colmat-rs/issues/171) sketches a single `Kernels<T>` trait for the coarse operations. [Markus Wallerberger's review](https://github.com/tensor4all/colmat-rs/issues/171#issuecomment-6848850641) proposes independent hooks based on the prologues and dispatch paths already in BLAS/faer. He uses dot as an example: a general strided implementation with optional contiguous and alignment-specific paths. The public signatures, selection mechanism and crate boundaries are open for review.
 
-### Which trait owns which kind
+### Existing dispatch paths
 
-| Layer (crate) | Trait or item | Kinds it carries | Overridable per scalar? |
-| --- | --- | --- | --- |
-| `colmat-traits` | `ComplexField` (arithmetic and the SIMD hooks); the SIMD hooks convert AoS memory to SoA registers on load and back on store (section 6) | the basis of P4–P8 | yes, the hooks themselves |
-| `colmat-traits` | `Precision`: `eps`, `safe_min`, `safe_max` required, derived constants provided (section 5; proposed in this document, not yet in the issue) | P9 | yes, the constants are declared by the type |
-| `colmat-core` | `LinalgScalar: ComplexField { type Kernels: Kernels<Self>; }` | selects the P1–P3 implementation | yes, by the associated type |
-| `colmat-core` | `Kernels<T>`: gemm (with triangular output), trmm, trsm, block-reflector apply, each with an `estimate` | P1, P2, P3 | yes: this is the override surface |
-| `colmat-core` | generic implementations on the SIMD hooks | P4, P5, P6, P7, P8 | not for now |
-| `colmat-core` | `Par`/`ParShape`, team skeletons, `CostModel`/`HostClass`/`Rates`, `Mat`/`Col`/`Row`/`Diag`/`Perm`, operator impls (`Mul` calls `T::Kernels::gemm`) | all | rates per scalar, yes |
-| `colmat` | factorisations (LU, QR, Cholesky, EVD, SVD, GEVD), sparse, solvers; the decomposition methods as an extension trait (`use colmat::prelude::*`) | compose P1–P10; P10 leaves live here | no |
-| `colmat-xprec` | `Df64` support and `Df64` kernels (Dot2 on packed panels, Ozaki-type gemm) | P1–P3 for `Df64`, `Precision` for `Df64` | — |
+The following inventory is from `colmat-rs@71a0374`. Use these paths and representative downstream call sites to choose public hooks.
 
-### API sketch, as written in the issue
+| Operation | What the implementation selects | Question for the design |
+| --- | --- | --- |
+| Dot (P8) | [`inner_prod`](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/matmul/mod.rs#L601-L684) uses SIMD for two contiguous inputs when the type supports it, with a scalar strided fallback. The SIMD path selects conjugation and dispatches the ISA. | Is a contiguous dot hook sufficient? Keep alignment handling internal unless a caller can supply a useful guarantee and measurements justify exposing it. |
+| Matrix product (P1) | [`matmul_imp`](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/matmul/mod.rs#L1240-L1658) normalises strides, recognises vector and rank-one cases, and selects native or generic kernels. | Which hooks benefit from a different accumulation algorithm? Can the generic driver retain skinny and strided fallbacks when an adapter supplies only a packed GEMM? |
+| Triangular solve (P2/P5) | The [lower-triangular driver](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/triangular_solve.rs#L734-L851) has small base cases and recursive GEMM updates. | Can it get the desired speedup through the GEMM hook? Measure the base case separately before exposing a solve hook. |
+| Block reflector (P3) | [Factor formation](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/householder.rs#L227-L312) uses triangular multiplication, dot or parallel partial products by shape. [Application](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/householder.rs#L502-L643) has a narrow SIMD path. | Which gains come through dot and GEMM, and which require keeping the reflector work fused? |
+| Fused sweep (P4) | [Full-pivot LU](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/lu/full_pivoting/factor.rs#L316-L348) fuses the rank-one update and pivot search for eligible SIMD layouts. [Bidiagonalisation](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer/src/linalg/svd/bidiag.rs#L684-L729) selects between a fused SIMD sweep and separate updates and product calls. | Check generic SIMD first for these sweeps. Preserve the one-pass path and specify the by-products and pivot rules before considering a separate hook. |
 
-```rust
-pub trait LinalgScalar: ComplexField { type Kernels: Kernels<Self>; }
+### Candidate boundary
 
-pub trait Kernels<T: ComplexField>: 'static {
-    fn gemm(dst: MatMut<'_, T>, beta: Accum, lhs: MatRef<'_, T>, rhs: MatRef<'_, T>, alpha: T, par: Par<'_>);
-    fn trmm(/* .. */); fn trsm(/* .. */);
-    fn herk_tri(/* .. */);
-    fn apply_block_reflector(/* .. */);
-    fn swap_rows(/* .. */);
-    // fused step kernels: default = current generic code
-    fn estimate(op: Op, shape: Shape) -> Estimate; // serial_ns, sections
-}
-```
+Use dot and GEMM as contrasting cases for the review. A provider should be able to specialise either independently. Colmat owns operand validation, generic fallback selection and the team schedule. A hook's contract states the input views and valid layouts, destination update and aliasing rules, numerical behaviour, and workspace needs. The driver should select CPU features at a boundary that can be shared by repeated leaf calls. The driver lends scratch and, where the hook itself can partition work, the caller's team. Packed panels and ISA-specific pointers can stay within kernel implementations.
 
-The binding is static, through an associated type; with a CPU-only backend there is no `dyn`.
+Use a generic path for each missing hook. A provider with a contiguous-dot implementation can leave strided dot, GEMM and factorisations to the generic paths. A provider with a packed GEMM can leave dot generic and still accelerate the GEMM updates inside the generic triangular solve. The query and execution must agree on whether that nested GEMM uses the packed path.
 
-**Revised by the kinds:**
+| Selection candidate | What it gives the caller | What to resolve |
+| --- | --- | --- |
+| Associated provider on the scalar or a newtype | Existing type-driven calls and operators can pick the same provider. | Establish how providers opt in per kernel on stable Rust, including a scalar-only default and the path for an external scalar. |
+| Explicit provider supplied to the operation | The caller can select per invocation and use a provider type defined in an adapter crate. | Pass the provider through nested calls and define the default selection for operators without a provider argument. |
 
-* `herk_tri` is P1 (a triangular-output product) and stays in `Kernels`.
-* `swap_rows` is P7, which has no arithmetic. It moves out of `Kernels` into the generic layer.
-* The fused step kernels are P4. They are generic on the SIMD hooks and are not part of the override surface for now; the issue had them in `Kernels` with a generic default.
-* P5 (trsv/trmv) is separate from `trsm`, if open point 1 of section 7 is settled as recommended.
+**Native non-regression is a requirement for either selection mechanism.** Preserve the existing default fast paths for `f64`, `c64`, `c32` and `f32`, including layout and shape special cases, ISA dispatch, and team-width decisions. Keep kernel selection out of the element and microkernel loops. Show that routing through the new boundary preserves numerical behaviour and performance against the current colmat implementation for each of the four types.
 
-### Crate layout and dependency direction (from the issue)
+### Candidate crate layout and dependency direction (from the issue)
 
 ```
 threadteam    colmat-traits (ComplexField)    gemm (fork), pulp
       \              |                          /
        colmat-core:  Mat/Col/Row/Diag/Perm, bound, zip, layout copies,
                      Par/ParShape, team skeletons, CostModel/HostClass/Rates,
-                     LinalgScalar + Kernels, Native/Generic kernels,
-                     operator impls (Mul -> T::Kernels::gemm)
+                     generic operations and kernel selection,
+                     operator impls (Mul -> matrix product)
           /                         \
    colmat (factorisations,        colmat-xprec (Df64 support + Df64 kernels,
      sparse, solvers, prelude)      e.g. Ozaki-type gemm on f64 GEMMs)
@@ -306,10 +287,10 @@ threadteam    colmat-traits (ComplexField)    gemm (fork), pulp
             users (tensor4all-rs, colmat-ffi, ...)
 ```
 
-The direction follows the issue:
+If the split is adopted, the dependencies would follow the issue:
 
 * `xprec` stays a leaf scalar library. It does not depend on colmat.
-* `colmat-xprec` depends on `xprec` and `colmat-core`, not on `colmat`, so algorithm experiments in `colmat` never break it.
+* `colmat-xprec` depends on `xprec` and the crate that owns the hook contracts. Keep the adapter independent of the factorisation crate if those contracts can live in `colmat-core`.
 * `colmat-xprec` gets `Par` and the team skeletons only through `colmat-core`'s re-exports. CI can deny a direct `rayon` or `threadteam` dependency, and `std::thread`, there.
 
 What the issue checked about moving `mat/` into core:
@@ -321,48 +302,42 @@ What the issue checked about moving `mat/` into core:
 
 ### What a new scalar type must implement (decided 2026-11-13)
 
-**A scalar type does not implement the operations P1–P10.** The algorithms are generic, and every kind has a generic implementation. The burden of a new type is the size of the scalar traits. colmat's API may change to keep that burden small (Hiroshi, 2026-11-13).
+**A new scalar type should get P1–P10 through the generic implementations.** Its required implementation is scalar arithmetic and precision. SIMD, kernel specialisations and cost overrides are optional (Hiroshi, 2026-11-13).
 
 **Today** (`colmat-traits` at `colmat-rs@4abe04d`):
 
 | Trait | Required items (no default) | Of which |
 | --- | --- | --- |
-| `ComplexField` | 56 functions, 9 associated types, 2 constants | **37 are `simd_*`**. About 19 are scalar arithmetic: `zero`, `one`, `nan`, `infinity`, `from_f64`, `conj`, `recip`, `sqrt`, `abs`, `abs1`, `abs2`, `mul_real`, `mul_pow2`, `is_finite`, and so on. |
+| `ComplexField` | 56 functions, 9 associated types, 2 constants | 18 scalar functions and 38 SIMD functions, including `ctx_from_simd` |
 | `RealField` | 6 functions | the precision constants (`epsilon_impl`, `nbits_impl`, `min_positive_impl`, ...) |
 
 Two facts about this:
 
-* **A type without SIMD still has to write the 37 `simd_*` functions.** `SIMD_CAPABILITIES` (`None`, `Copy`, `Simd`) changes which code paths are taken, but not what must be implemented.
-* **The complex type comes free from the real one** (`impl<T: RealField> ComplexField for Complex<T>`). This stays.
-
-**Decided: required is minimal, everything else is optional.**
+* **A type without SIMD still has to provide the required SIMD methods.** `SIMD_CAPABILITIES` (`None`, `Copy`, `Simd`) controls dispatch.
+* **A generic complex implementation is built on `RealField`.** Preserve this path when testing scalar-only support.
 
 | Layer | Contents | Required? | If absent |
 | --- | --- | --- | --- |
-| S0 arithmetic | the ~19 scalar arithmetic functions, plus the standard operator and comparison traits | **required** | — |
-| S0 precision | `Precision`: `eps`, `safe_min`, `safe_max` (section 5) | **required** | — |
-| S1 SIMD | the 37 `simd_*`, split out of `ComplexField` into a separate trait (working name `SimdField`) | optional | P4–P8 run as scalar loops: correct, slower |
-| S2 kernels | the `Kernels` override of P1–P3 (packing, Dot2, Ozaki) | optional | the generic reference implementation |
+| S0 arithmetic | scalar functions, operators and comparisons | **required** | — |
+| S0 precision | precision and safe range, with the exact constants under review (section 5) | **required** | — |
+| S1 SIMD | arithmetic and data movement on vector lanes | optional | generic scalar paths |
+| S2 kernels | independently selected specialisations for individual kernels | optional | generic implementation for each missing hook |
 | S3 cost | per-scalar rates | optional | a ratio to `f64`, or a one-time calibration |
 
-So a type such as an MPFR wrapper gets every algorithm, LU through SVD, from about twenty arithmetic functions and three constants. A type that should be fast adds S1–S3.
+### SIMD arithmetic and data movement
 
-**S1 for word tuples.** A type declared as a `#[repr(C)]` tuple of N `f64` words, such as double-double, should get the layout-related SIMD functions derived by colmat:
+This classifies the required functions in the [existing trait](https://github.com/tensor4all/colmat-rs/blob/71a03747fa8e86ee0318f2e31157703f0e2e07aa/faer-traits/src/lib.rs#L1257-L1514). The counts describe the source inventory.
 
-* derived by colmat: loads and stores (the AoS↔SoA conversion of section 6), masks, splat, select, reductions;
-* written by the type: the arithmetic on SoA registers, which is the form `qd::simd` already has.
+| Responsibility | Required today | Operations |
+| --- | ---: | --- |
+| Arithmetic and numerical reductions | 21 | `add`, `sub`, `neg`, `conj`, `abs1`, `abs_max`, `mul_real`, `mul_pow2`, `mul`, `conj_mul`, `mul_add`, `conj_mul_add`, `abs2`, `abs2_add`. Five value comparisons. `reduce_sum` and `reduce_max`. |
+| Data movement, masks and indices | 17 | `simd_ctx` and `ctx_from_simd`. Two range-mask constructors, raw load and store, two splats, value select, index select/splat/add/less-than, three mask logic operations, and `first_true_mask`. The default load/store wrappers and `iota` also belong here. |
 
-The conversion that went wrong in colmat-rs#173 is then written once, in colmat, not once per type. Which of the 37 functions are layout and which are arithmetic has not been classified one by one; the split is the direction, not a count.
+The data-movement layer can share implementations where the scalar or adapter supplies a valid layout. The arithmetic layer defines numeric comparisons and reductions over whole elements. A common reduction may combine lanes using those arithmetic operations with a stated reduction order. For indexed maxima, the comparison operates on scalar values, the mask carries the chosen indices, and the reduction specifies tie and NaN behaviour. A shared layout implementation must preserve the logical correspondence among all three.
 
-### Open questions carried over from the issue
+### Attaching `Df64`
 
-1. **How `colmat-xprec` attaches `Df64`.** The orphan rule forbids implementing `ComplexField` or `LinalgScalar` for `xprec::Df64` from a third crate. The options:
-   * (a) a `#[repr(transparent)]` newtype in `colmat-xprec`;
-   * (b) the scalar impl behind features in `colmat-traits`/`colmat-core`, with kernels registered from `colmat-xprec`;
-   * (c) everything inside `colmat` behind an `xprec` feature.
-2. **What `xprec` would expose.** Its `Compensated { hi, lo }` fields are private and the struct is not `#[repr(C)]`. A SoA SIMD path and zero-copy conversion need a fixed layout and branch-free error-free transformations.
-3. **How stable `colmat-core` is.** Either an independent release cadence, or at least `Kernels` and `CostModel` changed only rarely.
-4. **`ComplexField` churn.** Whichever crate implements it for `Df64` has to follow it.
+An adapter crate can implement a kernel trait parameterised by `xprec::Df64` for its own provider type. That satisfies the orphan rule for the kernel implementation. The generic scalar implementation still needs a legal home, such as a transparent newtype in the adapter or a `Df64` implementation in the crate that defines the scalar trait. Compare the user-facing type, feature and dependency costs of those options. Markus also suggested exposing SIMD operations over slices or strided slices directly from xprec, which a colmat provider could call through an adapter.
 
 ## 8. Threading: the token and the cost model
 
@@ -442,7 +417,7 @@ Deferred on 2026-11-13: extended precision and the redefinition of the primitive
 
 ## 10. What colmat already has
 
-Read at `tensor4all/colmat-rs@4abe04d`.
+The original inventory was taken at `tensor4all/colmat-rs@4abe04d`. Sections 6 and 7a link to the later source used for the workspace and dispatch review.
 
 * **The token and the cost model:**
   * `Par<'team>`, the widest-width-that-pays rule;
@@ -450,21 +425,28 @@ Read at `tensor4all/colmat-rs@4abe04d`.
   * team skeletons (`run`, `for_each`, `tile_grid`, and equal-area triangle splits in Cholesky).
 * **Scalars:**
   * `ComplexField`/`RealField`, with SIMD hooks per scalar;
-  * `fx128` as an existing non-native scalar. It is the test bed once colmat-rs#173 and #174 are fixed.
-* **Primitive calls in `linalg/` (excluding tests):** gemm 76, triangular product 52, triangular solve 97, block Householder apply 138. These are the dispatch points to route through a `Kernels` trait.
+  * `fx128` is an existing non-native scalar and can serve as a baseline for the generic and SIMD paths. See [colmat-rs#177](https://github.com/tensor4all/colmat-rs/pull/177) for the downstream matmul test and the converting-hook test.
+* **Primitive calls in `linalg/` (excluding tests):** gemm 76, triangular product 52, triangular solve 97, block Householder apply 138. These counts describe call sites at the survey revision. The dispatch inventory in §7a identifies where individual hooks could be shared.
 * **Column-pivoted QR with rank truncation** (`rel_tol`, `max_rank`; tensor4all/t4a-faer#303). It applies the same rule as sparse-ir-rs's TSVD front-end, so a truncated SVD for `Df64` can be composed from colmat's own parts once `Df64` is supported.
 
 ## 11. Open questions
 
-1. **How `Df64` attaches** (colmat-rs#171): a newtype in a `colmat-xprec` crate, the scalar impl behind a feature with registered kernels, or everything inside colmat. Also where `mat/` lives (a `colmat-core` split).
-2. **eps for double-double:** 2⁻¹⁰⁴ with accurate addition in every kernel, or a larger eps (≥ 5u²) that covers sloppy addition.
-3. **Primitive granularity:** which fused panel kernels belong in the trait, and which stay private to a factorization.
-4. **Batched API shape** (deferred):
-   * group versus strided as the primary form;
-   * whether a compact family is worth it for the shapes the stack runs;
-   * who owns the packed format.
-5. **Malleable teams:** whether a running gemm should accept members that join late (worker sharing) or stop early, as in the malleable-BLIS work. The token supports splitting, not growing.
-6. **Exception handling:** whether to adopt the NaN/Inf conventions of arXiv:2207.09281 as the contract for every primitive.
+1. **Kernel boundaries and selection.** Finish the dispatch inventory for dot, GEMM, triangular solve, Householder and the fused sweeps. Pick the first independently selectable hooks and their generic fallbacks. Resolve associated versus explicit selection and how operators and nested calls use it.
+2. **Scalar and precision contracts.** Decide which crate owns the scalar implementation for `Df64`, how its provider attaches, and how scalar-only real and complex types reach the generic paths. Define the precision parameter, safe scaling bounds, and the error and reproducibility contracts for the selected kernels.
+3. **Workspace API.** Agree on the query inputs, capacity error and the way nested and parallel calls borrow the buffer. Identify dependency routes that require an explicit scratch entry point or a compatible fallback.
+4. **Exception handling.** Define the NaN and Inf contract for the first kernels and their fallbacks. Consider the conventions in arXiv:2207.09281 for the wider primitive set.
+
+Batched API shape remains in section 9. Malleable teams remain a separate design question because the current token splits an existing team and has fixed membership.
+
+### Design review before implementation
+
+Review the proposed boundaries with Markus and the colmat maintainers in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171). Record the agreed answers in this document before changing the implementation. Use dot and GEMM to walk through a scalar-only type, a type that specialises one kernel, and a nested factorisation that uses both generic and specialised paths. Include a strided view and a call with an exact-size workspace in the walkthrough.
+
+The implementation plan should include the following acceptance checks:
+
+* Numerical checks for nonzero low words, cancellation and scaling extremes. For SIMD, include full and partial lanes, logical indices and pivot ties. Check ordinary downstream entry points on AArch64 and x86-64.
+* Workspace checks for exact size, alignment, insufficient capacity before output mutation, and concurrent subcalls. Count allocations across participating threads during execution with destination, team and scratch already supplied. Exercise first use, repeated calls, shape growth and nested calls.
+* Native non-regression measurements against a pinned colmat baseline for `f64`, `c64`, `c32` and `f32`. Use the same hardware, build settings, inputs and thread placement. Cover dispatch-sensitive small dot and GEMM calls, strided and contiguous inputs, narrow and square products, complex conjugation, and representative factorisations. Exercise single-thread and team paths on AArch64 and x86-64. Check output equivalence against the baseline when the selected kernel and operation order are unchanged. Compare each type and workload, including packing and other preparation, so an aggregate result cannot hide a regression.
 
 ## 12. References
 
@@ -474,7 +456,7 @@ Papers (DOIs and arXiv identifiers were checked against Crossref or the publishe
 * Demmel, Dongarra, Julie Langou, Julien Langou, Luszczek, Mahoney. Prospectus for the Next LAPACK and ScaLAPACK Libraries (BALLISTIC). LAWN 297, 2020. [pdf](https://www.stat.berkeley.edu/~mmahoney/pubs/lawn297.pdf)
 * Demmel et al. Proposed Consistent Exception Handling for the BLAS and LAPACK. [arXiv:2207.09281](https://arxiv.org/abs/2207.09281), 2022.
 * Gates, Luszczek, Kurzak, Dongarra et al. C++ API for BLAS and LAPACK. SLATE Working Note 2, 2017. [pdf](https://library.eecs.utk.edu/files/ut-eecs-17-753.pdf)
-* Hoemmen, Hollman, Trott et al. P1673R13, A free function linear algebra interface based on the BLAS. [paper](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p1673r13.html); adoption recorded in [P3809R0](https://open-std.org/JTC1/SC22/WG21/docs/papers/2025/p3809r0.html).
+* Hoemmen, Hollman, Trott et al. P1673R13, A free function linear algebra interface based on the BLAS. [paper](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p1673r13.html).
 * Van Zee, van de Geijn. BLIS: A Framework for Rapidly Instantiating BLAS Functionality. ACM TOMS 41(3), 2015. doi:10.1145/2764454
 * Van Zee, Parikh, van de Geijn. Supporting Mixed-domain Mixed-precision Matrix Multiplication within the BLIS Framework. ACM TOMS 47(2), 2021. doi:10.1145/3402225
 * Smith, van de Geijn, Smelyanskiy, Hammond, Van Zee. Anatomy of High-Performance Many-Threaded Matrix Multiplication. IPDPS 2014. doi:10.1109/IPDPS.2014.110
@@ -541,7 +523,7 @@ Each figure in section 7 links here ([back to the figures](#primitive-kinds-deci
 * **Empty dimensions** are well defined. For example, a product with an inner dimension of 0 gives `C ← β·C`.
 * **Rounding.** A definition gives the result in exact arithmetic. Implementations may reassociate sums. colmat promises bitwise identical results only at a fixed thread count (tensor4all/t4a-faer#327).
 * **Magnitude for pivoting** is `abs1(z) = |Re z| + |Im z|`, as in BLAS `i?amax`.
-* **NaN in a search** (the first maximum, a pivot) is not yet specified. arXiv:2207.09281 proposes "the first NaN, then the first Inf, then the first largest finite entry"; adopting it is open question 6 of section 11.
+* **NaN in a search** (the first maximum, a pivot) is not yet specified. arXiv:2207.09281 proposes "the first NaN, then the first Inf, then the first largest finite entry". See the exception handling question in section 11.
 
 ### P1. Level-3 products
 
@@ -640,7 +622,7 @@ Each figure in section 7 links here ([back to the figures](#primitive-kinds-deci
 
 * **dot:** `s = Σᵢ x̄ᵢ·yᵢ` (conjugated) or `Σᵢ xᵢ·yᵢ`. **sum:** `Σᵢ xᵢ`.
 * **Norms:**
-  * `‖x‖₂ = √(Σᵢ |xᵢ|²)`, computed without spurious overflow or underflow whenever the result is representable, by scaling with constants derived from `safe_min`, `safe_max` and `eps` (Blue's algorithm in LAPACK `xNRM2`);
+  * `‖x‖₂ = √(Σᵢ |xᵢ|²)`, computed without spurious overflow or underflow whenever the result is representable. LAPACK `xNRM2` derives its scaling constants from radix, exponent bounds and precision. Section 5 leaves the source of the equivalent colmat parameters open.
   * `‖x‖₁ = Σᵢ |xᵢ|`;
   * `‖x‖_max = maxᵢ |xᵢ|`, which must propagate NaN (faer-039).
 * **First maximum:** `i* = min{ i : abs1(xᵢ) = maxₖ abs1(xₖ) }`.
@@ -658,7 +640,7 @@ Each kernel is defined by its mathematical result, together with the range of in
   * When `|β|` falls below `safe_min / eps`, the input is rescaled first (LAPACK `xLARFG`).
   * colmat: `make_householder_in_place`.
 * **Rotation generation** (lartg).
-  * Given `f` and `g`, find `c` real, `s` and `r` such that `[c s; −s̄ c]·[f; g] = [r; 0]`, without overflow for any representable `f` and `g`.
+  * Given `f` and `g`, find `c` real, `s` and `r` such that `[c s; −s̄ c]·[f; g] = [r; 0]`. Use scaling to avoid spurious overflow or underflow when the outputs are representable.
   * The sign convention is that of the implementation; a wrong `r` for `g = 0` was faer-033.
   * colmat: `JacobiRotation::rotg`.
 * **2×2 and 3×3 problems:**
