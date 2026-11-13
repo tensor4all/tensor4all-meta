@@ -186,38 +186,38 @@ Before any API, the primitives are fixed as kinds: mathematical operations with 
 
 | # | Kind | Operation | Used in colmat | BLAS/LAPACK counterpart |
 | --- | --- | --- | --- | --- |
-| P1 | Level-3 products | `C ← αAB + βC`, including a triangular-output product (a generalised herk/syrk/her2k) and products with a triangular factor (trmm) | Almost every blocked factorisation (gemm 76 call sites, triangular product 52) | gemm, gemmt, herk, her2k, trmm |
-| P2 | Level-3 triangular solve | `X ← T⁻¹B`, many right-hand sides | LU, Cholesky, solves (97 call sites) | trsm |
-| P3 | Block-reflector apply | `(I − V·T·Vᴴ)` from the left or the right, including forming `T` and applying a sequence of blocks | QR, Hessenberg, tridiagonal and bidiagonal reductions, back-transformations (138 call sites) | larfb, larft |
-| P4 | Fused sweep | One pass that applies a rank-0, -1 or -2 update to a full matrix or a triangle and computes any of: `A·x`, `yᴴ·A`, a symmetric product from a triangle, column-norm downdates, a per-column absolute maximum, a 2-D absolute maximum | LU leaf, full-pivoting LU, column-pivoted QR, Bunch–Kaufman, Hessenberg, tridiagonal, bidiagonal | ger/syr2 + gemv/symv; BLAS 2.5 (GEMVER, GEMVT); BLIS level-1f |
-| P5 | Level-2 triangular | `x ← T⁻¹x`, `x ← Tx`, one right-hand side; a recurrence, unlike P4 | Single right-hand-side solves, triangular inverse | trsv, trmv |
-| P6 | Sequences of small transforms | Rotations (Givens, Jacobi) on pairs of rows or columns, applied singly or as sequences; bulge chasing with 2- or 3-element reflectors | Jacobi, real and complex Schur (`move_bulge`), QZ (`chase_bulge_2x2`), QR iterations, LLT/LDLT rank updates | rot, lasr, the laqr5 family |
-| P7 | Permutations | Row and column swaps, applying a permutation | LU, Bunch–Kaufman, column pivoting | laswp, lapmt |
-| P8 | Level 1 and reductions | dot, sum, norms with scaling, absolute maximum with its index, scale, axpy, copy, conjugate, layout-changing copies | Everywhere (`reductions/*`) | dot, nrm2, iamax, scal, axpy, copy |
-| P9 | Scalar numerical kernels | Householder and rotation generation; 2×2 and 3×3 problems (shifts, 2×2 eigenvalues and singular values, shifted 2×2 solves); secular-equation roots; dqds steps; safe reciprocal and hypot | `make_householder`, `secular_root`, `solve_shifted_2x2_cplx`, `svd_triu_2x2`, `geigval_2x2`, dqds | larfg, lartg, lanv2, lasv2, laed4, lasq* |
-| P10 | Leaf factorisations (optional) | Unblocked factorisation of a small block | LU leaf, `simd_cholesky`, QR panels | getf2, potf2, geqr2 |
+| [P1](#p1-level-3-products) | Level-3 products | `C ← αAB + βC`, including a triangular-output product (a generalised herk/syrk/her2k) and products with a triangular factor (trmm) | Almost every blocked factorisation (gemm 76 call sites, triangular product 52) | gemm, gemmt, herk, her2k, trmm |
+| [P2](#p2-level-3-triangular-solve) | Level-3 triangular solve | `X ← T⁻¹B`, many right-hand sides | LU, Cholesky, solves (97 call sites) | trsm |
+| [P3](#p3-block-reflector-apply) | Block-reflector apply | `(I − V·T·Vᴴ)` from the left or the right, including forming `T` and applying a sequence of blocks | QR, Hessenberg, tridiagonal and bidiagonal reductions, back-transformations (138 call sites) | larfb, larft |
+| [P4](#p4-fused-sweep) | Fused sweep | One pass that applies a rank-0, -1 or -2 update to a full matrix or a triangle and computes any of: `A·x`, `yᴴ·A`, a symmetric product from a triangle, column-norm downdates, a per-column absolute maximum, a 2-D absolute maximum | LU leaf, full-pivoting LU, column-pivoted QR, Bunch–Kaufman, Hessenberg, tridiagonal, bidiagonal | ger/syr2 + gemv/symv; BLAS 2.5 (GEMVER, GEMVT); BLIS level-1f |
+| [P5](#p5-level-2-triangular) | Level-2 triangular | `x ← T⁻¹x`, `x ← Tx`, one right-hand side; a recurrence, unlike P4 | Single right-hand-side solves, triangular inverse | trsv, trmv |
+| [P6](#p6-sequences-of-small-transforms) | Sequences of small transforms | Rotations (Givens, Jacobi) on pairs of rows or columns, applied singly or as sequences; bulge chasing with 2- or 3-element reflectors | Jacobi, real and complex Schur (`move_bulge`), QZ (`chase_bulge_2x2`), QR iterations, LLT/LDLT rank updates | rot, lasr, the laqr5 family |
+| [P7](#p7-permutations) | Permutations | Row and column swaps, applying a permutation | LU, Bunch–Kaufman, column pivoting | laswp, lapmt |
+| [P8](#p8-level-1-and-reductions) | Level 1 and reductions | dot, sum, norms with scaling, absolute maximum with its index, scale, axpy, copy, conjugate, layout-changing copies | Everywhere (`reductions/*`) | dot, nrm2, iamax, scal, axpy, copy |
+| [P9](#p9-scalar-numerical-kernels) | Scalar numerical kernels | Householder and rotation generation; 2×2 and 3×3 problems (shifts, 2×2 eigenvalues and singular values, shifted 2×2 solves); secular-equation roots; dqds steps; safe reciprocal and hypot | `make_householder`, `secular_root`, `solve_shifted_2x2_cplx`, `svd_triu_2x2`, `geigval_2x2`, dqds | larfg, lartg, lanv2, lasv2, laed4, lasq* |
+| [P10](#p10-leaf-factorisations) | Leaf factorisations (optional) | Unblocked factorisation of a small block | LU leaf, `simd_cholesky`, QR panels | getf2, potf2, geqr2 |
 
-What each kind does, in pictures. Purple is read only, green is written, amber is computed in the same pass, and grey is a small or scalar operand. The figures are generated by `figures/make_primitive_figures.py` (standard library only; rerun it after editing).
+What each kind does, in pictures. **Click a figure (or a kind in the table) for its precise definition in [Appendix A](#appendix-a-precise-definitions-of-the-primitive-kinds).** Purple is read only, green is written, amber is computed in the same pass, and grey is a small or scalar operand. The figures are generated by `figures/make_primitive_figures.py` (standard library only; rerun it after editing).
 
-![P1: gemm, triangular-output products and trmm](figures/prim_p1_level3_products.svg)
+[![P1: gemm, triangular-output products and trmm](figures/prim_p1_level3_products.svg)](#p1-level-3-products)
 
-![P2: trsm, the solution overwrites B](figures/prim_p2_trsm.svg)
+[![P2: trsm, the solution overwrites B](figures/prim_p2_trsm.svg)](#p2-level-3-triangular-solve)
 
-![P3: block-reflector apply as three products](figures/prim_p3_block_reflector.svg)
+[![P3: block-reflector apply as three products](figures/prim_p3_block_reflector.svg)](#p3-block-reflector-apply)
 
-![P4: one sweep over A with a low-rank update and by-products](figures/prim_p4_fused_sweep.svg)
+[![P4: one sweep over A with a low-rank update and by-products](figures/prim_p4_fused_sweep.svg)](#p4-fused-sweep)
 
-![P5: trsv as a recurrence](figures/prim_p5_trsv.svg)
+[![P5: trsv as a recurrence](figures/prim_p5_trsv.svg)](#p5-level-2-triangular)
 
-![P6: one rotation, a sequence of rotations, and bulge chasing](figures/prim_p6_small_transforms.svg)
+[![P6: one rotation, a sequence of rotations, and bulge chasing](figures/prim_p6_small_transforms.svg)](#p6-sequences-of-small-transforms)
 
-![P7: row swaps in the order of the pivots](figures/prim_p7_permutations.svg)
+[![P7: row swaps in the order of the pivots](figures/prim_p7_permutations.svg)](#p7-permutations)
 
-![P8: dot, axpy, norms with scaling, and the first maximum](figures/prim_p8_level1.svg)
+[![P8: dot, axpy, norms with scaling, and the first maximum](figures/prim_p8_level1.svg)](#p8-level-1-and-reductions)
 
-![P9: the scalar kernels that read the Precision contract](figures/prim_p9_scalar_kernels.svg)
+[![P9: the scalar kernels that read the Precision contract](figures/prim_p9_scalar_kernels.svg)](#p9-scalar-numerical-kernels)
 
-![P10: an unblocked leaf composed from P4, P7, P8 and P9](figures/prim_p10_leaf.svg)
+[![P10: an unblocked leaf composed from P4, P7, P8 and P9](figures/prim_p10_leaf.svg)](#p10-leaf-factorisations)
 
 What each kind needs from an extended-precision scalar, and its cost character:
 
@@ -489,3 +489,162 @@ Not verified, so not used above:
 * the full citations of the IAAT/IATF/LBBGEMM/IrGEMM small-GEMM papers;
 * the DOIs of the 2019 OpenMP static look-ahead and the 2020 intra-routine malleability papers;
 * a primary source for JAEA's QPBLAS.
+
+## Appendix A. Precise definitions of the primitive kinds
+
+Each figure in section 7 links here ([back to the figures](#primitive-kinds-decided-2026-11-13)). A definition fixes **what** is computed, not how: blocking, packing, fusion and parallel splits are implementation choices. "colmat today" points to the code at `colmat-rs@4abe04d` that the definition was read from.
+
+### Conventions
+
+* **Transposition.** `op(X)` is one of `X`, `X̄` (conjugate), `Xᵀ`, `Xᴴ`.
+* **Accumulation.** `Accum::Replace` means β = 0, and the output is **not read**, so a NaN already in it does not propagate. `Accum::Add` reads it.
+* **Triangular operands.**
+  * `uplo` ∈ {lower, upper} selects the stored triangle.
+  * `diag` = unit means the diagonal is **not read** and is taken to be 1.
+  * `side` ∈ {left, right} says on which side a factor multiplies.
+* **Aliasing.** An output aliases no input unless the definition says "in place".
+* **Empty dimensions** are well defined. For example, a product with an inner dimension of 0 gives `C ← β·C`.
+* **Rounding.** A definition gives the result in exact arithmetic. Implementations may reassociate sums. colmat promises bitwise identical results only at a fixed thread count (tensor4all/t4a-faer#327).
+* **Magnitude for pivoting** is `abs1(z) = |Re z| + |Im z|`, as in BLAS `i?amax`.
+* **NaN in a search** (the first maximum, a pivot) is not yet specified. arXiv:2207.09281 proposes "the first NaN, then the first Inf, then the first largest finite entry"; adopting it is open question 6 of section 11.
+
+### P1. Level-3 products
+
+* **gemm.** For `C` of size m×n, `op(A)` of size m×k and `op(B)` of size k×n:
+  `C ← α·op(A)·op(B) + β·C`.
+* **Triangular output** (gemmt; herk and syrk; her2k and syr2k). The same, but only the entries in the `uplo` triangle of the square `C` (diagonal included) are read and written; the other triangle is left untouched. Special cases:
+  * `C ← α·A·Aᴴ + β·C` with α and β real (herk). The diagonal of `C` stays real.
+  * `C ← α·A·Bᴴ + ᾱ·B·Aᴴ + β·C` (her2k).
+* **trmm.** In place in `B`: `B ← α·op(T)·B` (left) or `B ← α·B·op(T)` (right), with `T` triangular (`uplo`, `diag`).
+* **Precision used:** none.
+* **colmat today:** `linalg::matmul::matmul` (`Accum`, conjugation flags) and `linalg::matmul::triangular`.
+
+### P2. Level-3 triangular solve
+
+* **trsm.** Solve `op(T)·X = α·B` (left) or `X·op(T) = α·B` (right). `X` overwrites `B`. `T` is triangular (`uplo`, `diag`).
+* **Singularity is not checked.** A zero pivot gives IEEE Inf or NaN. Whether the primitive reports it is open; see arXiv:2207.09281.
+* **colmat today:** `linalg::triangular_solve` (`solve_lower_triangular_in_place`, `solve_unit_lower_triangular_in_place`, and so on).
+
+### P3. Block-reflector apply
+
+* **The reflector.** `H = H₀·H₁⋯H_{k−1}` with `Hᵢ = I − τᵢ·vᵢ·vᵢᴴ`.
+* **Compact WY form.** `H = I − V·T·Vᴴ` (forward, column-wise storage).
+  * `V` is m×k and unit lower trapezoidal: `V[i,i] = 1` and `V[i,j] = 0` for i < j, neither stored nor read.
+  * `T` is k×k upper triangular.
+* **Forming T** (larft): `T[i,i] = τᵢ` and `T[0:i, i] = −τᵢ·T[0:i, 0:i]·V[:, 0:i]ᴴ·vᵢ`.
+* **Apply** (larfb), in place in `C`, one of:
+  * `C ← H·C`
+  * `C ← Hᴴ·C`
+  * `C ← C·H`
+  * `C ← C·Hᴴ`
+
+  A sequence of blocks applies their products in order.
+* **colmat today:** `linalg::householder::apply_block_householder_{,transpose_}on_the_{left,right}_in_place_with_conj` and the `_sequence_` variants, plus `upgrade_householder_factor`.
+
+### P4. Fused sweep
+
+**Operands.**
+
+* `A`, of size m×n, or the `uplo` triangle of a square Hermitian `A`. This is the *region*.
+* Update vectors `uᵣ` (length m) and `wᵣ` (length n), for r = 0, 1, or 2 pairs. The rank r may be 0.
+* Inputs of the by-products, as needed.
+
+**Definition.** The result is as if the two phases below ran in this order. Fusion into one pass is an implementation property, not part of the meaning.
+
+1. **Update.** `A ← A − Σᵣ uᵣ·wᵣᴴ`, applied to the region only. For a Hermitian triangle the rank-2 form is `A ← A − u·wᴴ − w·uᴴ`.
+2. **By-products, computed from the updated A.** Any subset of:
+   * `y ← A·x` (length m), and `zᴴ ← sᴴ·A` (length n);
+   * for a Hermitian `A` stored as one triangle, `y ← A·x` with both triangles used;
+   * **column-norm downdate.** `νⱼ ← √(νⱼ² − |a_{p,j}|²)` for the row `p` just eliminated. The norms are recomputed exactly from the columns when the largest downdated value falls below `√eps · ν_ref`, where `ν_ref` is the largest norm at the last recomputation.
+   * **per-column first maximum.** For each column `j`, `iⱼ = min{ i : abs1(a_{ij}) = maxₖ abs1(a_{kj}) }`.
+   * **2-D maximum.** `(i*, j*)` among the entries of the region with the largest `abs1`. For a real scalar, ties go to the smallest column, then the smallest row, of the matrix that is searched. For a complex scalar, the order among ties is not part of the contract (colmat's current contract, `lu/full_pivoting/factor.rs`, "Pivot ties").
+
+**colmat's instances** (from the unfused fallbacks, which are the reference):
+
+| Instance | Region and update | By-products |
+| --- | --- | --- |
+| Hessenberg (`hessenberg_fused_op_fallback`) | full; `A ← A − l₀·r₀ − l₁·r̄₁` (`l` columns, `r` rows) | `r_out ← A·r_in`, `l_out ← l̄_in·A` |
+| Bidiagonal (`bidiag_fused_op`) | full; `A ← A − u·y − z·v` | the two products of the next step |
+| Tridiagonal (`tridiag_fused_op_simd`) | lower triangle; Hermitian rank-2 | `y ← A·x`. The kernel returns two partial vectors (from the columns and from the rows of the triangle) that the caller sums. |
+| LU leaf (`leaf_step_simd`) | full; rank 1 | per-column first maximum |
+| Full-pivoting LU (`update_and_best_in_mat_simd`) | full; rank 1 | 2-D maximum |
+| Column-pivoted QR (`update_mat_and_dot_simd`) | full; rank 1 (one reflector) | column-norm downdate, and the dots of the next reflector |
+| Bunch–Kaufman (`rank_{1,2}_update_and_argmax`) | lower triangle; rank 1 or 2 | off-diagonal 2-D maximum |
+
+**Relation to GEMVER.** The BLAS Technical Forum's `GEMVER` is the full-region rank-2 instance with a *dependent* second product (`w ← α·A·x` with `x ← β·Aᵀ·y + z`). colmat's products are independent.
+
+**Precision used:** `eps` in the norm-downdate test.
+
+### P5. Level-2 triangular
+
+* **trsv:** `x ← op(T)⁻¹·x`. **trmv:** `x ← op(T)·x`.
+* In place, one right-hand side, `T` triangular (`uplo`, `diag`).
+* **The dependency order is part of the meaning of a recurrence.** For lower `T`, `xᵢ` depends on `x₀ … x_{i−1}`.
+* **colmat today:** the one-column cases of `linalg::triangular_solve`, and `triangular_inverse`.
+
+### P6. Sequences of small transforms
+
+* **Rotation.** `G = [c s; −s̄ c]` with `c` real and `c² + |s|² = 1`.
+  * On rows `i`, `j`: `[aᵢ; aⱼ] ← G·[aᵢ; aⱼ]`.
+  * On columns: `[aᵢ aⱼ] ← [aᵢ aⱼ]·Gᴴ`.
+  * A sequence `G_{k−1}⋯G₀` is applied in its stated order, as in LAPACK `xLASR`: the pivot pattern (variable, top, bottom) and the direction (forward, backward) are parameters.
+* **Small reflector.** `H = I − τ·v·vᴴ` with `v` of length 2 or 3 and `v₀ = 1`.
+  * It is applied to a range of rows from the left and/or a range of columns from the right.
+  * The bulge chase itself (which reflector, where) belongs to the algorithm. The primitive is the application.
+* **LLT/LDLT rank updates** are provisionally here, as a column recurrence of such transforms (open point 3 of section 7).
+* **colmat today:** `linalg::jacobi` (`apply_on_the_left_in_place`, `apply_on_the_right_in_place`), and `move_bulge` in `evd/schur/{real,complex}_schur.rs` and `chase_bulge_2x2` in `gevd/qz_real`.
+
+### P7. Permutations
+
+* **laswp:** for k = k₀, …, k₁ in order (or in reverse, for the inverse), swap rows `k` and `piv[k]`.
+* **Applying a permutation:** `B[p(i), :] = A[i, :]` (rows), or the same on columns.
+* **No arithmetic.** NaN and Inf move with their entries.
+* **colmat today:** `perm` and the row swaps inside the LU and Bunch–Kaufman drivers.
+
+### P8. Level 1 and reductions
+
+* **dot:** `s = Σᵢ x̄ᵢ·yᵢ` (conjugated) or `Σᵢ xᵢ·yᵢ`. **sum:** `Σᵢ xᵢ`.
+* **Norms:**
+  * `‖x‖₂ = √(Σᵢ |xᵢ|²)`, computed without spurious overflow or underflow whenever the result is representable, by scaling with constants derived from `safe_min`, `safe_max` and `eps` (Blue's algorithm in LAPACK `xNRM2`);
+  * `‖x‖₁ = Σᵢ |xᵢ|`;
+  * `‖x‖_max = maxᵢ |xᵢ|`, which must propagate NaN (faer-039).
+* **First maximum:** `i* = min{ i : abs1(xᵢ) = maxₖ abs1(xₖ) }`.
+* **Updates:** `y ← α·x + y` (axpy), `x ← α·x` (scal), copy, and conjugate; layout-changing copies (between strides, and transposition).
+* **Precision used:** `safe_min`, `safe_max` and `eps` for the scaled norm.
+* **colmat today:** `linalg::reductions::{sum, norm_l1, norm_l2, norm_l2_sqr, norm_max}` and `zip!`.
+
+### P9. Scalar numerical kernels
+
+Each kernel is defined by its mathematical result, together with the range of inputs for which it must not overflow or underflow spuriously. That range is where `Precision` enters.
+
+* **Householder generation** (larfg).
+  * Given a scalar `α` and a vector `x`, find `β` real, `τ` and `v` such that `Hᴴ·[α; x] = [β; 0]`, with `H = I − τ·[1; v]·[1; v]ᴴ`.
+  * When `x = 0` and `Im α = 0`, `τ = 0` (H = I).
+  * When `|β|` falls below `safe_min / eps`, the input is rescaled first (LAPACK `xLARFG`).
+  * colmat: `make_householder_in_place`.
+* **Rotation generation** (lartg).
+  * Given `f` and `g`, find `c` real, `s` and `r` such that `[c s; −s̄ c]·[f; g] = [r; 0]`, without overflow for any representable `f` and `g`.
+  * The sign convention is that of the implementation; a wrong `r` for `g = 0` was faer-033.
+  * colmat: `JacobiRotation::rotg`.
+* **2×2 and 3×3 problems:**
+  * the standardised real Schur form of a 2×2 block (lanv2);
+  * the SVD of a 2×2 upper triangular matrix (lasv2);
+  * shifted 2×2 solves with scaling (laln2);
+  * the eigenvalues of a 2×2 pencil.
+
+  colmat: `svd_triu_2x2`, `geigval_2x2`, `solve_shifted_2x2_cplx`, `solve_complex_shifted_2x2`, `check_shift_2x2`.
+* **Secular equation** (laed4, lasd4).
+  * The root `λ ∈ (dᵢ, dᵢ₊₁)` of `f(λ) = 1 + ρ·Σⱼ zⱼ²/(dⱼ − λ) = 0` (or its SVD form with `dⱼ² − σ²`), to relative accuracy `O(eps)`.
+  * colmat: `secular_eq`, `secular_root` in `evd/tridiag_evd.rs`.
+* **dqds.** One shifted dqds transform of the qd array, with its deflation tests (LAPACK `xLASQ*`). colmat: `svd/dqds.rs`.
+* **Safe reciprocal and hypot.** `1/x` and `√(a² + b²)` without spurious overflow or underflow; a complex reciprocal of a subnormal value must not give NaN (faer-020).
+* **Precision used:** all of `eps`, `safe_min` and `safe_max`.
+
+### P10. Leaf factorisations
+
+* **getf2.** `P·A = L·U` on an m×n_b panel, unblocked.
+  * Pivot of column `k`: the per-column first maximum (P4) of the remaining rows.
+  * Then the row swap (P7), a scaling by the safe reciprocal of the pivot (P9), and a rank-1 update of the rest of the panel (P4).
+* **potf2.** `A = L·Lᴴ` (lower) on a small block. Reports the first non-positive pivot.
+* **geqr2.** `A = Q·R`, with the Householder vectors stored below the diagonal and the `τ` in a separate vector.
+* **colmat today:** the leaf of `lu/partial_pivoting` (`lu_in_place_unblocked_simd`), `simd_cholesky` in `cholesky/ldlt/factor.rs`, and the unblocked QR panels.
