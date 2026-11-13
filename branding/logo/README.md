@@ -9,12 +9,13 @@ Status: proposal, not yet adopted.
 
 ## Concept
 
-The mark is a small tensor network drawn as a circuit: open legs, solid nodes, and bonds with rounded corners.
+The mark spells **T4∀**, "tensor for all", drawn as tensor diagrams: bonds with solid nodes. ∀ is the mathematical "for all".
 
-- Its bonds on the left, middle and right mimic the letter t, numeral 4 and letter a in the name, and the copper color used for 4 is the same as for the 4 in the wordmark.
+- T is a tensor with three legs, the 4 a small network, and ∀ a triangle of three tensors with two open legs.
+- As in the earlier circuit mark, the strokes mimic the letter t, numeral 4 and letter a in the name, and the copper color used for 4 is the same as for the 4 in the wordmark.
 - Line art in ink and copper only, matching the tenferro and colmat logos.
 
-At 16 px only the copper 4 is kept.
+The idea is Xavier's, following Jan's circuit mark, which it replaces. In favicons only the copper 4 is kept, with its nodes; at 16 px without them.
 
 ## Files
 
@@ -27,9 +28,9 @@ At 16 px only the copper 4 is kept.
 | `svg/tensor4all-wordmark-dark.svg` | Horizontal logo for dark backgrounds, text outlined |
 | `svg/tensor4all-avatar.svg` | Square avatar on the site background, safe for circular crops |
 | `svg/tensor4all-avatar-dark.svg` | Square avatar, dark |
-| `svg/favicon.svg` | Favicon with heavier strokes, follows `prefers-color-scheme` |
-| `svg/tensor4all-icon-small.svg` | Opaque small icon, source for the 32 and 48 px PNG favicons |
-| `svg/tensor4all-icon-16.svg` | Opaque 16 px icon, the copper 4 only |
+| `svg/favicon.svg` | Favicon: the copper 4 with its nodes, heavier strokes |
+| `svg/tensor4all-icon-small.svg` | Opaque copper 4, source for the 32 and 48 px PNG favicons |
+| `svg/tensor4all-icon-16.svg` | Opaque 16 px icon, the copper 4 without nodes |
 | `png/tensor4all-avatar-{512,1024}.png` | GitHub organization avatar, social cards |
 | `png/favicon-{16,32,48}.png`, `png/apple-touch-icon.png` | Raster favicons for browsers that do not use SVG |
 
@@ -37,11 +38,10 @@ At 16 px only the copper 4 is kept.
 
 The mark is drawn to survive screen printing and embroidery on clothing, where fine lines break up and small holes fill in. Common printer minimums are about 0.3 to 0.5 mm for a printed line and 1 mm for a gap; embroidery needs about 1.3 mm for a line.
 
-- Bonds are 10 units wide in a mark about 320 units across, and nodes are solid dots with a radius of 1.6 bond widths. Hollow rings are avoided because their holes close up.
-- The a-shaped bond is a semicircle set clear of the copper 4, so the narrowest gap in the mark is 2.4 bond widths.
-- With the whole wordmark 80 mm wide (a left-chest print), bonds are about 0.6 mm, node dots about 2 mm and the narrowest gap about 1.5 mm.
+- Bonds are 15 units wide on a cap height of 200, and nodes are solid dots with a radius of 1.6 bond widths. Hollow rings are avoided because their holes close up.
+- With the whole wordmark 80 mm wide (a left-chest print), bonds are about 0.9 mm, node dots about 2.9 mm, and the clear gaps between letters about 4 mm.
 
-For embroidery, use the mark alone at 45 mm or wider, or the wordmark at 165 mm or wider.
+For embroidery, use the mark alone at 45 mm or wider, or the wordmark at 115 mm or wider.
 
 ## Colors
 

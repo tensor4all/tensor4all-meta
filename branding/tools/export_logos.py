@@ -93,6 +93,10 @@ def square_around(box, pad=0.0, side=None):
     return (cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2)
 
 
+def pad_box(box, pad):
+    return (box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad)
+
+
 def auto_style(palette, roles):
     light = "".join(f".{r}{{{p}:{palette['light'][c]}}}" for r, (p, c) in roles.items())
     dark = "".join(f".{r}{{{p}:{palette['dark'][c]}}}" for r, (p, c) in roles.items())
@@ -104,38 +108,50 @@ def text_paths(glyphs, color_of):
 
 
 # ------------------------------------------------------------------ tensor4all
-# A tensor network drawn as a circuit. Its bonds on the left, middle and right
-# mimic the t, the 4 (in copper) and the a of the name.
+# T4∀ drawn as tensor diagrams: bonds and solid nodes. T is a three-leg tensor,
+# the 4 (in copper) a small network, and ∀ ("for all") a triangle of three
+# tensors with two open legs. Idea by Xavier, after Jan's circuit mark.
 
-# Drawn for print: about 2.4 lines per mm at a left-chest size, no enclosed
-# holes narrower than 1 mm, and solid nodes instead of hollow rings, which
-# fill in on fabric. See branding/logo/README.md, "Print".
-T4A_STROKE = 10.0
+# Drawn for print: thick bonds, solid nodes instead of hollow rings (which fill
+# in on fabric), and wide clear gaps. See branding/logo/README.md, "Print".
+T4A_STROKE = 15.0
 T4A_NODE_R = 1.6           # node radius in stroke widths
-T4A_INK_LINES = [
-    "M68 24V193A17 17 0 0 0 85 210H110",     # the t: left leg, bottom-left corner
-    "M36 56H296A15 15 0 0 1 311 71V210",     # top line, right side
-    "M269 118H342M269 210H342",               # right legs
-    "M269 118A46 46 0 0 0 269 210",          # the a: a semicircular bond
-]
-T4A_ACCENT_LINES = ["M110 210L189 56V252M110 210H269"]  # the 4
-T4A_INK_NODES = [(68, 56), (311, 118), (311, 210)]
-T4A_ACCENT_NODES = [(189, 56), (110, 210), (189, 210)]
-T4A_TEXT_H = 225.0         # mark height that sets the wordmark text size
+T4A_TOP, T4A_BASE = 40.0, 240.0   # cap height 200
+T4A_W = 150.0              # glyph width, 0.75 of the cap height
+T4A_GAPS = (0.0, 25.0)     # T to 4, 4 to ∀: tight, optically even spacing
+
+
+def t4a_geometry():
+    """Bond paths and node centres for T, 4 and ∀, and the right end x."""
+    top, base, w = T4A_TOP, T4A_BASE, T4A_W
+    ink, acc, ink_n, acc_n = [], [], [], []
+    x = 0.0
+    ink.append(f"M{x} {top}H{x + w}M{x + w / 2} {top}V{base}")          # T
+    ink_n.append((x + w / 2, top))
+    x += w + T4A_GAPS[0]
+    xs, yc = x + 0.70 * w, top + 0.65 * (base - top)                     # 4
+    acc.append(f"M{xs} {top}L{x} {yc}H{x + w}M{xs} {top}V{base}")
+    acc_n += [(xs, top), (xs, yc)]
+    x += w + T4A_GAPS[1]
+    xv, yb = x + w / 2, top + 0.34 * (base - top)                        # ∀
+    t = (yb - top) / (base - top)
+    xl, xr = x + (xv - x) * t, x + w - (x + w - xv) * t
+    ink.append(f"M{x} {top}L{xv} {base}L{x + w} {top}M{xl:.2f} {yb:.2f}H{xr:.2f}")
+    ink_n += [(xl, yb), (xr, yb), (xv, base)]
+    return ink, acc, ink_n, acc_n, x + w
 
 
 def t4a_box(weight=1.0):
     """Outer edge of strokes and nodes."""
-    h = T4A_STROKE * weight / 2
-    return (36 - h, 24 - h, 342 + h, 252 + h)
+    sw = T4A_STROKE * weight
+    r = T4A_NODE_R * sw
+    return (0.0, T4A_TOP - r, t4a_geometry()[4] + sw / 2, T4A_BASE + r)
 
 
 T4A_BOX = t4a_box()
 
 
-def t4a_mark(colors=None, cls=False, weight=1.0, uid="t4a"):
-    """Bonds as strokes, nodes as solid dots; `weight` scales both for small sizes."""
-    sw = T4A_STROKE * weight
+def _bonds(ink, acc, ink_n, acc_n, sw, colors, cls):
     r = T4A_NODE_R * sw
 
     def stroke(role):
@@ -144,20 +160,31 @@ def t4a_mark(colors=None, cls=False, weight=1.0, uid="t4a"):
     def fill(role):
         return f'class="{role}f"' if cls else f'fill="{colors[role]}"'
 
-    ink = "".join(f'<path d="{d}"/>' for d in T4A_INK_LINES)
-    acc = "".join(f'<path d="{d}"/>' for d in T4A_ACCENT_LINES)
-    dots_ink = "".join(f'<circle cx="{x}" cy="{y}" r="{r:.2f}"/>' for x, y in T4A_INK_NODES)
-    dots_acc = "".join(f'<circle cx="{x}" cy="{y}" r="{r:.2f}"/>' for x, y in T4A_ACCENT_NODES)
-    return (f'<g fill="none" stroke-width="{sw:.2f}" stroke-linejoin="round">'
-            f'<g {stroke("ink")}>{ink}</g><g {stroke("accent")}>{acc}</g></g>'
-            f'<g {fill("ink")}>{dots_ink}</g><g {fill("accent")}>{dots_acc}</g>')
+    def dots(ns):
+        return "".join(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{r:.2f}"/>' for x, y in ns)
+
+    return (f'<g fill="none" stroke-width="{sw:.2f}" stroke-linecap="butt" stroke-linejoin="round">'
+            f'<g {stroke("ink")}>{"".join(f"<path d=\"{d}\"/>" for d in ink)}</g>'
+            f'<g {stroke("accent")}>{"".join(f"<path d=\"{d}\"/>" for d in acc)}</g></g>'
+            f'<g {fill("ink")}>{dots(ink_n)}</g><g {fill("accent")}>{dots(acc_n)}</g>')
 
 
-def t4a_four(colors=None, cls=False):
-    """16 px icon: only the copper 4."""
-    paint = 'class="accent"' if cls else f'stroke="{colors["accent"]}"'
-    return (f'<path {paint} fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" '
-            f'd="M110 210L189 56V239M110 210H259"/>')
+def t4a_mark(colors=None, cls=False, weight=1.0):
+    ink, acc, ink_n, acc_n, _ = t4a_geometry()
+    return _bonds(ink, acc, ink_n, acc_n, T4A_STROKE * weight, colors, cls)
+
+
+def t4a_four(colors=None, cls=False, weight=1.0, nodes=True):
+    """Favicons: only the copper 4 of the mark; at 16 px without its nodes."""
+    _, acc, _, acc_n, _ = t4a_geometry()
+    return _bonds([], acc, [], acc_n if nodes else [], T4A_STROKE * weight, colors, cls)
+
+
+def t4a_four_box(weight=1.0):
+    r = T4A_NODE_R * T4A_STROKE * weight
+    x0 = T4A_W + T4A_GAPS[0]
+    return (x0 - r, T4A_TOP - r, x0 + T4A_W + r, T4A_BASE + r)
+T4A_TEXT_XHEIGHT = 0.45 * (T4A_BASE - T4A_TOP)  # wordmark x-height: under half the T4∀ cap height
 
 
 # -------------------------------------------------------------------- tenferro
@@ -245,34 +272,31 @@ def main():
 
     # ---- tensor4all
     p = "logo"
-    mark_h = T4A_TEXT_H
+    mark_h = T4A_BOX[3] - T4A_BOX[1]
     for theme in ("light", "dark"):
         c = FAMILY[theme]
         sfx = "" if theme == "light" else "-dark"
-        write(p, f"tensor4all-mark{sfx}.svg", svg(square_around(T4A_BOX, 8), t4a_mark(c, uid=f"m{sfx}"), "tensor4all"))
-        size = font.size_for_xheight(XHEIGHT_PER_MARK * mark_h)
-        baseline = 201.0
-        glyphs, gb, _ = font.run("tensor4all", size, 0, baseline)
+        write(p, f"tensor4all-mark{sfx}.svg", svg(pad_box(T4A_BOX, 12), t4a_mark(c), "tensor4all"))
+        size = font.size_for_xheight(T4A_TEXT_XHEIGHT)
+        glyphs, gb, _ = font.run("tensor4all", size, 0, T4A_BASE)
         dx = T4A_BOX[2] + GAP_PER_MARK * mark_h - gb[0]
-        glyphs, gb, _ = font.run("tensor4all", size, dx, baseline)
+        glyphs, gb, _ = font.run("tensor4all", size, dx, T4A_BASE)   # baseline on the mark's
         text = text_paths(glyphs, lambda i, ch: c["accent"] if ch == "4" else c["ink"])
-        box = (T4A_BOX[0] - 8, T4A_BOX[1] - 8, gb[2] + 8, T4A_BOX[3] + 8)
-        write(p, f"tensor4all-wordmark{sfx}.svg", svg(box, t4a_mark(c, uid=f"w{sfx}") + text, "tensor4all"))
+        box = (T4A_BOX[0] - 12, T4A_BOX[1] - 12, gb[2] + 12, T4A_BOX[3] + 12)
+        write(p, f"tensor4all-wordmark{sfx}.svg", svg(box, t4a_mark(c) + text, "tensor4all"))
         bg = f'<rect x="-1000" y="-1000" width="3000" height="3000" fill="{c["bg"]}"/>'
         write(p, f"tensor4all-avatar{sfx}.svg",
-              svg(square_around(T4A_BOX, side=470), bg + t4a_mark(c, uid=f"a{sfx}"), "tensor4all"))
+              svg(square_around(T4A_BOX, side=1.3 * (T4A_BOX[2] - T4A_BOX[0])), bg + t4a_mark(c), "tensor4all"))
     t4a_auto = auto_style(FAMILY, {"ink": ("stroke", "ink"), "accent": ("stroke", "accent"),
                                    "inkf": ("fill", "ink"), "accentf": ("fill", "accent")})
-    write(p, "tensor4all-mark-auto.svg",
-          svg(square_around(T4A_BOX, 8), t4a_mark(cls=True, uid="auto"), "tensor4all", t4a_auto))
-    write(p, "favicon.svg",
-          svg(square_around(t4a_box(1.3), 10), t4a_mark(cls=True, weight=1.3, uid="fav"), "tensor4all", t4a_auto))
+    write(p, "tensor4all-mark-auto.svg", svg(pad_box(T4A_BOX, 12), t4a_mark(cls=True), "tensor4all", t4a_auto))
+    four = square_around(t4a_four_box(1.6), 6)
+    write(p, "favicon.svg", svg(four, t4a_four(cls=True, weight=1.6), "tensor4all", t4a_auto))
     c = FAMILY["light"]
     bg = f'<rect x="-1000" y="-1000" width="3000" height="3000" fill="{c["bg"]}"/>'
-    write(p, "tensor4all-icon-small.svg",
-          svg(square_around(t4a_box(1.3), 14), bg + t4a_mark(c, weight=1.3, uid="s"), "tensor4all"))
+    write(p, "tensor4all-icon-small.svg", svg(four, bg + t4a_four(c, weight=1.6), "tensor4all"))
     write(p, "tensor4all-icon-16.svg",
-          svg(square_around((95, 41, 274, 254), 6), bg + t4a_four(c), "tensor4all"))
+          svg(square_around(t4a_four_box(0), 30), bg + t4a_four(c, weight=2.4, nodes=False), "tensor4all"))
 
     # ---- tenferro
     p = "tenferro"
