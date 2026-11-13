@@ -103,6 +103,10 @@ A repository may add gates; none may drop one of these without recording why in 
   required check is a branch-protection setting that no file records, so this page states the rule and
   [`scripts/check-contribution.py`](../../scripts/check-contribution.py) reports only the part that is in the tree:
   which repositories carry the pointer to this page.
+- **The reviewer is a model from a different provider than the author's** (two models of one provider do not count),
+  recorded with the `xreview:done` label; see [`README.md`](README.md#the-workflow-in-one-screen) and the shared
+  [superagent rules](https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/common/superagent.md).
+  To hold a merge, convert the PR to draft — that disables auto-merge; a change request alone does not.
 - **Whoever wrote the change does not merge it alone.** The author may merge after the review, but a change merged
   before its review lands is a change nobody reviewed — that has happened, and it is why the gate is a status check
   and not a habit.
@@ -123,7 +127,8 @@ A repository may add gates; none may drop one of these without recording why in 
 ## 8. Provenance and automation
 
 - **State when a contribution is machine-written.** A pull request, comment or issue produced with an agent names the
-  model and says whether a human asked for it. A reader cannot otherwise tell an answer somebody requested from one a
+  model and says whether a human asked for it. A pull request body carries a line-initial
+  `Model: <provider>/<model>` (or `Model: none/human`); one without it is converted to draft by the patrol. A reader cannot otherwise tell an answer somebody requested from one a
   scheduled job emitted.
 - Do not post AI-generated content to repositories that forbid it. Upstream projects that are not ours have their own
   rules; a fork carries the fix and the reproducer, not a bot-authored issue.
