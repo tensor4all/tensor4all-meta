@@ -119,6 +119,9 @@ T4A_NODE_R = 1.6           # node radius in stroke widths
 T4A_TOP, T4A_BASE = 40.0, 240.0   # cap height 200
 T4A_W = 150.0              # glyph width, 0.75 of the cap height
 T4A_GAPS = (0.0, 25.0)     # T to 4, 4 to ∀: tight, optically even spacing
+# ∀ is raised by one node radius so its bottom node sits on the baseline,
+# like the stems of T and 4; otherwise the three letters seem to slope down.
+T4A_FORALL_RISE = T4A_NODE_R * T4A_STROKE
 
 
 def t4a_geometry():
@@ -133,7 +136,8 @@ def t4a_geometry():
     acc.append(f"M{xs} {top}L{x} {yc}H{x + w}M{xs} {top}V{base}")
     acc_n += [(xs, top), (xs, yc)]
     x += w + T4A_GAPS[1]
-    xv, yb = x + w / 2, top + 0.34 * (base - top)                        # ∀
+    top, base = top - T4A_FORALL_RISE, base - T4A_FORALL_RISE           # ∀, raised
+    xv, yb = x + w / 2, top + 0.34 * (base - top)
     t = (yb - top) / (base - top)
     xl, xr = x + (xv - x) * t, x + w - (x + w - xv) * t
     ink.append(f"M{x} {top}L{xv} {base}L{x + w} {top}M{xl:.2f} {yb:.2f}H{xr:.2f}")
@@ -145,7 +149,9 @@ def t4a_box(weight=1.0):
     """Outer edge of strokes and nodes."""
     sw = T4A_STROKE * weight
     r = T4A_NODE_R * sw
-    return (0.0, T4A_TOP - r, t4a_geometry()[4] + sw / 2, T4A_BASE + r)
+    bottom = max(T4A_BASE, T4A_BASE - T4A_FORALL_RISE + r)
+    top = min(T4A_TOP - r, T4A_TOP - T4A_FORALL_RISE)
+    return (0.0, top, t4a_geometry()[4] + sw / 2, bottom)
 
 
 T4A_BOX = t4a_box()
