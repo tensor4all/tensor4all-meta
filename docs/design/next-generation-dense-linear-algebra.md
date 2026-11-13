@@ -155,19 +155,179 @@ Prior work:
   * binary128 gemm from DGEMMs, faster than MPLAPACK's DD and binary128 gemm on x86 (Mukunoki et al., ICPP 2021);
   * Ozaki scheme II with the Chinese Remainder Theorem (arXiv:2504.08009).
 
-Direction (colmat-rs#171):
+### Prior work on fused level-2 operations
+
+colmat's fused kernels are one pass over a matrix that applies a low-rank update and computes the products or reductions that the next step needs. This class has been standardised and implemented before:
+
+* **The BLAS Technical Forum Standard** (2001), chapter 2, added operations that bundle two calls into one pass over the data:
+  * `GEMVER`: a rank-2 update `A ← A + u1·v1ᵀ + u2·v2ᵀ` followed by two matrix-vector products. In `GEMVER` the second product uses the first result; in colmat's Hessenberg and bidiagonal kernels the two products are independent.
+  * `GEMVT`, `TRMVT`, `AXPY_DOT` and `GE_SUM_MV`.
+
+  The Forum's netlib page lists reference implementations only for the legacy BLAS, the sparse BLAS and the extended and mixed precision BLAS (XBLAS). The chapter-2 extensions are still marked "in preparation" there.
+* **"BLAS 2.5"** (Howell, Demmel, Fulton, Hammarling, Marmol, ACM TOMS 34(3), 2008). Bidiagonalisation with the two GEMVs done in one pass of the trailing matrix through cache. It roughly halves the main-memory traffic and cuts the run time by up to 25 %.
+* **libflame's fused reductions** (Van Zee, van de Geijn, Quintana-Ortí, Elizondo, ACM TOMS 39(1), 2012). The paper extends the same fusion to the Hessenberg and tridiagonal reductions, with a model that estimates the speed-up of fusing.
+  * The implementations are `FLA_Bidiag_UT_u_fus_var2–4`, `FLA_Hess_UT_fus_var2–4` and `FLA_Tridiag_UT_l_fus_var2–3`.
+  * They are built on nine fused vector kernels in `src/base/flamec/blis/fused/`: `dotaxpy`, `dotsv2`, `dotsv3`, `axpyv2b`, `axpyv3b`, `axpyv2bdotaxpy`, `dotv2axpyv2b`, `axmyv2` and `dotaxmyv2`.
+  * libflame has had no commit since 2024-05.
+* **BLIS level-1f kernels** (`axpy2v`, `dotaxpyv`, `axpyf`, `dotxf`, `dotxaxpyf`; [KernelsHowTo](https://github.com/flame/blis/blob/master/docs/KernelsHowTo.md)).
+  * The level-2 operations are built from them. For example, `hemv` uses `dotxaxpyf`, which reads a block of columns once and produces both `Aᵀy` and `Ax`.
+  * A kernel works on a block of `nf` columns (the fusing factor) and is replaced per architecture; the loop around it stays generic.
+* **Fused Givens rotations** (Van Zee, van de Geijn, Quintana-Ortí, ACM TOMS 40(3), 2014). Applying many sets of rotations at once, vectorised, makes the tridiagonal and bidiagonal QR algorithms competitive with divide and conquer and MRRR.
+* **Delayed column-norm updates** in column-pivoted QR (Quintana-Ortí, Sun, Bischof, SISC 19(5), 1998; LAPACK `xLAQPS`).
+* **Generated fusion.**
+  * Build to Order BLAS (Belter, Jessup, Karlin, Siek, SC09; arXiv:1205.1098) compiles MATLAB-like sequences such as GEMVER, BiCGK and AXPYDOT into fused C.
+  * Filipovič et al. (J. Supercomputing 71, 2015) fuse BLAS-1/2 map and reduce kernels on GPUs.
+
+Not found: a standard primitive that fuses a low-rank update with a pivot search, as colmat's LU and Bunch–Kaufman kernels do. That part is colmat's own.
+
+### Primitive kinds (decided 2026-11-13)
+
+Before any API, the primitives are fixed as kinds: mathematical operations with a data-access pattern. The list comes from what colmat's algorithms call at `colmat-rs@4abe04d`.
+
+| # | Kind | Operation | Used in colmat | BLAS/LAPACK counterpart |
+| --- | --- | --- | --- | --- |
+| P1 | Level-3 products | `C ← αAB + βC`, including a triangular-output product (a generalised herk/syrk/her2k) and products with a triangular factor (trmm) | Almost every blocked factorisation (gemm 76 call sites, triangular product 52) | gemm, gemmt, herk, her2k, trmm |
+| P2 | Level-3 triangular solve | `X ← T⁻¹B`, many right-hand sides | LU, Cholesky, solves (97 call sites) | trsm |
+| P3 | Block-reflector apply | `(I − V·T·Vᴴ)` from the left or the right, including forming `T` and applying a sequence of blocks | QR, Hessenberg, tridiagonal and bidiagonal reductions, back-transformations (138 call sites) | larfb, larft |
+| P4 | Fused sweep | One pass that applies a rank-0, -1 or -2 update to a full matrix or a triangle and computes any of: `A·x`, `yᴴ·A`, a symmetric product from a triangle, column-norm downdates, a per-column absolute maximum, a 2-D absolute maximum | LU leaf, full-pivoting LU, column-pivoted QR, Bunch–Kaufman, Hessenberg, tridiagonal, bidiagonal | ger/syr2 + gemv/symv; BLAS 2.5 (GEMVER, GEMVT); BLIS level-1f |
+| P5 | Level-2 triangular | `x ← T⁻¹x`, `x ← Tx`, one right-hand side; a recurrence, unlike P4 | Single right-hand-side solves, triangular inverse | trsv, trmv |
+| P6 | Sequences of small transforms | Rotations (Givens, Jacobi) on pairs of rows or columns, applied singly or as sequences; bulge chasing with 2- or 3-element reflectors | Jacobi, real and complex Schur (`move_bulge`), QZ (`chase_bulge_2x2`), QR iterations, LLT/LDLT rank updates | rot, lasr, the laqr5 family |
+| P7 | Permutations | Row and column swaps, applying a permutation | LU, Bunch–Kaufman, column pivoting | laswp, lapmt |
+| P8 | Level 1 and reductions | dot, sum, norms with scaling, absolute maximum with its index, scale, axpy, copy, conjugate, layout-changing copies | Everywhere (`reductions/*`) | dot, nrm2, iamax, scal, axpy, copy |
+| P9 | Scalar numerical kernels | Householder and rotation generation; 2×2 and 3×3 problems (shifts, 2×2 eigenvalues and singular values, shifted 2×2 solves); secular-equation roots; dqds steps; safe reciprocal and hypot | `make_householder`, `secular_root`, `solve_shifted_2x2_cplx`, `svd_triu_2x2`, `geigval_2x2`, dqds | larfg, lartg, lanv2, lasv2, laed4, lasq* |
+| P10 | Leaf factorisations (optional) | Unblocked factorisation of a small block | LU leaf, `simd_cholesky`, QR panels | getf2, potf2, geqr2 |
+
+What each kind does, in pictures. Purple is read only, green is written, amber is computed in the same pass, and grey is a small or scalar operand. The figures are generated by `figures/make_primitive_figures.py` (standard library only; rerun it after editing).
+
+![P1: gemm, triangular-output products and trmm](figures/prim_p1_level3_products.svg)
+
+![P2: trsm, the solution overwrites B](figures/prim_p2_trsm.svg)
+
+![P3: block-reflector apply as three products](figures/prim_p3_block_reflector.svg)
+
+![P4: one sweep over A with a low-rank update and by-products](figures/prim_p4_fused_sweep.svg)
+
+![P5: trsv as a recurrence](figures/prim_p5_trsv.svg)
+
+![P6: one rotation, a sequence of rotations, and bulge chasing](figures/prim_p6_small_transforms.svg)
+
+![P7: row swaps in the order of the pivots](figures/prim_p7_permutations.svg)
+
+![P8: dot, axpy, norms with scaling, and the first maximum](figures/prim_p8_level1.svg)
+
+![P9: the scalar kernels that read the Precision contract](figures/prim_p9_scalar_kernels.svg)
+
+![P10: an unblocked leaf composed from P4, P7, P8 and P9](figures/prim_p10_leaf.svg)
+
+What each kind needs from an extended-precision scalar, and its cost character:
+
+| Kind | Needs from the scalar | Cost, `f64` / double-double |
+| --- | --- | --- |
+| P1–P3 | SoA packing, and an override such as Dot2 on packed panels or an Ozaki-type split | compute-bound / compute-bound |
+| P4, P5, P7, P8 | The SIMD hooks only (AoS↔SoA conversion, compare with index); a generic implementation suffices | memory-bound / closer to compute-bound |
+| P6 | The SIMD hooks; whether to fuse rotations (Van Zee et al. 2014) | memory-bound / closer to compute-bound |
+| P9 | `Precision` (safe_min, eps) and scalar math (sqrt, division, hypot); no SIMD | negligible time, but every scaling and threshold that decides correctness lives here |
+| P10 | Composed from P4, P8 and P9 | small; a natural override point |
+
+Two consequences:
+
+* **Only P1–P3 need a per-scalar override.** P4–P8 run on the generic implementation once the SIMD-hook contract (section 6) holds.
+* **P9 decides the correctness of double-double.** The ad-hoc `fx128` constants and sparse-ir-rs's eps-by-downcast are both P9-level problems, and P9 is the kind most tied to the `Precision` contract.
+
+Still open (recommendation in brackets):
+
+1. Whether P5 is a special case of P2 [separate: a recurrence, and memory-bound].
+2. Whether P3 is a composition of P1 [separate: the most call sites, and colmat's own fused splits].
+3. Whether the LLT/LDLT rank updates belong to P6 or P4 [P6, as a column recurrence; the kernels have not been read in detail].
+4. Whether P10 is a primitive or a composition.
+
+### Direction (colmat-rs#171)
 
 * **Two tiers.** A generic reference implementation for any `ComplexField`, and a per-scalar `Kernels` implementation chosen statically through an associated type. Without specialization in stable Rust, the associated type plays \<T\>LAPACK's trait-gated redirect.
-* **Primitives are coarse-grained and team-aware:**
-  * gemm, trmm, trsm;
-  * an equal-area triangular update (herk/syrk);
-  * block-reflector apply;
-  * row swaps;
-  * fused panel-step kernels.
-
-  A BLAS-granular interface would lose colmat's fused kernels and splits.
+* **Primitives are the kinds above, coarse-grained and team-aware.** A BLAS-granular interface would lose colmat's fused kernels and splits.
 * **Every primitive pairs execution with an estimate**: serial time in the stack's work unit and the number of parallel sections. Callers compose parallel decisions from these, and a full-width path without a cost gate (the class of tensor4all/t4a-faer#94 and #399) cannot be written.
 * **The gemm primitive selects an algorithm per scalar, not only a kernel**, so a double-double scalar can implement gemm as Dot2 on packed SoA panels or by an Ozaki-type split.
+
+## 7a. Trait boundaries and API sketch (from colmat-rs#171)
+
+This section brings over the trait boundaries, the API sketch and the crate layout written in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171) (body of 2026-11-12, and the AoS/SoA comment). It maps them onto the primitive kinds above. Where the kinds now say something different from the issue, the difference is marked **Revised by the kinds**. Nothing here is implemented.
+
+### Which trait owns which kind
+
+| Layer (crate) | Trait or item | Kinds it carries | Overridable per scalar? |
+| --- | --- | --- | --- |
+| `colmat-traits` | `ComplexField` (arithmetic and the SIMD hooks); the SIMD hooks convert AoS memory to SoA registers on load and back on store (section 6) | the basis of P4–P8 | yes, the hooks themselves |
+| `colmat-traits` | `Precision`: `eps`, `safe_min`, `safe_max` required, derived constants provided (section 5; proposed in this document, not yet in the issue) | P9 | yes, the constants are declared by the type |
+| `colmat-core` | `LinalgScalar: ComplexField { type Kernels: Kernels<Self>; }` | selects the P1–P3 implementation | yes, by the associated type |
+| `colmat-core` | `Kernels<T>`: gemm (with triangular output), trmm, trsm, block-reflector apply, each with an `estimate` | P1, P2, P3 | yes: this is the override surface |
+| `colmat-core` | generic implementations on the SIMD hooks | P4, P5, P6, P7, P8 | not for now |
+| `colmat-core` | `Par`/`ParShape`, team skeletons, `CostModel`/`HostClass`/`Rates`, `Mat`/`Col`/`Row`/`Diag`/`Perm`, operator impls (`Mul` calls `T::Kernels::gemm`) | all | rates per scalar, yes |
+| `colmat` | factorisations (LU, QR, Cholesky, EVD, SVD, GEVD), sparse, solvers; the decomposition methods as an extension trait (`use colmat::prelude::*`) | compose P1–P10; P10 leaves live here | no |
+| `colmat-xprec` | `Df64` support and `Df64` kernels (Dot2 on packed panels, Ozaki-type gemm) | P1–P3 for `Df64`, `Precision` for `Df64` | — |
+
+### API sketch, as written in the issue
+
+```rust
+pub trait LinalgScalar: ComplexField { type Kernels: Kernels<Self>; }
+
+pub trait Kernels<T: ComplexField>: 'static {
+    fn gemm(dst: MatMut<'_, T>, beta: Accum, lhs: MatRef<'_, T>, rhs: MatRef<'_, T>, alpha: T, par: Par<'_>);
+    fn trmm(/* .. */); fn trsm(/* .. */);
+    fn herk_tri(/* .. */);
+    fn apply_block_reflector(/* .. */);
+    fn swap_rows(/* .. */);
+    // fused step kernels: default = current generic code
+    fn estimate(op: Op, shape: Shape) -> Estimate; // serial_ns, sections
+}
+```
+
+The binding is static, through an associated type; with a CPU-only backend there is no `dyn`.
+
+**Revised by the kinds:**
+
+* `herk_tri` is P1 (a triangular-output product) and stays in `Kernels`.
+* `swap_rows` is P7, which has no arithmetic. It moves out of `Kernels` into the generic layer.
+* The fused step kernels are P4. They are generic on the SIMD hooks and are not part of the override surface for now; the issue had them in `Kernels` with a generic default.
+* P5 (trsv/trmv) is separate from `trsm`, if open point 1 of section 7 is settled as recommended.
+
+### Crate layout and dependency direction (from the issue)
+
+```
+threadteam    colmat-traits (ComplexField)    gemm (fork), pulp
+      \              |                          /
+       colmat-core:  Mat/Col/Row/Diag/Perm, bound, zip, layout copies,
+                     Par/ParShape, team skeletons, CostModel/HostClass/Rates,
+                     LinalgScalar + Kernels, Native/Generic kernels,
+                     operator impls (Mul -> T::Kernels::gemm)
+          /                         \
+   colmat (factorisations,        colmat-xprec (Df64 support + Df64 kernels,
+     sparse, solvers, prelude)      e.g. Ozaki-type gemm on f64 GEMMs)
+          \                         /
+            users (tensor4all-rs, colmat-ffi, ...)
+```
+
+The direction follows the issue:
+
+* `xprec` stays a leaf scalar library. It does not depend on colmat.
+* `colmat-xprec` depends on `xprec` and `colmat-core`, not on `colmat`, so algorithm experiments in `colmat` never break it.
+* `colmat-xprec` gets `Par` and the team skeletons only through `colmat-core`'s re-exports. CI can deny a direct `rayon` or `threadteam` dependency, and `std::thread`, there.
+
+What the issue checked about moving `mat/` into core:
+
+* `mat/`, `col/`, `row/`, `diag/` and `perm/` depend on `linalg` only through `zip` and the layout copies.
+* The `linalg` references in `utils/team.rs` and `utils/cost.rs` are test-only.
+* The 208 operator impls of `linalg/mat_ops.rs` must move with `Mat` because of the orphan rule.
+* The inherent decomposition methods become an extension trait. That is the main breaking change.
+
+### Open questions carried over from the issue
+
+1. **How `colmat-xprec` attaches `Df64`.** The orphan rule forbids implementing `ComplexField` or `LinalgScalar` for `xprec::Df64` from a third crate. The options:
+   * (a) a `#[repr(transparent)]` newtype in `colmat-xprec`;
+   * (b) the scalar impl behind features in `colmat-traits`/`colmat-core`, with kernels registered from `colmat-xprec`;
+   * (c) everything inside `colmat` behind an `xprec` feature.
+2. **What `xprec` would expose.** Its `Compensated { hi, lo }` fields are private and the struct is not `#[repr(C)]`. A SoA SIMD path and zero-copy conversion need a fixed layout and branch-free error-free transformations.
+3. **How stable `colmat-core` is.** Either an independent release cadence, or at least `Kernels` and `CostModel` changed only rarely.
+4. **`ComplexField` churn.** Whichever crate implements it for `Df64` has to follow it.
 
 ## 8. Threading: the token and the cost model
 
@@ -290,6 +450,13 @@ Papers (DOIs and arXiv identifiers were checked against Crossref or the publishe
 * Hida, Li, Bailey. Algorithms for quad-double precision floating point arithmetic. ARITH-15, 2001. doi:10.1109/ARITH.2001.930115
 * Joldes, Muller, Popescu. Tight and Rigorous Error Bounds for Basic Building Blocks of Double-Word Arithmetic. ACM TOMS 44(2), 2017. doi:10.1145/3121432. The bounds above were taken from the authors' slides ([RAIM 2025](https://raim2025.sciencesconf.org/data/program/slides_mioara_joldes.pdf), [NAC 2024](https://webusers.imj-prg.fr/~jean-claude.bajard/NAC2024/Supports/NAC2024_JMM.pdf)), because the full text was not reachable.
 * Ogita, Rump, Oishi. Accurate Sum and Dot Product. SIAM J. Sci. Comput. 26(6), 2005. doi:10.1137/030601818
+* BLAS Technical Forum. BLAS Technical Forum Standard, 2001. [netlib page](https://www.netlib.org/blas/blast-forum/); summary in [ICL report](https://hpcg.icl.utk.edu/files/publications/2001/icl-utk-77-2001.pdf).
+* Howell, Demmel, Fulton, Hammarling, Marmol. Cache efficient bidiagonalization using BLAS 2.5 operators. ACM TOMS 34(3), 2008. doi:10.1145/1356052.1356055
+* Van Zee, van de Geijn, Quintana-Ortí, Elizondo. Families of Algorithms for Reducing a Matrix to Condensed Form. ACM TOMS 39(1), 2012. [pdf](https://www.cs.utexas.edu/~flame/pubs/CondensedFormTOMS.pdf)
+* Van Zee, van de Geijn, Quintana-Ortí. Restructuring the Tridiagonal and Bidiagonal QR Algorithms for Performance. ACM TOMS 40(3), 2014. doi:10.1145/2535371
+* Quintana-Ortí, Sun, Bischof. A BLAS-3 Version of the QR Factorization with Column Pivoting. SIAM J. Sci. Comput. 19(5), 1998. doi:10.1137/S1064827595296732
+* Belter, Jessup, Karlin, Siek. Automating the Generation of Composed Linear Algebra Kernels. SC09; Belter, Jessup, Nelson, Norris, Siek. Reliable Generation of High-Performance Matrix Algebra. [arXiv:1205.1098](https://arxiv.org/abs/1205.1098)
+* Filipovič, Madzin, Fousek, Matyska. Optimizing CUDA code by kernel fusion: application on BLAS. J. Supercomputing 71(10), 2015. doi:10.1007/s11227-015-1483-z
 * Ozaki, Ogita, Oishi, Rump. Error-free transformations of matrix multiplication by using fast routines of matrix multiplication and its applications. Numer. Algorithms 59, 2012. doi:10.1007/s11075-011-9478-1
 * Mukunoki, Ozaki, Ogita, Imamura. Accurate Matrix Multiplication on Binary128 Format Accelerated by Ozaki Scheme. ICPP 2021. doi:10.1145/3472456.3472493
 * Ootomo, Ozaki, Yokota. DGEMM on integer matrix multiplication unit. IJHPCA, 2024. doi:10.1177/10943420241239588
