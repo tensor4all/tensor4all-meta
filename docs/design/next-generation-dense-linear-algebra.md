@@ -1,6 +1,6 @@
 # A next generation of dense linear algebra in colmat: prior work and design direction
 
-Status: Survey and proposal (2026-11). Not an implementation plan. Scope: [colmat](https://github.com/tensor4all/colmat-rs), the dense linear algebra library of the stack. This document covers how colmat's BLAS-like and LAPACK-like layers should be reorganised to support generic scalars (double-double first), a per-scalar cost model, a caller-owned thread token, and batched operations. For who owns the threads, read [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) first.
+Status: Survey and proposal (2026-11). Not an implementation plan. Scope: [colmat](https://github.com/tensor4all/colmat-rs), the dense linear algebra library of the stack. This document covers how colmat's BLAS-like and LAPACK-like layers should be reorganised to support generic scalars (double-double first), a per-scalar cost model and a caller-owned thread token. The first step is extended precision and a redefinition of the primitives that covers the fused kernels; batched operations are deferred (section 9 keeps the survey for later). For who owns the threads, read [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) first.
 
 The design discussion is in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171). This document records what already exists elsewhere, in papers and in code, so that colmat reuses it and does not reinvent it.
 
@@ -12,7 +12,7 @@ Hiroshi Shinaoka and Markus Wallerberger (2026-11) asked whether colmat's linear
 2. **A per-scalar cost model.** Parallel width and block sizes come from a cost model that depends on the scalar. Today a non-native scalar borrows the `f64` constants.
 3. **Extended precision.** Support [xprec-rs](https://github.com/tuwien-cms/xprec-rs) (`Df64`, double-double).
 4. **A caller-owned thread token.** Every primitive receives the caller's team (`Par`) and never starts threads of its own.
-5. **Batched operations.** Many independent small or medium problems in one call.
+5. **Batched operations.** Many independent small or medium problems in one call. *Deferred* (Hiroshi, 2026-11-13): extended precision and the primitives come first.
 
 Four facts found while discussing this shape the design:
 
@@ -208,7 +208,9 @@ Direction (colmat-rs#171):
 * **Block sizes follow the same model**, not only the parallel gate. The level-2/level-3 crossover moves for a compute-bound scalar.
 * **No primitive starts threads.** A scalar crate gets `Par` and the team skeletons only through colmat's re-exports, and CI can deny a direct `rayon` or `threadteam` dependency.
 
-## 9. Batched operations
+## 9. Batched operations (deferred)
+
+Deferred on 2026-11-13: extended precision and the redefinition of the primitives come first. The survey below is kept so that the batched API can start from it later.
 
 ### Prior work
 
@@ -234,7 +236,7 @@ Direction (colmat-rs#171):
 
 [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) supports regular batches in one call and leaves irregular batches to the caller. A batched caller such as tlinalg splits the token: every slot goes to the batch with `Par::Seq` items when the batch is at least the budget; otherwise the token is forked over the items.
 
-### Direction (proposed; not yet discussed in colmat-rs#171)
+### A possible direction, for later (not discussed in colmat-rs#171)
 
 * **One batch descriptor in colmat.** Either a uniform shape plus a stride, or a list of groups. Parameters are broadcast, per group or per item, as with oneMKL's spans.
 * **Per-item results.** `Result` per item, or a single flag, chosen by the caller: the `info` modes in Rust form. Singular or indefinite items are expected in batched LU and Cholesky.
@@ -262,7 +264,7 @@ Read at `tensor4all/colmat-rs@4abe04d`.
 1. **How `Df64` attaches** (colmat-rs#171): a newtype in a `colmat-xprec` crate, the scalar impl behind a feature with registered kernels, or everything inside colmat. Also where `mat/` lives (a `colmat-core` split).
 2. **eps for double-double:** 2⁻¹⁰⁴ with accurate addition in every kernel, or a larger eps (≥ 5u²) that covers sloppy addition.
 3. **Primitive granularity:** which fused panel kernels belong in the trait, and which stay private to a factorization.
-4. **Batched API shape:**
+4. **Batched API shape** (deferred):
    * group versus strided as the primary form;
    * whether a compact family is worth it for the shapes the stack runs;
    * who owns the packed format.
