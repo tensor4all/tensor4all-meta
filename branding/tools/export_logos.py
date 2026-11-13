@@ -1,4 +1,4 @@
-"""Export every tensor4all logo (tensor4all, tenferro, colmat) from one place.
+"""Export every tensor4all logo (tensor4all, tenferro, colmat, threadteam) from one place.
 
 usage: python3 branding/tools/export_logos.py <IBMPlexSans-SemiBold.ttf> [branding_dir]
 
@@ -255,6 +255,43 @@ def pitch_for_height(pattern, height):
     return height / (2 * DOT_RATIO + len(pattern) - 1)
 
 
+# ------------------------------------------------------------------ threadteam
+# Fork-join: one pool opens a parallel region (top copper node), four threads
+# run side by side, and the region closes again (bottom copper node). The
+# threads leave each node vertically and bend outwards, so they stay apart.
+
+TT_STROKE = 15.0
+TT_NODE_R = 1.6           # node radius in stroke widths
+TT_TOP, TT_BOT = 40.0, 240.0
+TT_LANES = (10.0, 70.0, 130.0, 190.0)
+TT_Y1, TT_Y2 = 100.0, 180.0   # where the threads run straight
+TT_CX = (TT_LANES[0] + TT_LANES[-1]) / 2
+
+
+def tt_box(weight=1.0):
+    sw = TT_STROKE * weight
+    r = TT_NODE_R * sw
+    return (TT_LANES[0] - sw / 2, TT_TOP - r, TT_LANES[-1] + sw / 2, TT_BOT + r)
+
+
+TT_BOX = tt_box()
+
+
+def tt_mark(colors=None, cls=False, weight=1.0, nodes=True):
+    sw = TT_STROKE * weight
+    r = TT_NODE_R * sw
+    cx, t, b, y1, y2 = TT_CX, TT_TOP, TT_BOT, TT_Y1, TT_Y2
+    paths = "".join(f'<path d="M{cx} {t}C{cx} {t + 30} {x} {y1 - 30} {x} {y1}V{y2}'
+                    f'C{x} {y2 + 30} {cx} {b - 30} {cx} {b}"/>' for x in TT_LANES)
+    stroke = 'class="ink"' if cls else f'stroke="{colors["ink"]}"'
+    fill = 'class="accentf"' if cls else f'fill="{colors["accent"]}"'
+    out = (f'<g fill="none" {stroke} stroke-width="{sw:.2f}" stroke-linecap="round" '
+           f'stroke-linejoin="round">{paths}</g>')
+    if nodes:
+        out += f'<g {fill}>' + "".join(f'<circle cx="{cx}" cy="{y}" r="{r:.2f}"/>' for y in (t, b)) + "</g>"
+    return out
+
+
 # ---------------------------------------------------------------------- output
 
 def main():
@@ -321,6 +358,32 @@ def main():
     write(p, "tenferro-icon-small.svg", svg(square_around(tf_box(TF_STROKE_SMALL), 4), bg + tf_mark(c, sw=TF_STROKE_SMALL), "tenferro"))
     write(p, "tenferro-icon-16.svg", svg(square_around(tf_box(12), 4), bg + tf_mark(c, sw=12, cross_only=True), "tenferro"))
 
+    # ---- threadteam
+    p = "threadteam"
+    mark_h = TT_BOX[3] - TT_BOX[1]
+    for theme in ("light", "dark"):
+        c = FAMILY[theme]
+        sfx = "" if theme == "light" else "-dark"
+        write(p, f"threadteam-mark{sfx}.svg", svg(square_around(TT_BOX, 10), tt_mark(c), "threadteam"))
+        size = font.size_for_xheight(XHEIGHT_PER_MARK * mark_h)
+        glyphs, gb, _ = font.run("threadteam", size, 0, 0)
+        dy = (TT_BOX[1] + TT_BOX[3]) / 2 - (gb[1] + gb[3]) / 2
+        dx = TT_BOX[2] + GAP_PER_MARK * mark_h - gb[0]
+        glyphs, gb, _ = font.run("threadteam", size, dx, dy)
+        text = text_paths(glyphs, lambda i, ch: c["accent"] if i >= 6 else c["ink"])  # thread | team
+        box = (TT_BOX[0] - 12, TT_BOX[1] - 12, gb[2] + 12, TT_BOX[3] + 12)
+        write(p, f"threadteam-wordmark{sfx}.svg", svg(box, tt_mark(c) + text, "threadteam"))
+        bg = f'<rect x="-1000" y="-1000" width="3000" height="3000" fill="{c["bg"]}"/>'
+        write(p, f"threadteam-avatar{sfx}.svg",
+              svg(square_around(TT_BOX, side=1.45 * (TT_BOX[3] - TT_BOX[1])), bg + tt_mark(c), "threadteam"))
+    tt_auto = auto_style(FAMILY, {"ink": ("stroke", "ink"), "accentf": ("fill", "accent")})
+    write(p, "threadteam-mark-auto.svg", svg(square_around(TT_BOX, 10), tt_mark(cls=True), "threadteam", tt_auto))
+    write(p, "favicon.svg", svg(square_around(tt_box(1.5), 6), tt_mark(cls=True, weight=1.5), "threadteam", tt_auto))
+    c = FAMILY["light"]
+    bg = f'<rect x="-1000" y="-1000" width="3000" height="3000" fill="{c["bg"]}"/>'
+    write(p, "threadteam-icon-small.svg", svg(square_around(tt_box(1.5), 6), bg + tt_mark(c, weight=1.5), "threadteam"))
+    write(p, "threadteam-icon-16.svg", svg(square_around(tt_box(2.0), 4), bg + tt_mark(c, weight=2.0), "threadteam"))
+
     # ---- colmat
     p = "colmat"
     size = 193.5           # same text size as the tensor4all wordmark
@@ -369,6 +432,7 @@ PNG_JOBS = {
     "logo": "tensor4all",
     "tenferro": "tenferro",
     "colmat": "colmat",
+    "threadteam": "threadteam",
 }
 
 
