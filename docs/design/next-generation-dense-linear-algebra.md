@@ -319,6 +319,41 @@ What the issue checked about moving `mat/` into core:
 * The 208 operator impls of `linalg/mat_ops.rs` must move with `Mat` because of the orphan rule.
 * The inherent decomposition methods become an extension trait. That is the main breaking change.
 
+### What a new scalar type must implement (decided 2026-11-13)
+
+**A scalar type does not implement the operations P1–P10.** The algorithms are generic, and every kind has a generic implementation. The burden of a new type is the size of the scalar traits. colmat's API may change to keep that burden small (Hiroshi, 2026-11-13).
+
+**Today** (`colmat-traits` at `colmat-rs@4abe04d`):
+
+| Trait | Required items (no default) | Of which |
+| --- | --- | --- |
+| `ComplexField` | 56 functions, 9 associated types, 2 constants | **37 are `simd_*`**. About 19 are scalar arithmetic: `zero`, `one`, `nan`, `infinity`, `from_f64`, `conj`, `recip`, `sqrt`, `abs`, `abs1`, `abs2`, `mul_real`, `mul_pow2`, `is_finite`, and so on. |
+| `RealField` | 6 functions | the precision constants (`epsilon_impl`, `nbits_impl`, `min_positive_impl`, ...) |
+
+Two facts about this:
+
+* **A type without SIMD still has to write the 37 `simd_*` functions.** `SIMD_CAPABILITIES` (`None`, `Copy`, `Simd`) changes which code paths are taken, but not what must be implemented.
+* **The complex type comes free from the real one** (`impl<T: RealField> ComplexField for Complex<T>`). This stays.
+
+**Decided: required is minimal, everything else is optional.**
+
+| Layer | Contents | Required? | If absent |
+| --- | --- | --- | --- |
+| S0 arithmetic | the ~19 scalar arithmetic functions, plus the standard operator and comparison traits | **required** | — |
+| S0 precision | `Precision`: `eps`, `safe_min`, `safe_max` (section 5) | **required** | — |
+| S1 SIMD | the 37 `simd_*`, split out of `ComplexField` into a separate trait (working name `SimdField`) | optional | P4–P8 run as scalar loops: correct, slower |
+| S2 kernels | the `Kernels` override of P1–P3 (packing, Dot2, Ozaki) | optional | the generic reference implementation |
+| S3 cost | per-scalar rates | optional | a ratio to `f64`, or a one-time calibration |
+
+So a type such as an MPFR wrapper gets every algorithm, LU through SVD, from about twenty arithmetic functions and three constants. A type that should be fast adds S1–S3.
+
+**S1 for word tuples.** A type declared as a `#[repr(C)]` tuple of N `f64` words, such as double-double, should get the layout-related SIMD functions derived by colmat:
+
+* derived by colmat: loads and stores (the AoS↔SoA conversion of section 6), masks, splat, select, reductions;
+* written by the type: the arithmetic on SoA registers, which is the form `qd::simd` already has.
+
+The conversion that went wrong in colmat-rs#173 is then written once, in colmat, not once per type. Which of the 37 functions are layout and which are arithmetic has not been classified one by one; the split is the direction, not a count.
+
 ### Open questions carried over from the issue
 
 1. **How `colmat-xprec` attaches `Df64`.** The orphan rule forbids implementing `ComplexField` or `LinalgScalar` for `xprec::Df64` from a third crate. The options:
