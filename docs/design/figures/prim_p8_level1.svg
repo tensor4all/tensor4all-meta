@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="270" viewBox="0 0 860 270">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="270" fill="#FCFCFA"/>
+<text x="24" y="30" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#2C2C2A" text-anchor="start">P8  Level 1 and reductions</text>
+<text x="24" y="50" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">vectors in, a vector or a scalar out</text>
+<text x="85" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">dot, sum</text>
+<rect x="40" y="95" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="40" y="115" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="40" y="135" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="40" y="155" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="40" y="175" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="51" y="213" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">x</text>
+<rect x="72" y="95" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="72" y="115" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="72" y="135" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="72" y="155" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="72" y="175" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="83" y="213" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">y</text>
+<text x="112" y="150" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="400" fill="#4A4844" text-anchor="middle">→</text>
+<rect x="128" y="136" width="24" height="22" rx="2" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="140" y="213" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">s = xᴴy</text>
+<text x="285" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">axpy, scal, copy</text>
+<rect x="250" y="95" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="250" y="115" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="250" y="135" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="250" y="155" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="250" y="175" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="261" y="213" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">x</text>
+<rect x="300" y="95" width="22" height="18" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<rect x="300" y="115" width="22" height="18" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<rect x="300" y="135" width="22" height="18" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<rect x="300" y="155" width="22" height="18" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<rect x="300" y="175" width="22" height="18" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="311" y="213" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">y</text>
+<text x="290" y="233" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">y ← αx + y</text>
+<text x="485" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">norms with scaling</text>
+<rect x="450" y="95" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="450" y="115" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="450" y="135" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="450" y="155" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="450" y="175" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="461" y="213" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">x</text>
+<text x="490" y="150" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="400" fill="#4A4844" text-anchor="middle">→</text>
+<rect x="506" y="136" width="24" height="22" rx="2" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="545" y="175" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="start">‖x‖₂ without overflow:</text>
+<text x="545" y="193" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="start">scale by safe_min/max</text>
+<text x="730" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">|x| max and its index</text>
+<rect x="700" y="95" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="700" y="115" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="700" y="135" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="700" y="155" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<rect x="700" y="175" width="22" height="18" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="711" y="213" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">x</text>
+<text x="711" y="150" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#B7832F" text-anchor="middle">★</text>
+<text x="740" y="150" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="400" fill="#4A4844" text-anchor="middle">→</text>
+<text x="775" y="155" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="start">i = first max</text>
+<rect x="24" y="247" width="14" height="14" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="44" y="258" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">read only</text>
+<rect x="117.4" y="247" width="14" height="14" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="137.4" y="258" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">written</text>
+<rect x="197.6" y="247" width="14" height="14" rx="2" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="217.6" y="258" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">computed in the same pass</text>
+</svg>

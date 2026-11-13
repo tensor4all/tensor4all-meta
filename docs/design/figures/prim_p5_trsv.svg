@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="280" viewBox="0 0 860 280">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="280" fill="#FCFCFA"/>
+<text x="24" y="30" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#2C2C2A" text-anchor="start">P5  Level-2 triangular (trsv, trmv)</text>
+<text x="24" y="50" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">one right-hand side: a recurrence, each entry waits for the previous ones</text>
+<rect x="60" y="80" width="130" height="130" rx="3" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<polygon points="60,80 60,210 190,210" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="95" y="175" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#2C2C2A" text-anchor="middle">L</text>
+<text x="215" y="150" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="400" fill="#4A4844" text-anchor="middle">x ←</text>
+<text x="250" y="150" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#2C2C2A" text-anchor="middle">L⁻¹</text>
+<rect x="290" y="80" width="26" height="20" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="303" y="95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#2C2C2A" text-anchor="middle">x0</text>
+<rect x="290" y="102" width="26" height="20" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="303" y="117" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#2C2C2A" text-anchor="middle">x1</text>
+<rect x="290" y="124" width="26" height="20" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="303" y="139" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#2C2C2A" text-anchor="middle">x2</text>
+<rect x="290" y="146" width="26" height="20" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="303" y="161" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#2C2C2A" text-anchor="middle">x3</text>
+<rect x="290" y="168" width="26" height="20" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="303" y="183" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#2C2C2A" text-anchor="middle">x4</text>
+<rect x="290" y="190" width="26" height="20" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="303" y="205" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#2C2C2A" text-anchor="middle">x5</text>
+<path d="M 318 90 C 340 95, 340 105, 318 112" fill="none" stroke="#77756F" stroke-width="1.3" marker-end="url(#head)"/>
+<path d="M 318 112 C 340 117, 340 127, 318 134" fill="none" stroke="#77756F" stroke-width="1.3" marker-end="url(#head)"/>
+<path d="M 318 134 C 340 139, 340 149, 318 156" fill="none" stroke="#77756F" stroke-width="1.3" marker-end="url(#head)"/>
+<path d="M 318 156 C 340 161, 340 171, 318 178" fill="none" stroke="#77756F" stroke-width="1.3" marker-end="url(#head)"/>
+<path d="M 318 178 C 340 183, 340 193, 318 200" fill="none" stroke="#77756F" stroke-width="1.3" marker-end="url(#head)"/>
+<text x="560" y="110" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#2C2C2A" text-anchor="middle">xᵢ ← (xᵢ − Σⱼ&lt;ᵢ lᵢⱼ xⱼ) / lᵢᵢ</text>
+<text x="560" y="145" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">memory-bound for f64; the dependency chain,</text>
+<text x="560" y="165" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">not a sweep, is what sets the parallel structure</text>
+<rect x="24" y="249" width="14" height="14" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="44" y="260" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">read only</text>
+<rect x="117.4" y="249" width="14" height="14" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="137.4" y="260" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">written</text>
+</svg>

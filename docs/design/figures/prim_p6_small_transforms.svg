@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="330" viewBox="0 0 860 330">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="330" fill="#FCFCFA"/>
+<text x="24" y="30" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#2C2C2A" text-anchor="start">P6  Sequences of small transforms</text>
+<text x="24" y="50" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">rotations on pairs of rows or columns; small reflectors chasing a bulge</text>
+<text x="140" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">one rotation</text>
+<rect x="30" y="95" width="200" height="120" rx="3" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="30" y="125" width="200" height="18" rx="0" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<rect x="30" y="175" width="200" height="18" rx="0" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="18" y="139" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">i</text>
+<text x="18" y="189" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">j</text>
+<rect x="60" y="235" width="80" height="50" rx="3" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="100" y="256" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">c   s</text>
+<text x="100" y="274" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">−s̄  c</text>
+<text x="185" y="262" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">rows i, j ←</text>
+<text x="185" y="278" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">G · rows i, j</text>
+<text x="410" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">a sequence (lasr, QR sweeps)</text>
+<rect x="320" y="95" width="180" height="180" rx="3" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<rect x="320" y="100" width="180" height="30" rx="0" fill="#E3F4EC" fill-opacity="0.35" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="512" y="120" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="start">G0</text>
+<rect x="320" y="134" width="180" height="30" rx="0" fill="#E3F4EC" fill-opacity="0.47" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="512" y="154" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="start">G1</text>
+<rect x="320" y="168" width="180" height="30" rx="0" fill="#E3F4EC" fill-opacity="0.59" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="512" y="188" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="start">G2</text>
+<rect x="320" y="202" width="180" height="30" rx="0" fill="#E3F4EC" fill-opacity="0.71" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="512" y="222" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="start">G3</text>
+<rect x="320" y="236" width="180" height="30" rx="0" fill="#E3F4EC" fill-opacity="0.83" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="512" y="256" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="start">G4</text>
+<text x="410" y="298" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">fused application keeps rows in cache</text>
+<text x="700" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">bulge chasing (Schur, QZ)</text>
+<rect x="620" y="95" width="180" height="180" rx="3" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<polygon points="620,95 800,95 800,275 770.0,275 620,125.0" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<rect x="635" y="125" width="40" height="40" rx="2" fill="#FFFFFF" fill-opacity="0.9" stroke="#B8B5AE" stroke-width="1.2" stroke-dasharray="5 3"/>
+<rect x="680" y="170" width="40" height="40" rx="2" fill="#FDF3E1" fill-opacity="0.9" stroke="#B7832F" stroke-width="1.2"/>
+<rect x="725" y="215" width="40" height="40" rx="2" fill="#FFFFFF" fill-opacity="0.9" stroke="#B8B5AE" stroke-width="1.2" stroke-dasharray="5 3"/>
+<path d="M 690 190 L 730 230" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<text x="710" y="298" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">a 3-element reflector moves the bulge down</text>
+<rect x="24" y="307" width="14" height="14" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="44" y="318" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">written</text>
+<rect x="104.19999999999999" y="307" width="14" height="14" rx="2" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="124.19999999999999" y="318" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">small / scalar operand</text>
+</svg>

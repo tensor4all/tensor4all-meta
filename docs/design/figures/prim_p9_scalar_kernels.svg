@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="330" viewBox="0 0 860 330">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="330" fill="#FCFCFA"/>
+<text x="24" y="30" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#2C2C2A" text-anchor="start">P9  Scalar numerical kernels</text>
+<text x="24" y="50" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">no SIMD and negligible time; the scalings and thresholds that decide correctness live here</text>
+<rect x="24" y="70" width="260" height="92" rx="8" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="154" y="92" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#2C2C2A" text-anchor="middle">Householder generation (larfg)</text>
+<text x="154" y="118" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">x  →  v, τ, β</text>
+<text x="154" y="138" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">(I − τvvᴴ)x = βe₁</text>
+<rect x="304" y="70" width="260" height="92" rx="8" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="434" y="92" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#2C2C2A" text-anchor="middle">rotation generation (lartg)</text>
+<text x="434" y="118" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">(a, b)  →  c, s, r</text>
+<text x="434" y="138" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">[c s; −s̄ c]·[a; b] = [r; 0]</text>
+<rect x="584" y="70" width="260" height="92" rx="8" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="714" y="92" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#2C2C2A" text-anchor="middle">2×2 / 3×3 problems</text>
+<text x="714" y="118" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">shifts, 2×2 eig and svd,</text>
+<text x="714" y="138" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">shifted 2×2 solves</text>
+<rect x="24" y="180" width="260" height="92" rx="8" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="154" y="202" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#2C2C2A" text-anchor="middle">secular equation (laed4)</text>
+<text x="154" y="228" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">root λ of 1 + ρ Σ zᵢ²/(dᵢ − λ)</text>
+<text x="154" y="248" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">between two poles</text>
+<rect x="304" y="180" width="260" height="92" rx="8" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="434" y="202" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#2C2C2A" text-anchor="middle">dqds steps (lasq)</text>
+<text x="434" y="228" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">one step of the</text>
+<text x="434" y="248" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">qd recurrence</text>
+<rect x="584" y="180" width="260" height="92" rx="8" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="714" y="202" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#2C2C2A" text-anchor="middle">safe reciprocal, hypot</text>
+<text x="714" y="228" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">1/x and √(a²+b²)</text>
+<text x="714" y="248" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">without overflow</text>
+<rect x="24" y="292" width="820" height="28" rx="6" fill="#FDF3E1" fill-opacity="0.6" stroke="#B7832F" stroke-width="1.2"/>
+<text x="434" y="311" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">every one of them reads eps, safe_min or safe_max: the Precision contract</text>
+</svg>

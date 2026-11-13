@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="440" viewBox="0 0 860 440">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="440" fill="#FCFCFA"/>
+<text x="24" y="30" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#2C2C2A" text-anchor="start">P4  Fused sweep</text>
+<text x="24" y="50" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">one pass over A: a rank-0/1/2 update, plus any of the by-products the next step needs</text>
+<rect x="30" y="130" width="22" height="170" rx="3" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="41" y="320" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#2C2C2A" text-anchor="middle">u₁</text>
+<rect x="58" y="130" width="22" height="170" rx="3" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="69" y="320" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#2C2C2A" text-anchor="middle">u₂</text>
+<rect x="110" y="102" width="190" height="18" rx="3" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="316" y="116" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#2C2C2A" text-anchor="start">v₁ᴴ</text>
+<rect x="110" y="80" width="190" height="18" rx="3" fill="#EEEDFD" fill-opacity="0.8" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="316" y="94" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#2C2C2A" text-anchor="start">v₂ᴴ</text>
+<rect x="110" y="130" width="190" height="170" rx="3" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<path d="M 141.66666666666666 130 L 141.66666666666666 300" fill="none" stroke="#9CC9B2" stroke-width="1"/>
+<path d="M 173.33333333333334 130 L 173.33333333333334 300" fill="none" stroke="#9CC9B2" stroke-width="1"/>
+<path d="M 205.0 130 L 205.0 300" fill="none" stroke="#9CC9B2" stroke-width="1"/>
+<path d="M 236.66666666666669 130 L 236.66666666666669 300" fill="none" stroke="#9CC9B2" stroke-width="1"/>
+<path d="M 268.33333333333337 130 L 268.33333333333337 300" fill="none" stroke="#9CC9B2" stroke-width="1"/>
+<rect x="173.33333333333334" y="130" width="31.666666666666668" height="170" rx="0" fill="#FDF3E1" fill-opacity="0.55" stroke="#B7832F" stroke-width="1.2"/>
+<path d="M 125 315 L 290 315" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<text x="205" y="335" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#2C2C2A" text-anchor="middle">column sweep (one read, one write of A)</text>
+<text x="205" y="220" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="400" fill="#2C2C2A" text-anchor="middle">A</text>
+<rect x="330" y="130" width="22" height="170" rx="3" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="341" y="320" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">A·x</text>
+<rect x="110" y="352" width="190" height="18" rx="3" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="316" y="366" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="start">yᴴ·A</text>
+<text x="230" y="180" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="400" fill="#B7832F" text-anchor="middle">★</text>
+<text x="400" y="140" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="start">update</text>
+<text x="400" y="162" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="start">A ← A − u₁v₁ᴴ − u₂v₂ᴴ   (rank 0, 1 or 2;</text>
+<text x="400" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="start">      full matrix or one triangle)</text>
+<text x="400" y="212" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="start">by-products, from the updated columns</text>
+<text x="410" y="236" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="start">· A·x, yᴴ·A</text>
+<text x="650" y="236" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">Hessenberg, bidiagonal (≈ GEMVER)</text>
+<text x="410" y="258" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="start">· symmetric A·x from a triangle</text>
+<text x="650" y="258" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">tridiagonal</text>
+<text x="410" y="280" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="start">· column-norm downdate</text>
+<text x="650" y="280" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">column-pivoted QR</text>
+<text x="410" y="302" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="start">· |a| max per column  ★</text>
+<text x="650" y="302" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">LU leaf (partial pivoting)</text>
+<text x="410" y="324" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="start">· |a| max over A  ★</text>
+<text x="650" y="324" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#4A4844" text-anchor="start">full-pivoting LU, Bunch–Kaufman</text>
+<text x="400" y="360" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">★: index of the first maximum (tie rule is part of the contract)</text>
+<rect x="24" y="409" width="14" height="14" rx="2" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="44" y="420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">read only</text>
+<rect x="117.4" y="409" width="14" height="14" rx="2" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="137.4" y="420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">written</text>
+<rect x="197.6" y="409" width="14" height="14" rx="2" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="217.6" y="420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="start">computed in the same pass</text>
+</svg>
