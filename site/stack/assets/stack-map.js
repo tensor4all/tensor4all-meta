@@ -23,8 +23,7 @@
       { t: "tlinalg-rs", d: "batched SVD, QR, eigh, LU", href: GH + "tlinalg-rs" } ] },
     { id: "found", kind: "backend", label: "Foundation", sub: "views, dense linalg", boxes: [
       { t: "strided-rs", d: "strided views", href: GH + "strided-rs" },
-      { t: "colmat-rs", d: "linalg, from faer", href: GH + "colmat-rs", star: true },
-      { t: "BLAS, LAPACK", d: "vendor, optional", href: null } ] },
+      { t: "colmat-rs", d: "linalg, from faer", href: GH + "colmat-rs", star: true } ] },
     // wide: the band runs under hataori too, because every CPU thread in the
     // stack, and every thread a hataori lane computes on, comes from threadteam.
     { id: "threads", kind: "backend", label: "Thread substrate", sub: "under everything", wide: true, boxes: [
