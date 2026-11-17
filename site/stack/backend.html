@@ -71,7 +71,7 @@
       <tr class="flagship"><td><span class="star">&#9733;</span> <strong>tenferro-rs</strong> (host)</td><td>tensor types, allocation, dtype dispatch, device placement, AD rules, graph tracing, gauge conventions, error wrapping; the engine that carries a thread pool, plans and buffers</td><td>the inner loops of contraction and factorization</td></tr>
       <tr><td><strong>cpueinsum</strong></td><td>executing an N-ary einsum in a given order: which labels each intermediate keeps, one reusable scratch buffer</td><td>choosing the order, parsing <code>"ij,jk-&gt;ik"</code>, GPUs</td></tr>
       <tr><td><strong>tcontract</strong></td><td>one binary contraction over arbitrary strides: planning, packing, microkernels, threading inside the call</td><td>N-ary einsum, ordering, linear algebra, AD</td></tr>
-      <tr><td><strong>tlinalg</strong>, <strong>tlinalg-blas</strong></td><td>batched factorizations and solves, the batch loop and its lane fan-out</td><td>tensors, allocation policy, dtype and device dispatch</td></tr>
+      <tr><td><strong>tlinalg</strong></td><td>batched factorizations and solves, the batch loop and its lane fan-out</td><td>tensors, allocation policy, dtype and device dispatch</td></tr>
       <tr><td><strong>strided-rs</strong></td><td>the strided view types and traits everyone exchanges; permutation and elementwise kernels</td><td>everything above</td></tr>
       <tr><td><strong>threadteam</strong></td><td>the CPU threads: the pool, the execution token handed down, and the cost model that sizes each parallel region</td><td>what runs on the threads</td></tr>
       <tr class="flagship"><td><span class="star">&#9733;</span> <strong>colmat</strong></td><td>dense and sparse matrix kernels: GEMM, factorizations, eigensolvers</td><td>batching, tensors</td></tr>
@@ -92,7 +92,7 @@
     <li><strong>Tensor types.</strong> <code>TypedTensor&lt;T&gt;</code> and dynamic <code>Tensor</code> for direct compute; <code>EagerTensor</code> adds PyTorch-style <code>backward()</code>; <code>TracedTensor</code> records a graph (in <a href="https://github.com/tensor4all/computegraph-rs">computegraph</a>) for JAX-style VJP, JVP and composed higher-order derivatives such as Hessian vector products.</li>
     <li><strong>One engine.</strong> Every operation takes an explicit engine. A <code>CpuEngine</code> bundles a threadteam pool with the plan cache and the buffer pool, so build it once and reuse it: a new engine per call throws its buffers away. <code>CpuEngine::serial()</code> needs no pool at all.</li>
     <li><strong>Conventions.</strong> Storage is column-major, matching LAPACK, Fortran and Julia. There is no facade crate: depend on <code>tenferro-runtime</code>, a backend such as <code>tenferro-cpu</code>, and the operation crates you use (<code>tenferro-ad</code> for traced AD).</li>
-    <li><strong>Providers.</strong> On the CPU, <code>tenferro-einsum</code> and <code>tenferro-cpu</code> execute through cpueinsum (and so tcontract), and <code>tenferro-linalg</code> adapts tlinalg and tlinalg-blas to an interface tenferro defines. The providers do not depend on tenferro.</li>
+    <li><strong>Providers.</strong> On the CPU, <code>tenferro-einsum</code> and <code>tenferro-cpu</code> execute through cpueinsum (and so tcontract), and <code>tenferro-linalg</code> adapts tlinalg to an interface tenferro defines. The providers do not depend on tenferro.</li>
   </ul>
   <p class="codecap">A pooled engine and an operation on it, abridged from the tenferro examples and README:</p>
   <pre><code>use tenferro_cpu::{CpuEngine, Pool};
@@ -116,7 +116,6 @@ let mut scratch = Scratch::new();
 // ... build StridedViews over your buffers, then:
 plan.execute_into(&amp;mut Exec::serial(), &amp;views, &amp;mut out, &amp;mut scratch)?;</code></pre>
   <p>Threading is explicit: build a <code>threadteam::Pool</code> once, wrap it with <code>Pool::borrow(&amp;pool)</code>, and mint <code>Exec::new(&amp;pool, budget)?</code> for each call. For workloads made of many small heterogeneous contractions, <code>BinaryPlan</code> and <code>GroupedPlan</code> prepare jobs once and run a whole group under one scheduler.</p>
-  <p>cpueinsum links no BLAS. The separate <code>cpueinsum-blas</code> crate is a step backend that runs binary steps on a vendor GEMM. It depends on <code>cblas-sys</code> only, so the final binary chooses the BLAS provider.</p>
 
   <h2 id="tcontract">tcontract: binary contraction without transposes</h2>
   <p><a href="https://github.com/tensor4all/tcontract-rs">tcontract</a> computes</p>
@@ -178,18 +177,7 @@ plan.execute_into(&amp;mut Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;
     </tbody>
   </table></div>
 
-  <h3>Two sibling providers</h3>
-  <div class="cards">
-    <div class="card">
-      <h3><code>tlinalg</code></h3>
-      <p>Pure Rust, on <a href="https://github.com/tensor4all/colmat-rs">colmat</a>. Takes the same execution token as tcontract (<code>tcontract_exec::Exec</code>, built on threadteam); the library decides between fanning out over batch items (for small matrices) and letting faer parallelize inside one item, and derives faer's parallelism for each item from the token.</p>
-    </div>
-    <div class="card">
-      <h3><code>tlinalg-blas</code></h3>
-      <p>The same batched signatures on LAPACK and BLAS. The batch loop is serial and the vendor library owns its threading. Scratch comes from a host workspace queried once per call and reused for every item. The vendor is chosen by the final binary.</p>
-    </div>
-  </div>
-  <p>Neither provider depends on the other, and they share no trait crate. tenferro defines the interface it needs and adapts each provider to it. A parity suite runs every family through both providers for all four element types and several batch shapes (including transposed and broadcast batch strides) and compares the results in a gauge-aware way.</p>
+  <p><code>tlinalg</code> is pure Rust, on <a href="https://github.com/tensor4all/colmat-rs">colmat</a>. It takes the same execution token as tcontract (<code>tcontract_exec::Exec</code>, built on threadteam); the library decides between fanning out over batch items (for small matrices) and letting colmat parallelize inside one item, and derives colmat's parallelism for each item from the token. tlinalg does not depend on tenferro: tenferro defines the interface it needs and adapts tlinalg to it.</p>
 
   <h2 id="strided">strided-rs: the shared vocabulary</h2>
   <p><a href="https://github.com/tensor4all/strided-rs">strided-rs</a> defines <code>StridedView</code>, <code>StridedViewMut</code> and the raw descriptors that every CPU layer passes across crate boundaries, plus fast permutation and elementwise kernels. Arbitrary strides are allowed, including negative and zero (broadcast).</p>
@@ -219,7 +207,7 @@ plan.execute_into(&amp;mut Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;
   <h2 id="execution">Execution contexts and hataori</h2>
   <p>Each layer takes its own explicit context, and they all carry the same threadteam pool:</p>
   <ul>
-    <li>tcontract, cpueinsum and tlinalg take an <code>Exec</code> token; tlinalg-blas leaves threading to the vendor.</li>
+    <li>tcontract, cpueinsum and tlinalg take an <code>Exec</code> token.</li>
     <li>tenferro carries the pool inside its <code>CpuEngine</code>, and tensor4all-rs wraps that in a <code>CpuExecutionContext</code>.</li>
   </ul>
   <p>Above a single process, something has to split the machine. That is <a href="https://tensor4all.org/hataori-rs/">hataori</a>: <code>map</code> and a dynamically scheduled <code>pmap</code> over serial, Rayon, MPI and hybrid execution, inspired by Distributed.jl. hataori splits the machine into ranks and thread domains and lends each task its share. MPI can be linked at build time or loaded at run time (through <a href="https://github.com/tensor4all/rsmpi-rt">rsmpi-rt</a>), so a Rust extension can share the MPI library of a Julia or Python host.</p>
@@ -244,7 +232,7 @@ plan.execute_into(&amp;mut Exec::serial(), 1.0, &amp;av, &amp;bv, &amp;mut dv)?;
       <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a></td><td>tenferro against PyTorch and JAX on CPU and GPU, per workload class</td><td><a href="https://tensor4all.org/tenferro-benchmark/">site</a></td></tr>
       <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/colmat-benchmark">colmat-benchmark</a></td><td>colmat against upstream faer, MKL and OpenBLAS</td><td><a href="https://tensor4all.org/colmat-benchmark/">site</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/tcontract-benchmark">tcontract-benchmark</a></td><td>binary contractions against TBLIS, per shape</td><td><a href="https://tensor4all.org/tcontract-benchmark/">site</a></td></tr>
-      <tr><td><a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a></td><td>batched factorizations, faer provider against vendor LAPACK</td><td><a href="https://tensor4all.org/tlinalg-benchmark/">site</a></td></tr>
+      <tr><td><a href="https://github.com/tensor4all/tlinalg-benchmark">tlinalg-benchmark</a></td><td>batched factorizations, tlinalg against vendor LAPACK</td><td><a href="https://tensor4all.org/tlinalg-benchmark/">site</a></td></tr>
       <tr><td><a href="https://github.com/tensor4all/cpueinsum-benchmark">cpueinsum-benchmark</a></td><td>N-ary einsum over a standard corpus of einsum instances</td><td><a href="https://tensor4all.org/cpueinsum-benchmark/">site</a></td></tr>
       <tr class="flagship"><td><span class="star">&#9733;</span> <a href="https://github.com/tensor4all/tensor4all-benchmark">tensor4all-benchmark</a></td><td>tensor network level algorithms: QTT elementwise products, MPO MPO contraction</td><td><a href="https://github.com/tensor4all/tensor4all-benchmark/blob/main/result/INDEX.md">results</a></td></tr>
     </tbody>
