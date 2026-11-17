@@ -53,6 +53,7 @@
     <p>A Rust-native tensor runtime with opt-in automatic differentiation: typed and dynamic dense tensors, einsum, linear algebra and FFT; eager AD with PyTorch-style <code>backward()</code> and traced AD with JAX-style VJP, JVP and Hessian vector products; CPU and CUDA, with an experimental XLA path. It is benchmarked against PyTorch and JAX, and every library below this point exists to make it fast.</p>
     <div class="links">
       <a href="https://tensor4all.org/tenferro-rs/">Documentation &rarr;</a>
+      <a href="https://github.com/tensor4all/tenferro-examples">Examples &rarr;</a>
       <a href="https://tensor4all.org/tenferro-benchmark/">Benchmarks &rarr;</a>
       <a href="https://github.com/tensor4all/tenferro-rs">Repository &rarr;</a>
     </div>
@@ -99,7 +100,7 @@
 
 let mut engine = CpuEngine::new(Pool::builder().threads(4).build()?);
 let product = a.matmul(&amp;b, &amp;mut engine)?;</code></pre>
-  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts, and <a href="https://tensor4all.org/tenferro-benchmark/">tenferro-benchmark</a> compares it with PyTorch and JAX workload by workload.</p>
+  <p>The <a href="https://tensor4all.org/tenferro-rs/">tenferro documentation</a> has the quickstarts, <a href="https://github.com/tensor4all/tenferro-examples">tenferro-examples</a> has runnable end-to-end examples (a physics-informed neural network, a neural ODE, a DeepONet and a neural-network quantum state) built against the released crates, and <a href="https://tensor4all.org/tenferro-benchmark/">tenferro-benchmark</a> compares it with PyTorch and JAX workload by workload.</p>
 
   <h2 id="cpueinsum">cpueinsum: N-ary einsum in a given order</h2>
   <p><a href="https://github.com/tensor4all/cpueinsum-rs">cpueinsum</a> runs an einsum over integer labels with a contraction order supplied by the caller in SSA form. For each binary step it plans a tcontract call. On top it decides which labels every intermediate must keep (those in the output or needed later; everything else is summed as early as possible) and places all intermediates in one reusable scratch buffer.</p>
