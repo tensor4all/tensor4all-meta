@@ -2,7 +2,7 @@
 
 Status: Design under review (2026-11). Scope: [colmat](https://github.com/tensor4all/colmat-rs), the dense linear algebra library of the stack. The first target is double-double support with generic fallbacks, a per-scalar cost model, and caller-owned threads and workspace. Review the contracts and resolve the [open questions for the first design](#11-open-questions) here before implementing the redesign. Batched operations are deferred (section 9). See [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) for the stack's ownership model.
 
-The design discussion is in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171). This document records what already exists elsewhere, in papers and in code, so that colmat reuses it and does not reinvent it.
+The design discussion is in [colmat-next-rs#2](https://github.com/tensor4all/colmat-next-rs/issues/2). This document records what already exists elsewhere, in papers and in code, so that colmat reuses it and does not reinvent it.
 
 ## 1. Why
 
@@ -136,7 +136,7 @@ Prior work:
 * **sparse-ir-rs [`ddgemm`](https://github.com/SpM-lab/sparse-ir-rs/blob/2ea2f23e10cdf1a936e969ac76615fd699953d61/sparse-ir-basis/src/ddgemm.rs#L27-L75)** splits the entire left operand into high and low arrays, reads the right operand by column, and allocates its output and column slice table. Its accumulation is a useful reference for colmat's packed kernel.
 * **GPU double-double BLAS** stores interleaved `double2` (Mukunoki and Takahashi, PARA 2010).
 
-Storage agreed in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171#issuecomment-6848850641). The following load, store and packing contracts are for the redesign.
+Storage agreed in [colmat-next-rs#2](https://github.com/tensor4all/colmat-next-rs/issues/2#issuecomment-6848850641). The following load, store and packing contracts are for the redesign.
 
 * **Storage.** Each stored matrix element is one `T`, so a double-double matrix is AoS. Views describe the elements through strides. A raw word access path needs an explicit layout guarantee from the scalar type. A transparent wrapper around `xprec::Df64` has the same layout as its inner `Compensated`, whose Rust representation leaves field order unspecified. The initial design can load through `hi()` and `lo()` and store through a constructor with the normalization precondition satisfied.
 * **SIMD hooks.** The converting interface reads and writes scalar elements, using slices or element pointers with element-based masks. It deinterleaves on load and interleaves on store with fixed-size temporary storage. Only active elements may be accessed. The current raw hooks and their register-pointer interface are backend details.
@@ -236,15 +236,15 @@ Still open (recommendation in brackets):
 3. Whether the LLT/LDLT rank updates belong to P6 or P4 [P6, as a column recurrence; the kernels have not been read in detail].
 4. Whether P10 is a primitive or a composition.
 
-### Direction (colmat-rs#171)
+### Direction (colmat-next-rs#2)
 
 * **Keep the generic implementations.** Factorisations can compose the kinds above, including fused sweeps and team splits, for a scalar that supplies only arithmetic and precision.
 * **Expose estimates where the caller decides team width.** An estimate describes the selected path's serial work and sections. Register-level operations and sequential leaf kernels can run within a region that already has a team and an estimate.
 * **Let a selected kernel change the accumulation algorithm.** Packed Dot2 and an Ozaki-type split have different preparation, scratch requirements and error behaviour. Compare each against the generic operation's contract.
 
-## 7a. Trait boundaries and API sketch (from colmat-rs#171)
+## 7a. Trait boundaries and API sketch (from colmat-next-rs#2)
 
-The [original issue](https://github.com/tensor4all/colmat-rs/issues/171) sketches a single `Kernels<T>` trait for the coarse operations. [Markus Wallerberger's review](https://github.com/tensor4all/colmat-rs/issues/171#issuecomment-6848850641) proposes independent hooks based on the prologues and dispatch paths already in BLAS/faer. He uses dot as an example: a general strided implementation with optional contiguous and alignment-specific paths. The public signatures, selection mechanism and crate boundaries are open for review.
+The [original issue](https://github.com/tensor4all/colmat-next-rs/issues/2) sketches a single `Kernels<T>` trait for the coarse operations. [Markus Wallerberger's review](https://github.com/tensor4all/colmat-next-rs/issues/2#issuecomment-6848850641) proposes independent hooks based on the prologues and dispatch paths already in BLAS/faer. He uses dot as an example: a general strided implementation with optional contiguous and alignment-specific paths. The public signatures, selection mechanism and crate boundaries are open for review.
 
 ### Existing dispatch paths
 
@@ -406,7 +406,7 @@ Deferred on 2026-11-13: extended precision and the redefinition of the primitive
 
 [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) supports regular batches in one call and leaves irregular batches to the caller. A batched caller such as tlinalg splits the token: every slot goes to the batch with `Par::Seq` items when the batch is at least the budget; otherwise the token is forked over the items.
 
-### A possible direction, for later (not discussed in colmat-rs#171)
+### A possible direction, for later (not discussed in colmat-next-rs#2)
 
 * **One batch descriptor in colmat.** Either a uniform shape plus a stride, or a list of groups. Parameters are broadcast, per group or per item, as with oneMKL's spans.
 * **Per-item results.** `Result` per item, or a single flag, chosen by the caller: the `info` modes in Rust form. Singular or indefinite items are expected in batched LU and Cholesky.
@@ -440,7 +440,7 @@ Batched API shape remains in section 9. Malleable teams remain a separate design
 
 ### Design review before implementation
 
-Review the proposed boundaries with Markus and the colmat maintainers in [colmat-rs#171](https://github.com/tensor4all/colmat-rs/issues/171). Record the agreed answers in this document before changing the implementation. Use dot and GEMM to walk through a scalar-only type, a type that specialises one kernel, and a nested factorisation that uses both generic and specialised paths. Include a strided view and a call with an exact-size workspace in the walkthrough.
+Review the proposed boundaries with Markus and the colmat maintainers in [colmat-next-rs#2](https://github.com/tensor4all/colmat-next-rs/issues/2). Record the agreed answers in this document before changing the implementation. Use dot and GEMM to walk through a scalar-only type, a type that specialises one kernel, and a nested factorisation that uses both generic and specialised paths. Include a strided view and a call with an exact-size workspace in the walkthrough.
 
 The implementation plan should include the following acceptance checks:
 
