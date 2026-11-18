@@ -1,11 +1,11 @@
-# tenferro logo (proposal)
+# tenferro logo
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="svg/tenferro-wordmark-dark.svg">
   <img alt="tenferro" src="svg/tenferro-wordmark.svg" height="72">
 </picture>
 
-Status: proposal, not yet adopted.
+Status: adopted (2026-11).
 
 ## Concept
 

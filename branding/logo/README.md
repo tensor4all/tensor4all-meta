@@ -1,11 +1,11 @@
-# tensor4all logo (proposal)
+# tensor4all logo
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="svg/tensor4all-wordmark-dark.svg">
   <img alt="tensor4all" src="svg/tensor4all-wordmark.svg" height="72">
 </picture>
 
-Status: proposal, not yet adopted.
+Status: adopted (2026-11).
 
 ## Concept
 

@@ -1,11 +1,11 @@
-# threadteam logo (proposal)
+# threadteam logo
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="svg/threadteam-wordmark-dark.svg">
   <img alt="threadteam" src="svg/threadteam-wordmark.svg" height="72">
 </picture>
 
-Status: proposal, not yet adopted.
+Status: adopted (2026-11).
 
 ## Concept
 

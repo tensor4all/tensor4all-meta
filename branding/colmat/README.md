@@ -1,11 +1,11 @@
-# colmat logo (proposal)
+# colmat logo
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="svg/colmat-wordmark-dark.svg">
   <img alt="colmat" src="svg/colmat-wordmark.svg" height="72">
 </picture>
 
-Status: proposal, not yet adopted. colmat is the new name of the tensor4all faer fork, published until now as `t4a-faer`.
+Status: adopted (2026-11). colmat is the new name of the tensor4all faer fork, published until now as `t4a-faer`.
 
 ## Concept
 

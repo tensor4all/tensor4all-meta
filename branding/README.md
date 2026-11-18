@@ -1,6 +1,6 @@
 # Logos
 
-Logos of tensor4all and its libraries. All are proposals. They are shown, with download links, at <https://tensor4all.org/tensor4all-meta/logos/>.
+Logos of tensor4all and its libraries. All are adopted. They are shown, with download links, at <https://tensor4all.org/tensor4all-meta/logos/>.
 
 | Folder | Project |
 | --- | --- |
