@@ -35,7 +35,7 @@ Strengths: explicit MPI collective contracts, preflight checks before any payloa
 2. Update the four references to the old URL: [tensor4all/pencil-rs#152](https://github.com/tensor4all/pencil-rs/pull/152).
 3. Apply tensor4all-agent-rules and the org CI conventions.
 4. The scheduled audit workflow (`.github/workflows/audit.yml`) runs a third-party agent from npm and sends code to DeepSeek models through the OpenCode Go and Command Code relays, on personal API keys. Whether to keep, move or stop it is the maintainer's call; if kept, it should follow the org's AI rules (provenance on filed issues, reviewed providers).
-5. **Unify on column-major** (stage 0 in section 6). `pencil-array` is row-major, while `pencil-fft`'s `LocalC2cNdPlan` (added for irflex-rs, issue #35) is column-major. The git history shows row-major was a premise of the first design spec (2026-09-11) with no stated reason. tenferro, colmat, the Julia packages, PencilArrays.jl and irflex-rs are column-major, and every later stage assumes it.
+5. **Unify on column-major** (stage 0 in section 6). `pencil-array` is row-major, while `pencil-fft`'s `LocalC2cNdPlan` (added for irflex-rs, pencil-rs#35) is column-major. The git history shows row-major was a premise of the first design spec (2026-09-11) with no stated reason. tenferro, colmat, the Julia packages, PencilArrays.jl and irflex-rs are column-major, and every later stage assumes it.
 
 ## 4. Division of responsibility
 
@@ -67,9 +67,9 @@ pencil-fft's local C2C, R2C, C2R and `LocalC2cNdPlan` are deleted in favour of t
 
 What tenferro-fft lacks moves into it from pencil-rs, as tenferro-rs pull requests under tenferro's review rules:
 
-1. **R2R (DCT/DST I-IV, eight kinds) and DHT** as new `FftOperation` variants, with pencil's implementation and its FFTW reference tests. They are linear, with adjoints expressible by other R2R kinds, so AD rules fit the existing pattern. cuFFT has no DCT; the CUDA backend reports them as unsupported until a kernel exists.
-2. **An FFTW backend**: `pencil-fftw` becomes an `fftw` feature of tenferro-fft, loaded at run time, with its GPL notice. Every tenferro user gains it.
-3. **Allocation-free execution**: `_into` variants writing caller-provided outputs, and a guarantee of no allocation on repeated calls with a warmed cache. pencil-rs tests this today; the same tests become tenferro-fft acceptance tests.
+1. **R2R (DCT/DST I-IV, eight kinds) and DHT** ([tenferro-rs#2651](https://github.com/tensor4all/tenferro-rs/issues/2651)) as new `FftOperation` variants, with pencil's implementation and its FFTW reference tests. They are linear, with adjoints expressible by other R2R kinds, so AD rules fit the existing pattern. cuFFT has no DCT; the CUDA backend reports them as unsupported until a kernel exists.
+2. **An FFTW backend** ([tenferro-rs#2652](https://github.com/tensor4all/tenferro-rs/issues/2652)): `pencil-fftw` becomes an `fftw` feature of tenferro-fft, loaded at run time, with its GPL notice. Every tenferro user gains it.
+3. **Allocation-free execution** ([tenferro-rs#2653](https://github.com/tensor4all/tenferro-rs/issues/2653)): `_into` variants writing caller-provided outputs, and a guarantee of no allocation on repeated calls with a warmed cache. pencil-rs tests this today; the same tests become tenferro-fft acceptance tests. The FFT registry entries currently declare no `_into` modes, and the CPU provider gathers non-compact operands into a compact buffer first, which costs a full copy per distributed stage.
 
 ### 5.3 Distributed FFTs
 
@@ -82,9 +82,9 @@ The distributed FFT (about 17k lines) is rebuilt rather than ported:
 ### 5.4 I/O and MPI
 
 * pencil-io moves from `hdf5-metno` to `hdf5-rt`, which tenferro-hdf5 uses.
-* The generic HDF5 parts move to **tenferro-hdf5**: tensor ↔ dataset, dtype and complex handling, the attribute schema, chunking and filters, and **hyperslab reads and writes**. With hyperslabs there, parallel HDF5 in pencil-io reduces to each rank writing its own range in collective mode.
+* The generic HDF5 parts move to **tenferro-hdf5**: tensor ↔ dataset, dtype and complex handling, the attribute schema, chunking and filters, and **hyperslab reads and writes** ([tenferro-rs#2654](https://github.com/tensor4all/tenferro-rs/issues/2654), a design discussion because tenferro-rs#2611 kept parallel HDF5 and partitioning out of tenferro-hdf5's v1 scope). With hyperslabs there, parallel HDF5 in pencil-io reduces to each rank writing its own range in collective mode.
 * pencil-io keeps raw MPI-IO, the coordination of parallel HDF5 and the distributed catalog.
-* pencil-rs uses `rsmpi-rt`, as `tenferro-mpi` does. Generic collectives on tensor payloads (alltoallv, allreduce, gather) are added to **tenferro-mpi**, which today offers only `send`, `recv` and `recv_into`. pencil-specific descriptor agreement stays in pencil-rs.
+* pencil-rs uses `rsmpi-rt`, as `tenferro-mpi` does. Generic collectives on tensor payloads (alltoallv, allreduce, gather) are added to **tenferro-mpi**, which today offers only `send`, `recv` and `recv_into` ([tenferro-rs#2655](https://github.com/tensor4all/tenferro-rs/issues/2655), a design discussion because tenferro-rs#2612 listed global tensor collectives as out of scope; the proposal limits them to per-rank payloads with explicit counts). pencil-specific descriptor agreement stays in pencil-rs.
 
 ### 5.5 Expected size
 
@@ -107,10 +107,10 @@ tenferro grows by an estimated 5-7k lines (R2R, DHT, FFTW, hyperslabs, collectiv
 | --- | --- | --- |
 | 0 | Unify pencil-rs on column-major (0.x breaking release); irflex-rs follows | existing tests and FFTW reference checks pass |
 | 1 | Depend on `tenferro-tensor-core`; move to `rsmpi-rt` and `hdf5-rt` | no behaviour change |
-| 2 | Extend tenferro-fft: R2R, DHT, FFTW backend, `_into` and allocation-free execution | pencil-rs's FFTW reference tests and allocation tests pass in tenferro-fft |
+| 2 | Extend tenferro-fft: R2R, DHT, FFTW backend, `_into` and allocation-free execution (tenferro-rs#2651, tenferro-rs#2652, tenferro-rs#2653) | pencil-rs's FFTW reference tests and allocation tests pass in tenferro-fft |
 | 3 | Local blocks become `TypedTensor`; local FFTs call tenferro-fft; pencil's local FFT code is deleted | all pencil-rs tests pass; local FFT time no worse than today |
 | 4 | Rebuild the distributed FFT as one mixed engine with one entry point | benchmarks on campaign-toolkit (`pencil-benchmark`) show no regression against stage 3 |
-| 5 | tenferro-mpi collectives, tenferro-hdf5 hyperslabs, AD rules, GPU | per feature |
+| 5 | tenferro-mpi collectives (tenferro-rs#2655), tenferro-hdf5 hyperslabs (tenferro-rs#2654), AD rules, GPU | per feature |
 
 Stage 0 comes first because every later stage assumes column-major layouts. Stages 2 and 4 are the large ones and are shared between the pencil-rs maintainer and the tenferro maintainers.
 
