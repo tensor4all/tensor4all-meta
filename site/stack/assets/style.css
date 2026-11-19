@@ -172,6 +172,12 @@ footer .inner { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; }
 .sm-band { fill: var(--surface-2); stroke: var(--line); }
 .sm-band.user { fill: var(--accent-soft); }
 .sm-band.backend { fill: var(--warm-soft); }
+.sm-band.neutral { fill: var(--surface-2); }
+.sm-group { fill: none; stroke-width: 1.5; stroke-dasharray: 6 5; }
+.sm-group.user { stroke: var(--accent); }
+.sm-group.backend { stroke: var(--warm); }
+.sm-group.neutral { stroke: var(--muted); }
+.sm-grouplabel { font: 600 13px var(--sans); fill: var(--text); }
 .sm-label { fill: var(--text); font: 700 14px var(--sans); }
 .sm-sub { fill: var(--muted); font: 12px var(--sans); }
 .sm-box { fill: var(--surface); stroke: var(--line); }
