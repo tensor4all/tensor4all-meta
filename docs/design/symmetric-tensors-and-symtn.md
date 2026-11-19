@@ -54,8 +54,25 @@ Decision:
 - **Real distributions.** The fit uses job lists captured from symtn running DMRG/TEBD-type steps (U(1) and SU(2), several bond dimensions), not uniform synthetic block sets.
 - **Per-job route gaps closed in cpueinsum.** Strided runs (same-shape, constant-stride jobs as one batched child, as symtn's `strided_batch_runs` does) and child plans supplied by the caller's cache. cpueinsum itself still owns no cross-call cache (cpueinsum-rs#51); the owner is the caller, such as symtn.
 
+**Job format: NVIDIA's grouped-GEMM model.** The job list follows cuBLAS `cublas<t>gemmGroupedBatched`/`cublasGemmGroupedBatchedEx`, which CUTLASS's grouped GEMM shares:
+- per job, `m`, `n`, `k` and `lda`, `ldb`, `ldc`;
+- per call, the ops N/T/C, `alpha` and `beta`;
+- `C ← alpha·op(A)·op(B) + beta·C`.
+
+The one deliberate difference is that operands are element offsets into one base buffer per operand, not pointer arrays. That keeps the CPU API safe, and a GPU backend builds its pointer arrays once at prepare time. The descriptor lives in a dependency-free crate, like `t4a-cost`, so that CPU and GPU backends share it. It replaces `cpueinsum::GroupedGemmJob`'s compact-only, Identity/Conjugate form, and its leading dimensions and transposition close symtn's transposition gap. We follow cuBLAS for the interface, the shipped NVIDIA library. CUTLASS is a template library without a stable ABI; it is where the *fused* route's technique comes from (a persistent kernel claiming tiles across all problems), not an interface to match. Unverified: the cuBLAS documentation lists only `S` and `D` for `cublas<t>gemmGroupedBatched`, and complex support of the `Ex` form was not confirmed.
+
+**cuTENSOR block-sparse contraction.** NVIDIA also ships a dedicated block-sparse contraction: `cutensorCreateBlockSparseTensorDescriptor`, `cutensorCreateBlockSparseContraction`, `cutensorBlockSparseContract`. It was added as experimental in cuTENSOR 2.3.0 and is still beta in 2.7.0. Its model works one level above grouped GEMM:
+- per mode, a list of section extents, and the segmentation of a shared mode must be identical in every tensor;
+- a list of non-zero block coordinates, with one device pointer and optional strides per block (column-major when none are given);
+- scalar `alpha` and `beta`;
+- C and D with identical patterns, only that pattern computed;
+- f32, f64, c32 and c64, with identity ops only.
+
+The model is sector-free, as decision 3 requires: a section is a (sector, degeneracy) range, and abelian symmetric tensors map onto it directly. Non-abelian contractions need recoupling first, so their GEMMs on reduced data stay at the grouped-GEMM level. These facts come from NVIDIA's documentation and were partly read from a summary of the function reference rather than verbatim; check them against `cutensor.h` before relying on them. Whether tensor4all should also offer a block-sparse contraction interface in this model, with a CPU implementation that lowers to the grouped-GEMM routes and a GPU implementation that calls cuTENSOR, is open question 5 (§7).
+
 | Work | Issue |
 | --- | --- |
+| Device-neutral job descriptor (cuBLAS/CUTLASS model) | [tensor4all/tcontract-rs#209](https://github.com/tensor4all/tcontract-rs/issues/209) |
 | Tracking: routes and fitted Auto selection in `GroupedPlan` | [tensor4all/cpueinsum-rs#80](https://github.com/tensor4all/cpueinsum-rs/issues/80) |
 | Fused executor over a heterogeneous job list | [tensor4all/tcontract-rs#208](https://github.com/tensor4all/tcontract-rs/issues/208) |
 | Job-trace corpus from symtn workloads and per-route timings | [tensor4all/cpueinsum-benchmark#18](https://github.com/tensor4all/cpueinsum-benchmark/issues/18) |
@@ -129,3 +146,4 @@ symtn's source cites eight tenferro-rs issues. All are closed. Every fix except 
 2. The generic job API: how group labels, weights and tie-break order for truncation are expressed without a sector type.
 3. Whether the extension-op AD path (section 4) carries the irregular-batch GEMM without per-call overhead that would hurt many small blocks.
 4. The rest of tensor4all-rs's `docs/design/t4a_unified_tensor_backend.md` (the `t4a-*` crate plan) predates the tenferro-based backend and is out of date beyond the block-sparse part.
+5. Whether to add a block-sparse contraction interface following cuTENSOR's block-sparse model (§3.1) for the abelian path. That would change §3's "no symmetry-free block-sparse contraction" from a fact about symtn into a gap tensor4all fills. It needs a decision on the API's stability (cuTENSOR's is beta) and on who owns the CPU lowering.
