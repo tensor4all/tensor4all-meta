@@ -1,15 +1,15 @@
 # Symmetric tensors: symtn, tenferro and tensor4all-rs
 
-**Status:** Decision record (2026-11-19).
+**Status:** Decision record (2026-11-19; §3.1 added 2026-11-20).
 **Scope:** [symtn-rs](https://github.com/Ryo-wtnb11/symtn-rs) (downstream, outside the org), [tenferro-rs](https://github.com/tensor4all/tenferro-rs) and the crates around it (`cpueinsum`, `tcontract`, `tlinalg`, strided-rs), [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs), and lessons from the [ITensor](https://github.com/ITensor) rewrite.
-**Checked against:** symtn-rs `main` `a01b11b` (2026-11-17, pins tenferro 0.11.0); tenferro-rs `main` `d48982d3` (2026-11-19, release 0.12.0); ITensor GradedArrays.jl `eceb349`, BlockSparseArrays.jl `d5ff336`, TensorAlgebra.jl `f25bff9`, ITensorBase.jl `bcc8f21`, ITensorActions `f809c30`. Findings come from reading code; nothing was built or benchmarked.
+**Checked against:** symtn-rs `main` `a01b11b` (2026-11-17, pins tenferro 0.11.0); tenferro-rs `main` `d48982d3` (2026-11-19, release 0.12.0); ITensor GradedArrays.jl `eceb349`, BlockSparseArrays.jl `d5ff336`, TensorAlgebra.jl `f25bff9`, ITensorBase.jl `bcc8f21`, ITensorActions `f809c30`; for §3.1, cpueinsum-rs `main` `6d748544` (2026-11-17) and tcontract-rs `main` `92db81ea` (2026-11-19). Findings come from reading code; nothing was built or benchmarked.
 
 ## 1. Decision
 
 1. **tensor4all-rs does not implement quantum numbers.** No symmetry sectors, graded axes or block-sparse QN tensors. Symmetric tensors are left to symtn or other tensor network libraries. The `t4a-blocksparse` plan was removed from tensor4all-rs's design document in [tensor4all/tensor4all-rs#1402](https://github.com/tensor4all/tensor4all-rs/pull/1402).
 2. **symtn owns the representation of symmetry.** Sectors on axes, fusion trees and recoupling, the abelian fast path, and the split of a block into structure and reduced data all stay in symtn.
 3. **tensor4all provides symmetry-agnostic high-performance kernels.** Their API speaks only of flat buffers, offsets, strides, shapes, coefficients and plain integer group IDs; no sector type crosses it.
-4. **These kernels live outside the tenferro core.** The core already excludes irregular batches ([core boundary](./core-boundary-and-execution-ownership.md), "Irregular batches (different shapes per item, as with symmetry blocks) are out of scope for the core"), and grouped GEMM was removed from the core in [tensor4all/tenferro-rs#2198](https://github.com/tensor4all/tenferro-rs/issues/2198). The natural home is the `cpueinsum`/`tcontract` layer, where `cpueinsum::GroupedPlan` already lives, or a separate crate.
+4. **These kernels live outside the tenferro core.** The core already excludes irregular batches ([core boundary](./core-boundary-and-execution-ownership.md), "Irregular batches (different shapes per item, as with symmetry blocks) are out of scope for the core"), and grouped GEMM was removed from the core in [tensor4all/tenferro-rs#2198](https://github.com/tensor4all/tenferro-rs/issues/2198). The natural home is the `cpueinsum`/`tcontract` layer, where `cpueinsum::GroupedPlan` already lives, or a separate crate. For irregular-batch GEMM this is settled in §3.1: `cpueinsum::GroupedPlan` is the entry, with a fused executor in tcontract beneath it.
 5. **Payloads are dense tenferro tensors, so tenferro's AD applies directly** (section 4).
 
 The reason for a single owner: the ITensor rewrite ended up with three symmetric-tensor implementations (BlockSparseArrays.jl, GradedArrays.jl, FusionTensors.jl), duplicated interfaces to avoid dependencies between them, and finally delegated non-abelian recoupling to TensorKit (section 5). Two implementations inside one ecosystem are not maintainable.
@@ -30,7 +30,7 @@ symtn already separates a symmetry-free half from its symmetric compile layer. T
 | Candidate | symtn source | What must change |
 | --- | --- | --- |
 | Irregular-batch GEMM replay: offset/stride jobs, plan-time run partitions, `Rank2Gemm::matmul_rank2_batch` | `symtn-operations/src/fusion_replay/` (the module header says "nothing here consumes fusion rules") | It still imports `symtn_core` types (`BlockStructure`, `SectorId`, `CoupledSectorRegion`); replace the coupled `SectorId` with a generic group label |
-| Strided GEMM batch and the geometry-keyed GEMM plan cache | `symtn-dense/src/executor.rs` (`DenseGemmBatchJob`, `strided_batch_runs`), `symtn-dense/src/block_kernel/gemm.rs` (`Geometry`, `GemmPlans`, `gemm_batch_into`), CUDA `symtn-dense/src/cuda_adapter/gemm.rs` | Little; it is already dense-only |
+| Strided GEMM batch and the geometry-keyed GEMM plan cache | `symtn-dense/src/executor.rs` (`DenseGemmBatchJob`, `strided_batch_runs`), `symtn-dense/src/block_kernel/gemm.rs` (`Geometry`, `GemmPlans`, `gemm_batch_into`), CUDA `symtn-dense/src/cuda_adapter/gemm.rs` | No sector types, but the plan cache sits on `symtn_core::StructureCache` (row 6) and execution on the lane driver (row 5); `cpueinsum::GroupedPlan` already covers most of it. See §3.1 |
 | Batched per-block factorization | `symtn-dense/src/block_kernel/factor.rs` (one `tlinalg` call per block, spread over lanes) | Output contracts (leg roles, compact plans) stay in symtn |
 | Weighted truncation across blocks | `symtn-matrixalgebra/src/truncation.rs` (`WeightedSpectrum`, `select_truncation`) | Make the sector key and the tie-break order generic; weights arrive as plain `f64` per group |
 | Lane scheduler for independent block jobs | `symtn-dense/src/lanes/` (LPT placement with a cost model) | Decouple from `symtn_core` cache registration |
@@ -40,6 +40,29 @@ symtn already separates a symmetry-free half from its symmetric compile layer. T
 Not a candidate: symtn has no symmetry-free block-sparse contraction. `symtn-tensors/src/contract/structure.rs` rejects any operand with more than one block ("block-sparse contraction enumeration is not implemented yet"); the only block-sparse contraction is the fusion-tree path. What can move is the execution half, not a block-sparse tensor type.
 
 symtn's `docs/layering.md` still says "Tenferro owns dense tensors, GEMM and grouped GEMM"; after tenferro-rs#2198 that is out of date and should point at the kernel layer chosen in decision 4.
+
+### 3.1 Irregular-batch GEMM: two routes, chosen by measurement
+
+The first two rows of the table are not a port into an empty place. `cpueinsum::GroupedPlan` (`crates/cpueinsum/src/grouped.rs`) already takes the same job (`GroupedGemmJob`: three element offsets and `rows`, `contracted`, `cols` over shared flat buffers), checks every job and rejects overlapping outputs before writing, has an uninitialized-output entry, shares one child `Plan` per distinct geometry within a group (cpueinsum-rs#51), and schedules jobs on lanes under the caller's `Exec` batch policy. symtn's BLAS provider already uses its `cpueinsum-blas` counterpart; only symtn's native provider runs its own copy (`block_kernel/gemm.rs`).
+
+That route runs one tcontract `Plan` per job. Each job pays plan dispatch, packing setup and lane assignment, which dominates for small blocks: symtn's overhead ledger (`benchmarks/history/eager-overhead-ledger-2026-09-21.md`, an old revision, whole-call time rather than GEMM alone) has U(1) `contract` with 8 sectors of degeneracy 2 at 10.7 µs against TensorKit's 3.2 µs, narrowing to 1.18× at degeneracy 4. Large blocks reach GEMM peak either way. Embedding the blocks in one dense matrix is not an alternative: with n blocks of size d it does (n·d)³ instead of n·d³ work.
+
+Decision:
+
+- **Two routes behind one entry.** `GroupedPlan` is the entry. The *per-job* route is today's. The *fused* route puts every job's tiles into one work list that one packed-driver traversal claims dynamically, so the fixed cost is paid once per call. It belongs in tcontract's driver, next to its dynamic tile claim (`driver/dynamic.rs`); tcontract's `batch.rs` already names block-sparse items of different sizes as the case a dynamic claim over the batch is for.
+- **Selection by measurement, not by hand-set thresholds.** Which route wins depends on job count, the spread of block sizes and the width. `GroupedPlan` decides once, at prepare time, from per-call statistics and a cost model fitted offline per CPU class and dtype in the existing `t4a-cost` form. A forced route remains available, and a forced route the plan cannot serve is refused before any write.
+- **Real distributions.** The fit uses job lists captured from symtn running DMRG/TEBD-type steps (U(1) and SU(2), several bond dimensions), not uniform synthetic block sets.
+- **Per-job route gaps closed in cpueinsum.** Strided runs (same-shape, constant-stride jobs as one batched child, as symtn's `strided_batch_runs` does) and child plans supplied by the caller's cache. cpueinsum itself still owns no cross-call cache (cpueinsum-rs#51); the owner is the caller, such as symtn.
+
+| Work | Issue |
+| --- | --- |
+| Tracking: routes and fitted Auto selection in `GroupedPlan` | [tensor4all/cpueinsum-rs#80](https://github.com/tensor4all/cpueinsum-rs/issues/80) |
+| Fused executor over a heterogeneous job list | [tensor4all/tcontract-rs#208](https://github.com/tensor4all/tcontract-rs/issues/208) |
+| Job-trace corpus from symtn workloads and per-route timings | [tensor4all/cpueinsum-benchmark#18](https://github.com/tensor4all/cpueinsum-benchmark/issues/18) |
+| Strided-run route | [tensor4all/cpueinsum-rs#78](https://github.com/tensor4all/cpueinsum-rs/issues/78) |
+| Caller-supplied child plans | [tensor4all/cpueinsum-rs#79](https://github.com/tensor4all/cpueinsum-rs/issues/79) |
+
+Moving symtn's native provider onto `GroupedPlan` is symtn's decision. Two parity gaps stand in the way and are recorded in cpueinsum-rs#79: per-operand transposition (symtn expresses `Transpose`/`Adjoint` through strides; `GroupedPlan` jobs are compact column-major with Identity/Conjugate only) and symtn's work-weighted lane placement. The CUDA counterpart (`cuda_adapter/gemm.rs`) has no home yet; cpueinsum is CPU-only.
 
 ## 4. Dense payloads and AD
 
@@ -102,7 +125,7 @@ symtn's source cites eight tenferro-rs issues. All are closed. Every fix except 
 
 ## 7. Open questions
 
-1. Where the kernel crates live: inside the `cpueinsum`/`tcontract` repositories, or a new crate. Who maintains them, and whether symtn's code moves or is rewritten against its design.
+1. Where the kernel crates live: inside the `cpueinsum`/`tcontract` repositories, or a new crate (settled for irregular-batch GEMM in §3.1; open for the other rows of §3). Who maintains them, and whether symtn's code moves or is rewritten against its design.
 2. The generic job API: how group labels, weights and tie-break order for truncation are expressed without a sector type.
 3. Whether the extension-op AD path (section 4) carries the irregular-batch GEMM without per-call overhead that would hurt many small blocks.
 4. The rest of tensor4all-rs's `docs/design/t4a_unified_tensor_backend.md` (the `t4a-*` crate plan) predates the tenferro-based backend and is out of date beyond the block-sparse part.
