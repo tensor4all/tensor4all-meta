@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="430" viewBox="0 0 860 430">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="430" fill="#FCFCFA"/>
+<rect x="30" y="30" width="360" height="170" rx="10" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="210.0" y="90.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#6B4A12" text-anchor="middle">krylov  (the core)</text>
+<text x="210.0" y="111.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">iteration, orthogonalization,</text>
+<text x="210.0" y="129.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">restarts, convergence,</text>
+<text x="210.0" y="147.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">small projected problems (colmat)</text>
+<rect x="30" y="250" width="360" height="150" rx="10" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="210.0" y="300.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">Everywhere</text>
+<text x="210.0" y="321.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">any type that implements</text>
+<text x="210.0" y="339.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">Vector / Basis / LinearMap:</text>
+<text x="210.0" y="357.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">Vec&lt;f64&gt;, symtn tensors, ...</text>
+<rect x="470" y="30" width="360" height="370" rx="10" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="650.0" y="54" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="middle">tenferro-krylov  (only on tenferro)</text>
+<rect x="490" y="75" width="320" height="70" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="650.0" y="105.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">trait impls for tenferro tensors</text>
+<text x="650.0" y="126.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">CPU and GPU, one engine per call</text>
+<rect x="490" y="160" width="320" height="70" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="650.0" y="180.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">AD rules</text>
+<text x="650.0" y="201.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">implicit differentiation of</text>
+<text x="650.0" y="219.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">eigen- and linear solves</text>
+<rect x="490" y="245" width="320" height="64" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="650.0" y="272.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">batched and traced use</text>
+<text x="650.0" y="293.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">many small problems, compile once</text>
+<rect x="490" y="324" width="320" height="60" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="650.0" y="349.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">one dependency for the user</text>
+<text x="650.0" y="370.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">re-exports krylov</text>
+<path d="M 210 202 L 210 246" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 392 115 L 466 115" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="387.5" y="80.0" width="83.0" height="24" rx="4" fill="#FFFFFF"/>
+<text x="429" y="97.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">depends on</text>
+</svg>

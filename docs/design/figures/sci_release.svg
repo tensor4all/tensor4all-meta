@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="330" viewBox="0 0 860 330">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="860" height="330" fill="#FCFCFA"/>
+<rect x="30" y="30" width="250" height="120" rx="10" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="155.0" y="75.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="middle">tenferro-rs</text>
+<text x="155.0" y="96.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1F5A3F" text-anchor="middle">released crates</text>
+<text x="155.0" y="114.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1F5A3F" text-anchor="middle">and main</text>
+<rect x="320" y="30" width="250" height="120" rx="10" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="445.0" y="75.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="middle">tenferro-sci-rs</text>
+<text x="445.0" y="96.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1F5A3F" text-anchor="middle">all crates bumped</text>
+<text x="445.0" y="114.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1F5A3F" text-anchor="middle">together</text>
+<rect x="640" y="30" width="200" height="120" rx="10" fill="#F1EFEA" stroke="#8A8780" stroke-width="1.2"/>
+<text x="740.0" y="75.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">crates.io</text>
+<text x="740.0" y="96.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">tenferro-krylov, ...</text>
+<text x="740.0" y="114.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">same version</text>
+<rect x="320" y="200" width="250" height="110" rx="10" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="445.0" y="240.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#6B4A12" text-anchor="middle">CI</text>
+<text x="445.0" y="261.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">against released tenferro</text>
+<text x="445.0" y="279.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6B4A12" text-anchor="middle">and, daily, against main</text>
+<rect x="30" y="200" width="250" height="110" rx="10" fill="#EEEDFD" stroke="#6A62D6" stroke-width="1.2"/>
+<text x="155.0" y="240.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3A2F9A" text-anchor="middle">SciPy oracle data</text>
+<text x="155.0" y="261.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">reference values and</text>
+<text x="155.0" y="279.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#3A2F9A" text-anchor="middle">derivatives from SciPy</text>
+<path d="M 282 90 L 316 90" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 572 90 L 636 90" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="572.85" y="54.0" width="62.300000000000004" height="24" rx="4" fill="#FFFFFF"/>
+<text x="604" y="71.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">publish</text>
+<path d="M 445 152 L 445 196" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 282 255 L 316 255" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+</svg>
