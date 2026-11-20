@@ -34,11 +34,13 @@ validated numerically.
 
 ## Two kinds of algorithms
 
-![tenferro-sci-rs crates on tenferro and on independent algorithm cores](figures/sci_layers.svg)
+![tenferro-sci-rs crates sit on tenferro and on pure Rust algorithm cores that any Rust code can use](figures/sci_layers.svg)
 
 * **Independent cores.** Algorithms that need only vector operations
   (Krylov methods, scalar special functions, quadrature nodes and weights,
-  interpolation weights) live in crates that do not depend on tenferro. They
+  interpolation weights) live in pure Rust crates that do not depend on
+  tenferro: krylov already exists, and the special-function core is a pure
+  Rust port of SciPy's xsf (see Special functions). They
   are generic over traits such as `Vector` and `LinearMap`, so symtn, mdarray
   or ndarray users can use them too. A wider user base brings more
   contributors, as with threadteam-rs and tcontract-rs.
