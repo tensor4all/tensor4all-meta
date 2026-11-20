@@ -1,6 +1,6 @@
 # tenferro-sci: an algorithm collection on top of tenferro
 
-**Status:** Proposed (2026-11; special functions added 2026-11-21). Nothing is implemented yet; the repository `tenferro-sci-rs` does not exist.
+**Status:** Proposed (2026-11; special functions added 2026-11-21). The repository [tensor4all/tenferro-sci-rs](https://github.com/tensor4all/tenferro-sci-rs) exists with its rules and CI (created 2026-11-21); no crate is implemented yet.
 **Scope:** a new repository `tensor4all/tenferro-sci-rs`, the existing `krylov` crate (Ryo-wtnb11/krylov-rs), and the reference data used to validate it.
 
 NumPy became the base of Python's scientific computing partly because SciPy
@@ -182,7 +182,7 @@ both host and CUDA device (CuPy uses it).
 
 ![tenferro-sci-rs takes tenferro releases, publishes all crates at one version, and is checked against SciPy](figures/sci_release.svg)
 
-* **One repository, separate crates.** `tensor4all/tenferro-sci-rs` is one
+* **One repository, separate crates.** [`tensor4all/tenferro-sci-rs`](https://github.com/tensor4all/tenferro-sci-rs) is one
   Cargo workspace with one crate per module. Separate crates keep compile time
   and dependencies small (only `tenferro-krylov` pulls in krylov and colmat)
   and give each module an owner. There is no facade crate, as in tenferro.
