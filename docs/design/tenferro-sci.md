@@ -1,6 +1,6 @@
 # tenferro-sci: an algorithm collection on top of tenferro
 
-**Status:** Proposed (2026-11). Nothing is implemented yet; the repository `tenferro-sci-rs` does not exist.
+**Status:** Proposed (2026-11; special functions added 2026-11-21). Nothing is implemented yet; the repository `tenferro-sci-rs` does not exist.
 **Scope:** a new repository `tensor4all/tenferro-sci-rs`, the existing `krylov` crate (Ryo-wtnb11/krylov-rs), and the reference data used to validate it.
 
 NumPy became the base of Python's scientific computing partly because SciPy
@@ -80,7 +80,7 @@ The other modules follow the same split when they have an independent core.
 | --- | --- | --- | --- | --- | --- |
 | `tenferro-krylov` | `sparse.linalg` (iterative part) | eigsolve, linsolve, exponentiate, svdsolve, Davidson | `krylov` | implicit differentiation | large matvecs |
 | `tenferro-optimize` | `optimize` | L-BFGS, Levenberg–Marquardt, trust region, root finding | own | gradients by AD; the solution by implicit differentiation | batched problems |
-| `tenferro-special` | `special` | gamma, Bessel, error functions, orthogonal polynomials | own scalar core | known derivative rules | elementwise |
+| `tenferro-special` | `special` | gamma, Bessel, error functions, orthogonal polynomials | pure Rust port of SciPy's xsf | known derivative rules | xsf headers in NVRTC kernels |
 | `tenferro-integrate` | `integrate` | adaptive quadrature, ODE solvers including stiff ones | own (interop with diffsol to be decided) | adjoint method | many initial values |
 | `tenferro-interpolate` | `interpolate` | splines, grid interpolation, Chebyshev | own | direct | many evaluation points |
 
@@ -103,6 +103,78 @@ Where the material already exists:
   L-BFGS (`nonlinear-pinn`) and Levenberg–Marquardt (`pinn-gauss-newton`).
 * `tenferro-integrate`: the `neural-ode` example has RK4 with a checkpointed
   discrete adjoint.
+
+## Special functions
+
+### Where they live
+
+* **A few common functions in the tenferro core.** The core catalog already has
+  `expm1`, `log1p` and `erf`. Candidates to join them are the functions PyTorch
+  and JAX also treat as primitives, such as `erfc`, `lgamma`, `digamma` and
+  `xlogy`. They follow tenferro's rule for new core ops
+  (tenferro-rs `docs/design/algebra.md`, "When To Add A Core Op"): repeatedly
+  useful, costly as a composition, and kept AD-closed in the catalog. In
+  return they fuse with other elementwise ops and get GPU kernels in
+  t4a-gpu-kernels.
+* **The long tail in `tenferro-special`.** Bessel, Airy, hypergeometric,
+  elliptic, zeta and orthogonal polynomials are an operation family
+  registered through `ExtensionOp`, like linalg and FFT, with their AD rules
+  in the same crate. Derivatives are mostly in the same family (for example
+  J'ₙ = (Jₙ₋₁ − Jₙ₊₁)/2), so higher-order AD composes.
+* This mirrors JAX: `jax.lax` has erf, lgamma, digamma, igamma and a few Bessel
+  functions as primitives, and `jax.scipy.special` builds the rest.
+
+**Fusion.** An `ExtensionOp` is opaque to the elementwise fuser today, so a
+chain like `bessel_j0(x) * exp(-x²) + 1` runs as two steps with one extra
+intermediate array (and one extra GPU launch). This matters little for
+expensive functions and more for cheap ones in long chains, which is why the
+cheap ones go to the core. The longer-term fix is for an `ExtensionOp` to
+declare optional capabilities that the compiler can use: "elementwise, with
+this scalar body" (spliced into a fused CPU loop or GPU kernel), a
+decomposition into core ops, and properties such as purity. Extensions that
+declare nothing keep working as opaque ops. A public program-transform hook
+(`SemanticTransform`, design tenferro-rs#1449) existed for whole-program
+rewrites and was removed as unused in tenferro-rs#2689; it can come back
+together with that capability design.
+
+### Implementation source: a pure Rust port of xsf
+
+[xsf](https://github.com/scipy/xsf) is SciPy's special-function code extracted
+into a header-only C++ library (BSD-3-Clause, about 50,000 lines). It contains
+the Cephes, AMOS, specfun and Faddeeva implementations SciPy uses, ships
+SciPy's special-function reference test data, and is written to compile for
+both host and CUDA device (CuPy uses it).
+
+* **CPU: port to pure Rust.** An independent crate, with no tenferro
+  dependency, holds the scalar functions.
+  - No C++ toolchain at build time, in line with tenferro's no build-time
+    native dependency policy; it also runs on WASM.
+  - The code can be generic over the scalar type: f32, f64 and complex first,
+    later dual numbers or double-double where the algorithm allows.
+  - Rust has no comprehensive special-function crate today (`special` and
+    `puruspe` cover a few families, f64 only), so the crate is useful outside
+    tenferro.
+* **GPU: use the xsf headers directly.** t4a-gpu-kernels already compiles
+  CUDA C++ source at run time with NVRTC, so the device code can include xsf
+  unchanged, and the same should work for HIP. Metal cannot take C++ headers;
+  functions are ported to MSL only when needed.
+* **Port the tests first.** Move xsf's reference data, then port families in
+  order of use: gamma family, error-function family, Bessel, orthogonal
+  polynomials, `hyp2f1`, zeta, elliptic integrals.
+* **Provenance.** A function-by-function translation is a derived work under
+  the shared provenance rules: each file names its xsf source file and the xsf
+  commit it was ported from (so later upstream fixes can be diffed), the
+  BSD-3-Clause text ships with the crate, and the crate license is declared
+  accordingly, for example `(MIT OR Apache-2.0) AND BSD-3-Clause`.
+  Independently written implementations from DLMF are marked as such.
+* **Other sources.** Boost.Math (BSL-1.0) for gaps, Bessels.jl (MIT) for fast
+  real-order Bessel functions, the Faddeeva package (MIT). Not usable: GSL
+  (GPL) and Numerical Recipes (restrictive license).
+* **Reference values.** mpmath (BSD-3-Clause, arbitrary precision) as the
+  ground truth, and SciPy for parity.
+* **Name.** "xsf-rs" would read as a SciPy project. Use it only after asking
+  the xsf maintainers, which is also a chance to coordinate with them;
+  otherwise pick an independent name.
 
 ## Repository and release
 
@@ -147,9 +219,12 @@ contributors can own a module without learning tenferro's internals.
 
 1. Whether `tenferro-integrate` wraps diffsol for stiff ODEs or implements its
    own solvers.
-2. Whether `tenferro-special` adds its functions as tenferro operations
-   (traced, GPU kernels) or as a separate elementwise layer.
+2. The capability API that lets an `ExtensionOp` take part in fusion (scalar
+   body, decomposition, properties), and whether `SemanticTransform` returns
+   with it.
 3. Where the independent cores other than krylov live: in tenferro-sci-rs as
    tenferro-free crates, or in their own repositories.
-4. How the SciPy reference data is generated and versioned: a separate
+4. The name of the pure Rust xsf port, and whether the xsf maintainers want
+   to be involved.
+5. How the SciPy reference data is generated and versioned: a separate
    repository like tensor-ad-oracles, or a directory in tenferro-sci-rs.
