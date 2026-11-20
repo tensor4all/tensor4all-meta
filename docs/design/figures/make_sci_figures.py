@@ -18,7 +18,7 @@ from make_figures import Figure  # noqa: E402
 
 
 def sci_layers():
-    f = Figure(900, 600)
+    f = Figure(900, 660)
 
     f.box(30, 20, 840, 80, "Users and agents",
           ["applications, tenferro-examples, tensor4all-rs, ..."],
@@ -36,26 +36,33 @@ def sci_layers():
         f.box(x, 182, 158, 82, name, lines, style="plain")
         x += 165
 
-    f.box(30, 330, 470, 120, "tenferro", style="green", title_at="top")
-    f.box(45, 370, 215, 64, "tensors, runtime",
-          ["CPU / CUDA / Metal"], style="plain")
-    f.box(270, 370, 215, 64, "autodiff",
-          ["eager + traced"], style="plain")
+    f.box(30, 330, 380, 190, "tenferro", style="green", title_at="top")
+    f.box(45, 372, 350, 60, "tensors, runtime", ["CPU / CUDA / Metal"],
+          style="plain")
+    f.box(45, 444, 350, 60, "autodiff", ["eager + traced"], style="plain")
 
-    f.box(570, 330, 300, 120, "Independent algorithm cores",
-          style="amber", title_at="top")
-    f.box(585, 370, 270, 64, "krylov (Ryo Watanabe)",
-          ["generic over Vector / LinearMap"], style="plain")
+    f.box(440, 330, 430, 220,
+          "Independent cores: pure Rust, no tenferro", style="amber",
+          title_at="top")
+    cores = [("krylov", ["Krylov methods", "(Ryo Watanabe)"]),
+             ("special functions", ["pure Rust port of", "SciPy's xsf"]),
+             ("quadrature rules", ["nodes and weights"]),
+             ("interpolation", ["splines, Chebyshev", "weights"])]
+    for i, (name, lines) in enumerate(cores):
+        cx = 455 + (i % 2) * 205
+        cy = 372 + (i // 2) * 84
+        f.box(cx, cy, 195, 72, name, lines, style="plain")
 
-    f.box(570, 500, 300, 80, "Other users of the cores",
-          ["symtn, mdarray, ndarray, ..."], style="neutral", dashed=True)
+    f.box(440, 580, 430, 64, "Any Rust code",
+          ["plain Vec, ndarray, mdarray, symtn, ..."], style="neutral",
+          dashed=True)
 
     f.arrow([(450, 102), (450, 136)])
-    f.arrow([(265, 282), (265, 326)], label="tensors, AD rules",
-            label_at=(265, 304))
-    f.arrow([(720, 282), (720, 326)], label="algorithms",
-            label_at=(720, 304))
-    f.arrow([(720, 498), (720, 454)])
+    f.arrow([(220, 282), (220, 326)], label="tensors, AD rules",
+            label_at=(220, 304))
+    f.arrow([(655, 282), (655, 326)], label="algorithms",
+            label_at=(655, 304))
+    f.arrow([(655, 578), (655, 554)])
     f.save("sci_layers.svg")
 
 
