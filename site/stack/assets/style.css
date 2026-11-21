@@ -212,3 +212,5 @@ tr.flagship td:first-child a { font-weight: 700; }
 .sm-box.star { stroke: var(--warm); stroke-width: 2; }
 .sm-link:hover .sm-box.star { stroke: var(--warm); stroke-width: 3; }
 .sm-star { fill: var(--warm); }
+.sm-box.planned { stroke-dasharray: 5 4; }
+.sm-planned { fill: var(--muted); font: italic 500 11.5px var(--sans); }
