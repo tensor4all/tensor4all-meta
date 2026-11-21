@@ -249,8 +249,8 @@ ready, both inside tenferro-sci-rs and in the layers below it.
 
 | Prerequisite | Where | Needed by | Why |
 | --- | --- | --- | --- |
-| Sub-programs in traced graphs: recorded programs, extension ops that run a sub-program, AD through them, then `cond` / `scan` / `while_loop` | [tenferro-rs#2691](https://github.com/tensor4all/tenferro-rs/issues/2691) (its order: F5 recording API; F1–F3 with extension ops as first consumer; F4 AD; then `scan`, `cond`, `while_loop`) | `tenferro-krylov` first ([tenferro-sci-rs#3](https://github.com/tensor4all/tenferro-sci-rs/issues/3)), then optimize and integrate | a solver calls a user-supplied operator many times; that operator is a recorded tenferro program the solver op must carry, run on the caller's engine, and differentiate |
-| The CPU stack on colmat 0.34 and threadteam 0.6 | [tenferro-rs#2597](https://github.com/tensor4all/tenferro-rs/issues/2597): publish tcontract 0.13, move tlinalg, then tenferro-rs | `tenferro-krylov` and everything after | krylov already uses colmat 0.34 while tenferro-rs still pins `t4a-faer` 0.33 and threadteam 0.5.1. Two copies would build, but the stack is meant to have one faer and one threadteam, and threadteam 0.5.1 also pins every worker of a second engine on one CPU. |
+| Sub-programs in traced graphs: recorded programs, extension ops that run a sub-program, AD through them, then `cond` / `scan` / `while_loop` | [tenferro-rs#2691](https://github.com/tensor4all/tenferro-rs/issues/2691) (its order: F5 recording API; F1–F3 with extension ops as first consumer; F4 AD; then `scan`, `cond`, `while_loop`) | `tenferro-krylov` from its second step on ([tenferro-sci-rs#3](https://github.com/tensor4all/tenferro-sci-rs/issues/3)): recording needs F5, solve ops F1–F3, AD rules F4; then optimize and integrate | a solver calls a user-supplied operator many times; that operator is a recorded tenferro program the solver op must carry, run on the caller's engine, and differentiate |
+| The CPU stack on colmat 0.34 and threadteam 0.6 | [tenferro-rs#2597](https://github.com/tensor4all/tenferro-rs/issues/2597): publish tcontract 0.13, move tlinalg, then tenferro-rs | the first release of `tenferro-krylov` and everything after (development can start before it) | krylov already uses colmat 0.34 while tenferro-rs still pins `t4a-faer` 0.33 and threadteam 0.5.1. Two copies would build, but the stack is meant to have one faer and one threadteam, and threadteam 0.5.1 also pins every worker of a second engine on one CPU. |
 | `digamma`, `i0e`, `i1e`, `xlogy` in elem-simd-math | [elem-simd-math-rs#17](https://github.com/tensor4all/elem-simd-math-rs/issues/17), then a release | tenferro core ops | the CPU kernels of the core ops |
 | Core ops `erfc`, `lgamma`, `digamma`, `i0e`, `i1e`, `xlogy` | [tenferro-rs#2692](https://github.com/tensor4all/tenferro-rs/issues/2692) (`erfc` and `lgamma` can go first) | `tenferro-special` | the AD rules of the long tail are written with these functions, and losses and distributions use them directly |
 | DCT / DST in `tenferro-fft` | [tenferro-rs#2693](https://github.com/tensor4all/tenferro-rs/issues/2693) | `tenferro-interpolate` (Chebyshev) | Chebyshev coefficients are a DCT of the samples; tenferro-fft has none today |
@@ -262,12 +262,23 @@ ready, both inside tenferro-sci-rs and in the layers below it.
    mpmath values and derivatives, and the test helpers that compare against
    them with a stated tolerance. Every later crate depends on this, so it comes
    first, even before the first algorithm.
-1. **`tenferro-krylov`.** Needs tenferro-rs#2691 (at least F5 and F1–F3 to
-   run, F4 for AD) and the CPU stack on colmat. The core, krylov, exists. The
-   design is in tenferro-sci-rs#3: the operator is a closure recorded once with
-   symbolic shapes, each solve is one extension op that carries it, and
-   implicit differentiation is written with tenferro ops so jvp, vjp and higher
-   order compose.
+1. **`tenferro-krylov`.** The design is in tenferro-sci-rs#3: the operator is
+   a closure recorded once with symbolic shapes, each solve is one extension op
+   that carries it, and implicit differentiation is written with tenferro ops
+   so jvp, vjp and higher order compose. Its steps wait for different things:
+
+   | Step | Waits for |
+   | --- | --- |
+   | No-AD path: tenferro tensors as krylov vectors, forward tests | nothing: krylov 0.4.0 (colmat 0.34, no `lapack`, MSRV 1.96) is released |
+   | Recording the operator | tenferro-rs#2691 F5 |
+   | Solve ops running the operator | tenferro-rs#2691 F1–F3 |
+   | AD rules | tenferro-rs#2691 F4 |
+   | First release | tenferro-rs#2597, so the graph has one faer (colmat) and one threadteam |
+
+   Until tenferro-rs#2597 lands, `tenferro-krylov` carries both colmat (through
+   krylov) and `t4a-faer` (through tenferro). That builds, and the two never
+   exchange types, since krylov uses colmat only for its small projected
+   problems.
 2. **`tenferro-optimize`.** After krylov: differentiating the solution of an
    optimization problem by the implicit function theorem needs a linear solve
    with the Hessian, which `tenferro-krylov` provides matrix-free. The
