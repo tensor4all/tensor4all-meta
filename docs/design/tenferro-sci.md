@@ -85,6 +85,7 @@ The other modules follow the same split when they have an independent core.
 | `tenferro-special` | `special` | gamma, Bessel, error functions, orthogonal polynomials | pure Rust port of SciPy's xsf | known derivative rules | xsf headers in NVRTC kernels |
 | `tenferro-integrate` | `integrate` | adaptive quadrature, ODE solvers including stiff ones | own (interop with diffsol to be decided) | adjoint method | many initial values |
 | `tenferro-interpolate` | `interpolate` | splines, grid interpolation, Chebyshev | own | direct | many evaluation points |
+| `tenferro-fft` (moves here from tenferro-rs, see below) | `fft` | FFT, real FFT, DCT/DST | RustFFT, RealFFT; cuFFT on GPU | linear (transpose rules) | cuFFT |
 
 Placement notes:
 
@@ -93,8 +94,12 @@ Placement notes:
   any sparse matrix, so they get their own crate, named after the method.
 * Matrix functions (`expm`, `logm`, `sqrtm`, `funm`), Schur and polar
   decompositions belong in `tenferro-linalg`, not in tenferro-sci.
-* FFT already lives in `tenferro-fft`. DCT/DST and signal processing can be
-  added later if needed.
+* FFT moves from tenferro-rs into this repository as `tenferro-fft`, the
+  counterpart of `scipy.fft` (see "Public API only" below). DCT/DST is added
+  there; signal processing can follow if needed.
+* `tenferro-einsum` stays in tenferro-rs: it is close to the core
+  (`dot_general`, tensor networks), and `tenferro-xla` and `ext/tropical`
+  depend on it. It is rewritten on the public API like any other family.
 * Out of scope for now: `stats`, `spatial`, `ndimage`, `cluster`, `io`.
 
 Where the material already exists:
@@ -210,6 +215,49 @@ both host and CUDA device (CuPy uses it).
   the xsf maintainers, which is also a chance to coordinate with them;
   otherwise pick an independent name.
 
+## Public API only
+
+Every crate in tenferro-sci-rs is written against tenferro's public API, and
+so is every operation family in tenferro-rs outside the core, including
+`tenferro-einsum` and `tenferro-fft`. Dependencies on tenferro's internal
+crates (`tenferro-internal-*`, implementation crates such as
+`tenferro-cpu-basic`) and on `#[doc(hidden)]` items are forbidden, and checked
+mechanically: `scripts/check-crate-boundaries.py` in tenferro-rs, and a
+`cargo tree` check in tenferro-sci-rs's CI. An exception names its reason in
+the check.
+
+The rule decides where a family lives: a family that can be written with the
+public API (plus extension ops with sub-programs, tenferro-rs#2691) does not
+need to be in tenferro-rs. It also makes the standard families the first
+external users of the extension API, so its gaps appear there first.
+
+Today the standard families still step outside the public API
+([tenferro-rs#2694](https://github.com/tensor4all/tenferro-rs/issues/2694),
+checked at tenferro-rs `dda23f4b`):
+
+| What | Used by | Why it is used |
+| --- | --- | --- |
+| `tenferro-internal-ops` in `Cargo.toml` | einsum, fft, `ext/sparse`, `ext/tropical` | only to enable its `autodiff` and `cuda` features; no source file uses the crate |
+| `tenferro_cpu_basic::PooledUninitOutput` | einsum | an uninitialized output from the engine's buffer pool |
+| hidden `CudaEngine`, `CudaRuntime`, `CudaRuntimeIdentity`, `cuda::raw` | fft (8 files), einsum (2 files) | calling cuFFT on the engine's stream with device pointers, keying the plan cache, recognizing a CUDA engine |
+
+tenferro-rs#2694 fixes them in order: public crates forward the `autodiff` and
+`cuda` features; extensions get pooled outputs from a public surface; a public
+**GPU window** lets an extension call a vendor library (cuFFT, cuBLAS,
+cuSOLVER) on the engine's stream with device pointers and a cache key, without
+breaking the explicit-device rules; then the ban is enforced. The GPU window is
+also what tenferro-sci-rs's own GPU paths (`tenferro-krylov`,
+`tenferro-special`) need.
+
+**Moving `tenferro-fft`.** After those steps, and once tenferro-sci-rs can
+validate cuFFT on a GPU (tenferro-rs's local A100 gate has no counterpart here
+yet), `tenferro-fft` moves to tenferro-sci-rs. The crate name stays, so its
+users (tenferro-examples `nonlinear-pinn` and `ipt-dmft`) only see a new
+repository; its version joins tenferro-sci-rs's single version, and the FFT
+guide moves with it. DCT/DST
+([tenferro-rs#2693](https://github.com/tensor4all/tenferro-rs/issues/2693))
+lands after the move.
+
 ## Repository and release
 
 ![tenferro-sci-rs takes tenferro releases, publishes all crates at one version, and is checked against SciPy](figures/sci_release.svg)
@@ -225,8 +273,9 @@ both host and CUDA device (CuPy uses it).
 * **Separate from tenferro-rs.** tenferro-rs CI is heavy and includes the paid
   GPU gate. tenferro-sci-rs runs its own CI against released tenferro crates,
   and daily against tenferro-rs `main`, as tenferro-examples does.
-* **Naming.** `tenferro-<module>`, matching `tenferro-linalg`, `tenferro-fft`
-  and `tenferro-einsum`. The repository is `tenferro-sci-rs`.
+* **Naming.** `tenferro-<module>`, matching `tenferro-linalg` and
+  `tenferro-einsum` in tenferro-rs; `tenferro-fft` keeps its name when it moves
+  here. The repository is `tenferro-sci-rs`.
 
 ## Validation
 
@@ -253,7 +302,8 @@ ready, both inside tenferro-sci-rs and in the layers below it.
 | The CPU stack on colmat 0.34 and threadteam 0.6 | [tenferro-rs#2597](https://github.com/tensor4all/tenferro-rs/issues/2597): publish tcontract 0.13, move tlinalg, then tenferro-rs | the first release of `tenferro-krylov` and everything after (development can start before it) | krylov already uses colmat 0.34 while tenferro-rs still pins `t4a-faer` 0.33 and threadteam 0.5.1. Two copies would build, but the stack is meant to have one faer and one threadteam, and threadteam 0.5.1 also pins every worker of a second engine on one CPU. |
 | `digamma`, `i0e`, `i1e`, `xlogy` in elem-simd-math | [elem-simd-math-rs#17](https://github.com/tensor4all/elem-simd-math-rs/issues/17), then a release | tenferro core ops | the CPU kernels of the core ops |
 | Core ops `erfc`, `lgamma`, `digamma`, `i0e`, `i1e`, `xlogy` | [tenferro-rs#2692](https://github.com/tensor4all/tenferro-rs/issues/2692) (`erfc` and `lgamma` can go first) | `tenferro-special` | the AD rules of the long tail are written with these functions, and losses and distributions use them directly |
-| DCT / DST in `tenferro-fft` | [tenferro-rs#2693](https://github.com/tensor4all/tenferro-rs/issues/2693) | `tenferro-interpolate` (Chebyshev) | Chebyshev coefficients are a DCT of the samples; tenferro-fft has none today |
+| Extensions on the public API only; a public GPU window; then `tenferro-fft` moves here | [tenferro-rs#2694](https://github.com/tensor4all/tenferro-rs/issues/2694) | every crate here (the ban), GPU paths of krylov and special (the GPU window), `tenferro-fft` and DCT/DST | see "Public API only" |
+| DCT / DST in `tenferro-fft` | [tenferro-rs#2693](https://github.com/tensor4all/tenferro-rs/issues/2693), landing after the move | `tenferro-interpolate` (Chebyshev) | Chebyshev coefficients are a DCT of the samples; tenferro-fft has none today |
 
 ### Inside tenferro-sci-rs
 
