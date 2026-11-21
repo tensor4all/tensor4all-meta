@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="590" viewBox="0 0 900 590">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#77756F" stroke-width="1.5"/></marker></defs>
+<rect width="900" height="590" fill="#FCFCFA"/>
+<rect x="20" y="20" width="860" height="200" rx="10" fill="#FDF3E1" stroke="#B7832F" stroke-width="1.2"/>
+<text x="36" y="44" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#6B4A12" text-anchor="start">Lower layers (other repositories)</text>
+<rect x="35" y="62" width="190" height="140" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="130.0" y="117.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">CPU stack on colmat</text>
+<text x="130.0" y="138.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">colmat 0.34, threadteam 0.6</text>
+<text x="130.0" y="156.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">tenferro-rs#2597</text>
+<rect x="250" y="62" width="190" height="140" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="345.0" y="117.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">elem-simd-math</text>
+<text x="345.0" y="138.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">digamma, i0e, i1e, xlogy</text>
+<text x="345.0" y="156.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">elem-simd-math-rs#17</text>
+<rect x="465" y="62" width="190" height="140" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="560.0" y="117.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">tenferro core ops</text>
+<text x="560.0" y="138.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">erfc, lgamma, digamma, ...</text>
+<text x="560.0" y="156.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">tenferro-rs#2692</text>
+<rect x="680" y="62" width="190" height="140" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="775.0" y="117.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">tenferro-fft</text>
+<text x="775.0" y="138.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">DCT / DST</text>
+<text x="775.0" y="156.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">(not filed yet)</text>
+<path d="M 442 132 L 461 132" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="20" y="340" width="860" height="230" rx="10" fill="#E3F4EC" stroke="#2F7A57" stroke-width="1.2"/>
+<text x="36" y="364" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1F5A3F" text-anchor="start">tenferro-sci-rs, in this order</text>
+<rect x="32" y="382" width="132" height="118" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="98.0" y="416.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">0. groundwork</text>
+<text x="98.0" y="437.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">workspace,</text>
+<text x="98.0" y="455.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">SciPy / mpmath</text>
+<text x="98.0" y="473.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">reference data</text>
+<rect x="172" y="382" width="132" height="118" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="238.0" y="426.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">1. krylov</text>
+<text x="238.0" y="447.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">tenferro tensors,</text>
+<text x="238.0" y="465.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">implicit diff</text>
+<rect x="312" y="382" width="132" height="118" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="378.0" y="426.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">2. optimize</text>
+<text x="378.0" y="447.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">L-BFGS, LM,</text>
+<text x="378.0" y="465.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">implicit diff</text>
+<rect x="452" y="382" width="132" height="118" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="518.0" y="426.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">3. special</text>
+<text x="518.0" y="447.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">xsf port +</text>
+<text x="518.0" y="465.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">ExtensionOp</text>
+<rect x="592" y="382" width="132" height="118" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="658.0" y="426.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">4. integrate</text>
+<text x="658.0" y="447.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">quadrature,</text>
+<text x="658.0" y="465.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">ODE + adjoint</text>
+<rect x="732" y="382" width="132" height="118" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
+<text x="798.0" y="426.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">5. interpolate</text>
+<text x="798.0" y="447.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">splines,</text>
+<text x="798.0" y="465.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">Chebyshev</text>
+<path d="M 130 204 L 130 300 L 238 300 L 238 378" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 560 204 L 560 300 L 518 300 L 518 378" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 775 204 L 775 300 L 798 300 L 798 378" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 166 441 L 170 441" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 306 441 L 310 441" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<path d="M 378 502 L 378 540 L 658 540 L 658 504" fill="none" stroke="#77756F" stroke-width="1.5" marker-end="url(#head)"/>
+<rect x="417.85" y="528.0" width="200.3" height="24" rx="4" fill="#FFFFFF"/>
+<text x="518" y="545.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#4A4844" text-anchor="middle">Newton steps, implicit diff</text>
+</svg>
