@@ -117,7 +117,8 @@ Where the material already exists:
   (tenferro-rs `docs/design/algebra.md`, "When To Add A Core Op"): repeatedly
   useful, costly as a composition, and kept AD-closed in the catalog. In
   return they fuse with other elementwise ops and get GPU kernels in
-  t4a-gpu-kernels.
+  t4a-gpu-kernels. Their CPU kernels come from elem-simd-math (next
+  subsection).
 * **The long tail in `tenferro-special`.** Bessel, Airy, hypergeometric,
   elliptic, zeta and orthogonal polynomials are an operation family
   registered through `ExtensionOp`, like linalg and FFT, with their AD rules
@@ -139,7 +140,36 @@ declare nothing keep working as opaque ops. A public program-transform hook
 rewrites and was removed as unused in tenferro-rs#2689; it can come back
 together with that capability design.
 
-### Implementation source: a pure Rust port of xsf
+### The common functions: elem-simd-math
+
+[elem-simd-math](https://github.com/tensor4all/elem-simd-math-rs) (`elem-simd-math`
+0.1.2 on crates.io) is tensor4all's vectorized elementary-function library: a
+port of SLEEF (through sleef-rs) to stable-Rust SIMD (`fearless_simd`), for
+`f64` and `f32`, with the SLEEF license and provenance shipped. Every kernel
+carries its SLEEF accuracy tier (0.5 to 3.5 ULP), asserted against MPFR in its
+tests. `tenferro-cpu` already uses it (`simd_math.rs`, `activation.rs`).
+
+It already has `erf`, `erfc`, `lgamma` and `tgamma`, besides the exponential,
+logarithmic, trigonometric, hyperbolic and power functions and fused
+activations. So the common functions of the core list live there, not in the
+xsf port:
+
+* **Add to elem-simd-math:** `digamma`, the exponentially scaled Bessel
+  functions `i0e` and `i1e` (JAX primitives), and `xlogy`. They are used
+  elementwise and often, have few branches, so they vectorize, and the MPFR ULP
+  harness already exists. Their source can be xsf's Cephes code, recorded as a
+  port.
+* **Keep out of elem-simd-math:** the long tail (Bessel functions of general
+  order, hypergeometric, elliptic, Mathieu). They take parameters such as the
+  order, branch a lot, vectorize poorly, are validated against SciPy rather
+  than by ULP bounds, and would blur elem-simd-math's role as the SIMD
+  elementary-function crate. They go to the xsf port below, which can use
+  elem-simd-math for its elementary building blocks.
+* elem-simd-math also carries SLEEF's internal double-double layer
+  (`doubled.rs`); its experience may be useful for colmat's double-double
+  work ([next-generation-dense-linear-algebra.md](./next-generation-dense-linear-algebra.md)).
+
+### Implementation source for the long tail: a pure Rust port of xsf
 
 [xsf](https://github.com/scipy/xsf) is SciPy's special-function code extracted
 into a header-only C++ library (BSD-3-Clause, about 50,000 lines). It contains
@@ -156,6 +186,8 @@ both host and CUDA device (CuPy uses it).
   - Rust has no comprehensive special-function crate today (`special` and
     `puruspe` cover a few families, f64 only), so the crate is useful outside
     tenferro.
+  - It covers what elem-simd-math does not: functions that elem-simd-math
+    already has are not ported twice.
 * **GPU: use the xsf headers directly.** t4a-gpu-kernels already compiles
   CUDA C++ source at run time with NVRTC, so the device code can include xsf
   unchanged, and the same should work for HIP. Metal cannot take C++ headers;
