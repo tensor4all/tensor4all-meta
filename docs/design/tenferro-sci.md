@@ -249,10 +249,11 @@ ready, both inside tenferro-sci-rs and in the layers below it.
 
 | Prerequisite | Where | Needed by | Why |
 | --- | --- | --- | --- |
+| Sub-programs in traced graphs: recorded programs, extension ops that run a sub-program, AD through them, then `cond` / `scan` / `while_loop` | [tenferro-rs#2691](https://github.com/tensor4all/tenferro-rs/issues/2691) (its order: F5 recording API; F1–F3 with extension ops as first consumer; F4 AD; then `scan`, `cond`, `while_loop`) | `tenferro-krylov` first ([tenferro-sci-rs#3](https://github.com/tensor4all/tenferro-sci-rs/issues/3)), then optimize and integrate | a solver calls a user-supplied operator many times; that operator is a recorded tenferro program the solver op must carry, run on the caller's engine, and differentiate |
 | The CPU stack on colmat 0.34 and threadteam 0.6 | [tenferro-rs#2597](https://github.com/tensor4all/tenferro-rs/issues/2597): publish tcontract 0.13, move tlinalg, then tenferro-rs | `tenferro-krylov` and everything after | krylov already uses colmat 0.34 while tenferro-rs still pins `t4a-faer` 0.33 and threadteam 0.5.1. Two copies would build, but the stack is meant to have one faer and one threadteam, and threadteam 0.5.1 also pins every worker of a second engine on one CPU. |
 | `digamma`, `i0e`, `i1e`, `xlogy` in elem-simd-math | [elem-simd-math-rs#17](https://github.com/tensor4all/elem-simd-math-rs/issues/17), then a release | tenferro core ops | the CPU kernels of the core ops |
 | Core ops `erfc`, `lgamma`, `digamma`, `i0e`, `i1e`, `xlogy` | [tenferro-rs#2692](https://github.com/tensor4all/tenferro-rs/issues/2692) (`erfc` and `lgamma` can go first) | `tenferro-special` | the AD rules of the long tail are written with these functions, and losses and distributions use them directly |
-| DCT / DST in `tenferro-fft` | not filed yet | `tenferro-interpolate` (Chebyshev) | Chebyshev coefficients are a DCT of the samples; tenferro-fft has none today |
+| DCT / DST in `tenferro-fft` | [tenferro-rs#2693](https://github.com/tensor4all/tenferro-rs/issues/2693) | `tenferro-interpolate` (Chebyshev) | Chebyshev coefficients are a DCT of the samples; tenferro-fft has none today |
 
 ### Inside tenferro-sci-rs
 
@@ -261,9 +262,12 @@ ready, both inside tenferro-sci-rs and in the layers below it.
    mpmath values and derivatives, and the test helpers that compare against
    them with a stated tolerance. Every later crate depends on this, so it comes
    first, even before the first algorithm.
-1. **`tenferro-krylov`.** Needs the CPU stack on colmat (above). The core,
-   krylov, exists. Adds the trait implementations for tenferro tensors and the
-   implicit-differentiation rules for eigen- and linear solves.
+1. **`tenferro-krylov`.** Needs tenferro-rs#2691 (at least F5 and F1–F3 to
+   run, F4 for AD) and the CPU stack on colmat. The core, krylov, exists. The
+   design is in tenferro-sci-rs#3: the operator is a closure recorded once with
+   symbolic shapes, each solve is one extension op that carries it, and
+   implicit differentiation is written with tenferro ops so jvp, vjp and higher
+   order compose.
 2. **`tenferro-optimize`.** After krylov: differentiating the solution of an
    optimization problem by the implicit function theorem needs a linear solve
    with the Hessian, which `tenferro-krylov` provides matrix-free. The
@@ -271,7 +275,8 @@ ready, both inside tenferro-sci-rs and in the layers below it.
    from tenferro-examples.
 3. **`tenferro-special`.** Needs the core ops (tenferro-rs#2692). The pure
    Rust xsf port can start earlier, tests first, because it does not depend on
-   tenferro.
+   tenferro. Martin Mikkelsen's existing special-function code (Rust and Julia)
+   is a candidate to merge or port (tenferro-sci-rs#2).
 4. **`tenferro-integrate`.** After optimize: implicit (stiff) ODE solvers take
    Newton steps, and adjoint sensitivities are another implicit
    differentiation. Gauss quadrature nodes come from an eigenproblem
@@ -283,14 +288,31 @@ Steps 1 and 3 do not depend on each other and can run in parallel with
 different owners, as can the xsf port and anything that waits only on a lower
 layer.
 
-### A constraint from tenferro: no control flow in traced programs
+### Sub-programs in tenferro are a prerequisite
 
-tenferro's traced programs are one acyclic region; loops and branches are
-rejected. An iterative solver therefore cannot be traced as a loop. Each solver
-is one `ExtensionOp` (or an eager call) that runs its iterations inside, and
-its derivative is the explicit implicit-differentiation rule registered with
-it. This is also why the rules, not differentiation through the iterations,
-are the design (see Autodiff in the goals).
+Today tenferro's traced programs are one flat, acyclic list: there is no
+`cond`, `scan` or `while_loop`, and an extension op cannot run another program
+from inside its execution. tenferro-sci-rs is designed on the assumption that
+[tenferro-rs#2691](https://github.com/tensor4all/tenferro-rs/issues/2691)
+removes both limits:
+
+* **Solvers as extension ops with sub-programs.** A Krylov solve, an optimizer
+  or an ODE solver is one `ExtensionOp` that carries the user's operator or
+  right-hand side as a recorded sub-program, runs it on the caller's engine
+  without allocating per call, and differentiates through it. This is the
+  tenferro counterpart of JAX's `custom_linear_solve` / `custom_root`.
+* **Implicit differentiation, not differentiation through iterations.** The AD
+  rule of a solver op is written with tenferro operations (the solve itself and
+  the sub-program's own jvp/vjp programs), so jvp, vjp and higher order
+  compose; tenferro's linearize/transpose AD has no place for an opaque custom
+  VJP.
+* **Control flow for the rest.** Algorithms with a fixed number of steps (a
+  fixed-step ODE integrator, a fixed number of optimizer iterations) can be
+  written with `scan` once it exists, and stay reverse-differentiable.
+
+Until the needed parts of tenferro-rs#2691 land, a crate that depends on them
+waits or stays on its branch, following tenferro-sci-rs's rule that
+tenferro's gaps are fixed in tenferro-rs, not worked around here.
 
 Each module is sized for one owner, for example krylov with Ryo Watanabe. New
 contributors can own a module without learning tenferro's internals.

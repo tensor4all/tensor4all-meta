@@ -124,14 +124,15 @@ def sci_order():
     f.text(36, 44, "Lower layers (other repositories)", size=15, weight=600,
            color="#6B4A12", anchor="start")
     lower = [
-        (35, "CPU stack on colmat", ["colmat 0.34, threadteam 0.6", "tenferro-rs#2597"]),
-        (250, "elem-simd-math", ["digamma, i0e, i1e, xlogy", "elem-simd-math-rs#17"]),
-        (465, "tenferro core ops", ["erfc, lgamma, digamma, ...", "tenferro-rs#2692"]),
-        (680, "tenferro-fft", ["DCT / DST", "(not filed yet)"]),
+        (32, "sub-programs", ["recorded programs,", "ext ops running them,", "cond / scan / while", "tenferro-rs#2691"]),
+        (202, "CPU stack", ["colmat 0.34,", "threadteam 0.6", "tenferro-rs#2597"]),
+        (372, "elem-simd-math", ["digamma, i0e,", "i1e, xlogy", "esm-rs#17"]),
+        (542, "core ops", ["erfc, lgamma,", "digamma, ...", "tenferro-rs#2692"]),
+        (712, "tenferro-fft", ["DCT / DST", "tenferro-rs#2693"]),
     ]
     for x, name, lines in lower:
-        f.box(x, 62, 190, 140, name, lines, style="plain")
-    f.arrow([(442, 132), (461, 132)])
+        f.box(x, 62, 156, 140, name, lines, style="plain")
+    f.arrow([(530, 132), (538, 132)])
 
     f.box(20, 340, 860, 230, None, style="green")
     f.text(36, 364, "tenferro-sci-rs, in this order", size=15, weight=600,
@@ -148,9 +149,11 @@ def sci_order():
         f.box(x, 382, 132, 118, name, lines, style="plain")
 
     # lower layers -> crates
-    f.arrow([(130, 204), (130, 300), (238, 300), (238, 378)])
-    f.arrow([(560, 204), (560, 300), (518, 300), (518, 378)])
-    f.arrow([(775, 204), (775, 300), (798, 300), (798, 378)])
+    f.arrow([(110, 204), (110, 290), (254, 290), (254, 378)])
+    f.arrow([(110, 290), (366, 290), (366, 378)])
+    f.arrow([(284, 204), (284, 378)])
+    f.arrow([(620, 204), (620, 300), (518, 300), (518, 378)])
+    f.arrow([(790, 204), (790, 378)])
     # inside tenferro-sci-rs
     f.arrow([(166, 441), (170, 441)])
     f.arrow([(306, 441), (310, 441)])
