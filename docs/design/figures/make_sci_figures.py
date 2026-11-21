@@ -117,7 +117,50 @@ def sci_release():
     f.save("sci_release.svg")
 
 
+def sci_order():
+    f = Figure(900, 590)
+
+    f.box(20, 20, 860, 200, None, style="amber")
+    f.text(36, 44, "Lower layers (other repositories)", size=15, weight=600,
+           color="#6B4A12", anchor="start")
+    lower = [
+        (35, "CPU stack on colmat", ["colmat 0.34, threadteam 0.6", "tenferro-rs#2597"]),
+        (250, "elem-simd-math", ["digamma, i0e, i1e, xlogy", "elem-simd-math-rs#17"]),
+        (465, "tenferro core ops", ["erfc, lgamma, digamma, ...", "tenferro-rs#2692"]),
+        (680, "tenferro-fft", ["DCT / DST", "(not filed yet)"]),
+    ]
+    for x, name, lines in lower:
+        f.box(x, 62, 190, 140, name, lines, style="plain")
+    f.arrow([(442, 132), (461, 132)])
+
+    f.box(20, 340, 860, 230, None, style="green")
+    f.text(36, 364, "tenferro-sci-rs, in this order", size=15, weight=600,
+           color="#1F5A3F", anchor="start")
+    crates = [
+        (32, "0. groundwork", ["workspace,", "SciPy / mpmath", "reference data"]),
+        (172, "1. krylov", ["tenferro tensors,", "implicit diff"]),
+        (312, "2. optimize", ["L-BFGS, LM,", "implicit diff"]),
+        (452, "3. special", ["xsf port +", "ExtensionOp"]),
+        (592, "4. integrate", ["quadrature,", "ODE + adjoint"]),
+        (732, "5. interpolate", ["splines,", "Chebyshev"]),
+    ]
+    for x, name, lines in crates:
+        f.box(x, 382, 132, 118, name, lines, style="plain")
+
+    # lower layers -> crates
+    f.arrow([(130, 204), (130, 300), (238, 300), (238, 378)])
+    f.arrow([(560, 204), (560, 300), (518, 300), (518, 378)])
+    f.arrow([(775, 204), (775, 300), (798, 300), (798, 378)])
+    # inside tenferro-sci-rs
+    f.arrow([(166, 441), (170, 441)])
+    f.arrow([(306, 441), (310, 441)])
+    f.arrow([(378, 502), (378, 540), (658, 540), (658, 504)],
+            label="Newton steps, implicit diff", label_at=(518, 540))
+    f.save("sci_order.svg")
+
+
 if __name__ == "__main__":
     sci_layers()
     sci_adapter()
     sci_release()
+    sci_order()

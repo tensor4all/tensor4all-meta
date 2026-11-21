@@ -240,11 +240,57 @@ both host and CUDA device (CuPy uses it).
 
 ## Order of work
 
-1. `tenferro-krylov`: the core exists; needed by tensor networks now.
-2. `tenferro-optimize`: mostly extraction from tenferro-examples.
-3. `tenferro-special`: elementwise functions and their derivative rules; the
-   clearest GPU case.
-4. `tenferro-integrate` and `tenferro-interpolate`.
+The order follows the dependencies: a crate starts when what it stands on is
+ready, both inside tenferro-sci-rs and in the layers below it.
+
+![Lower-layer prerequisites and the order of the tenferro-sci-rs crates](figures/sci_order.svg)
+
+### Prerequisites in other repositories
+
+| Prerequisite | Where | Needed by | Why |
+| --- | --- | --- | --- |
+| The CPU stack on colmat 0.34 and threadteam 0.6 | [tenferro-rs#2597](https://github.com/tensor4all/tenferro-rs/issues/2597): publish tcontract 0.13, move tlinalg, then tenferro-rs | `tenferro-krylov` and everything after | krylov already uses colmat 0.34 while tenferro-rs still pins `t4a-faer` 0.33 and threadteam 0.5.1. Two copies would build, but the stack is meant to have one faer and one threadteam, and threadteam 0.5.1 also pins every worker of a second engine on one CPU. |
+| `digamma`, `i0e`, `i1e`, `xlogy` in elem-simd-math | [elem-simd-math-rs#17](https://github.com/tensor4all/elem-simd-math-rs/issues/17), then a release | tenferro core ops | the CPU kernels of the core ops |
+| Core ops `erfc`, `lgamma`, `digamma`, `i0e`, `i1e`, `xlogy` | [tenferro-rs#2692](https://github.com/tensor4all/tenferro-rs/issues/2692) (`erfc` and `lgamma` can go first) | `tenferro-special` | the AD rules of the long tail are written with these functions, and losses and distributions use them directly |
+| DCT / DST in `tenferro-fft` | not filed yet | `tenferro-interpolate` (Chebyshev) | Chebyshev coefficients are a DCT of the samples; tenferro-fft has none today |
+
+### Inside tenferro-sci-rs
+
+0. **Groundwork.** The root `Cargo.toml` (workspace, tenferro pins, MSRV) and
+   the reference-data machinery: the committed script that generates SciPy and
+   mpmath values and derivatives, and the test helpers that compare against
+   them with a stated tolerance. Every later crate depends on this, so it comes
+   first, even before the first algorithm.
+1. **`tenferro-krylov`.** Needs the CPU stack on colmat (above). The core,
+   krylov, exists. Adds the trait implementations for tenferro tensors and the
+   implicit-differentiation rules for eigen- and linear solves.
+2. **`tenferro-optimize`.** After krylov: differentiating the solution of an
+   optimization problem by the implicit function theorem needs a linear solve
+   with the Hessian, which `tenferro-krylov` provides matrix-free. The
+   optimizers themselves (L-BFGS, Levenberg–Marquardt) are mostly extracted
+   from tenferro-examples.
+3. **`tenferro-special`.** Needs the core ops (tenferro-rs#2692). The pure
+   Rust xsf port can start earlier, tests first, because it does not depend on
+   tenferro.
+4. **`tenferro-integrate`.** After optimize: implicit (stiff) ODE solvers take
+   Newton steps, and adjoint sensitivities are another implicit
+   differentiation. Gauss quadrature nodes come from an eigenproblem
+   (Golub–Welsch), which `tenferro-linalg` already provides.
+5. **`tenferro-interpolate`.** Splines need only banded solves from
+   `tenferro-linalg`; Chebyshev interpolation waits for DCT in `tenferro-fft`.
+
+Steps 1 and 3 do not depend on each other and can run in parallel with
+different owners, as can the xsf port and anything that waits only on a lower
+layer.
+
+### A constraint from tenferro: no control flow in traced programs
+
+tenferro's traced programs are one acyclic region; loops and branches are
+rejected. An iterative solver therefore cannot be traced as a loop. Each solver
+is one `ExtensionOp` (or an eager call) that runs its iterations inside, and
+its derivative is the explicit implicit-differentiation rule registered with
+it. This is also why the rules, not differentiation through the iterations,
+are the design (see Autodiff in the goals).
 
 Each module is sized for one owner, for example krylov with Ryo Watanabe. New
 contributors can own a module without learning tenferro's internals.
