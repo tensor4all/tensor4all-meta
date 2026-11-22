@@ -2,7 +2,7 @@
 
 **Status:** Proposed (2026-11-22).
 **Scope:** [tenferro-rs](https://github.com/tensor4all/tenferro-rs) (a new `tenferro-random` crate, new primitives in the core vocabulary, CPU and CUDA kernels), [t4a-cuda-kernels](https://github.com/tensor4all/t4a-cuda-kernels) (the CUDA sources), and the downstream users in [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs).
-**Tracking issue:** to be opened in tenferro-rs; it succeeds [tenferro-rs#989](https://github.com/tensor4all/tenferro-rs/issues/989) (graph-level RNG key semantics, closed as not planned until random ops were requested).
+**Tracking issue:** [tenferro-rs#2714](https://github.com/tensor4all/tenferro-rs/issues/2714); it succeeds [tenferro-rs#989](https://github.com/tensor4all/tenferro-rs/issues/989) (graph-level RNG key semantics, closed as not planned until random ops were requested).
 **Checked against:** tenferro-rs `main` `3b3bb6df`, t4a-cuda-kernels `main` `639f60d`, tenferro-sci-rs `main` `f574bde`, tensor4all-rs `main` (2026-11-22). Findings come from reading code; nothing was built.
 
 ## 1. Decisions
