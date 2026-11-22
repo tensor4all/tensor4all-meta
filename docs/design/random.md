@@ -19,6 +19,12 @@
 5. **No unsigned dtype is added.** Keys are `I32` tensors read as `u32` bit
    patterns, and the operations produce floating-point or signed-integer
    samples directly.
+6. **The default algorithm is `philox4x32-10`** (§4.3).
+7. **There is no seed primitive.** A key made from a seed is the seed's two
+   32-bit halves (§4.1).
+8. **Every sample is bit-identical on CPU and CUDA, normal samples included.**
+   The transforms use only correctly rounded operations, so there is no ulp
+   bound to promise between backends (§4.4).
 
 ## 2. What exists today
 
@@ -69,6 +75,11 @@ A key is a device-resident tensor of dtype `I32` and shape `[2]` (a batch of
 keys has shape `[..., 2]`), read as two `u32` words. Both built-in algorithms
 take a 64-bit key, so one representation serves both.
 
+- A key is made from a `u64` seed as `[seed >> 32, seed & 0xFFFF_FFFF]`, for
+  every algorithm. This is a bit split, not a computation, so it needs no
+  primitive: `Key::from_seed` writes the two words through the existing
+  constant path, eight bytes once per key. All further keys are derived on the
+  device by `RngSplit` and `RngFoldIn`, and samples never leave the device.
 - A key never changes. Using the same key twice gives the same samples, on
   purpose.
 - New randomness comes from deriving keys: `split(key, n)` gives `n`
@@ -119,8 +130,19 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
 ```
 
 - Every random operation carries an `RngAlgorithm` attribute. The built-in
-  algorithms are `threefry2x32-20` (the block function of JAX's default) and
-  `philox4x32-10` (Random123; the family used by cuRAND and PyTorch on CUDA).
+  algorithms are `philox4x32-10` (Random123; the family used by cuRAND and
+  PyTorch on CUDA) and `threefry2x32-20` (the block function of JAX's default).
+- **The default is `philox4x32-10`.** Generation on CUDA is the primary use.
+  Philox produces 128 bits per block in 10 rounds of two 32×32→64-bit
+  multiplies, where Threefry produces 64 bits in 20 rounds of add, rotate and
+  xor; Philox4x32-10 was the fastest of the family on GPUs in the Random123
+  paper (Salmon et al., SC'11), and
+  Threefry's advantage matters on hardware without a fast 32-bit high
+  multiply (JAX chose it for TPUs). Its 128-bit counter also leaves room for
+  key derivation: samples use counter words 0–1, `split` and `fold_in` set
+  word 3 to 1 and 2, so derived keys never share a block with samples.
+  Matching JAX would only have covered the block function, not whole arrays,
+  because the sample layout differs (§5). Threefry stays available by name.
 - Each algorithm has a Rust reference implementation in tenferro-rs and a
   CUDA device function in t4a-cuda-kernels. The CUDA kernel is one template per
   operation into which the algorithm's block function is inserted; NVRTC
@@ -138,8 +160,22 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
 
 | Same algorithm, key, shape and dtype | Guarantee |
 | --- | --- |
-| raw bits, uniform, integers | bit-identical on CPU and CUDA, for any thread count and layout, across tenferro versions |
-| normal | bit-identical on the same device and backend; CPU and CUDA agree within a documented ulp bound (they use different `log`, `sin`, `cos`) |
+| keys, raw bits, uniform, integers, normal | bit-identical on CPU and CUDA, for any thread count and layout, across tenferro versions |
+
+Normal samples are bit-identical too, because the CPU and CUDA kernels do not
+call the platform `log`, `sin` and `cos` (glibc, Apple libm and CUDA's
+libdevice give different last bits). Box–Muller is computed with tenferro's
+own `log` and `sincospi` (the angle is `2π·u` written as `sincospi(2u)`, so
+no rounded `π` enters), each built only from `+`, `−`, `×`, `÷`, `sqrt` and
+explicit `fma`. These are correctly rounded on both backends, so the same
+operation sequence gives the same bits. The CUDA templates are compiled with
+`--fmad=false` and the Rust side uses `mul_add`, so no compiler contracts a
+multiply and an add differently. F32 samples use F32 arithmetic in the same
+way. The cost is negligible: generation is limited by memory bandwidth.
+
+The accuracy of these functions against the exact values is a separate,
+documented property: the target is at most 2 ulp for `log` and `sincospi`,
+checked against mpmath at fixed points.
 
 ### 4.5 Primitives
 
@@ -148,7 +184,6 @@ issue):
 
 | Primitive | Inputs | Output | Static attributes |
 | --- | --- | --- | --- |
-| `RngSeed` | seed (`I64[]`) | key `I32[2]` | algorithm |
 | `RngSplit` | key `I32[2]` | keys `I32[n, 2]` | algorithm, `n` |
 | `RngFoldIn` | key `I32[2]`, data `I32[]` | key `I32[2]` | algorithm |
 | `RngUniform` | key | sample tensor | algorithm, dtype, shape |
@@ -191,8 +226,11 @@ Tests are small and fast, with fixed keys and exact assertions.
   a recorded script with the JAX version noted. The sample layout is
   tenferro's own (column-major), so whole arrays are not compared with JAX.
 - Each operation on at most eight elements against hard-coded values, on CPU.
-- CPU against CUDA, bit for bit, for keys, bits, uniform and integers on one
-  small shape; normal within its documented bound.
+- CPU against CUDA, bit for bit, for keys, bits, uniform, integers and normal
+  on one small shape.
+- `log` and `sincospi` against mpmath values at a few fixed points, within
+  2 ulp; their inputs include the extremes Box–Muller can produce (the
+  smallest nonzero uniform, `u` near 0.25 and 0.5).
 - Properties: the same key gives the same samples, split keys give different
   samples, a key is not modified, and generation is independent of the layout.
 - No statistical tests in the test suite: they are slow and probabilistic.
@@ -203,8 +241,9 @@ Each step is one pull request unless noted.
 
 0. This document, and a feature issue in tenferro-rs that carries the API,
    the non-goals and the acceptance criteria.
-1. `tenferro-random-core`: `CounterRng`, Threefry2x32-20, Philox4x32-10, seed,
-   split, fold-in, the transforms, known-answer tests.
+1. `tenferro-random-core`: `CounterRng`, Philox4x32-10, Threefry2x32-20, seed,
+   split, fold-in, the transforms with their own `log` and `sincospi`,
+   known-answer tests.
 2. t4a-cuda-kernels: the CUDA block functions and operation templates, with
    the same known-answer vectors; release.
 3. The primitives and CPU kernels: core-ops, internal-ops (no AD rules),
@@ -221,13 +260,13 @@ Each step is one pull request unless noted.
 9. tensor4all-rs: move random initial tensors and randomized range finders to
    tenferro (decided separately; the complex normal convention changes).
 
-## 7. Open questions
+## 7. Resolved questions
 
-- The default algorithm: `threefry2x32-20` (same block function as JAX) or
-  `philox4x32-10` (fewer rounds per bit on GPUs).
-- Whether `RngSeed` is a primitive or the seed is a kernel argument of a
-  key-creating call outside traced programs.
-- The ulp bound promised for normal samples between CPU and CUDA.
+Decided 2026-11-22 (maintainer request to choose):
+
+- Default algorithm: `philox4x32-10` (§4.3).
+- Seed: no primitive; a key is the seed's two halves (§4.1).
+- Normal samples between CPU and CUDA: bit-identical, no ulp bound (§4.4).
 
 ## Non-goals
 
