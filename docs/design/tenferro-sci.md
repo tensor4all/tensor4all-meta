@@ -86,6 +86,8 @@ The other modules follow the same split when they have an independent core.
 | `tenferro-integrate` | `integrate` | adaptive quadrature, ODE solvers including stiff ones | own (interop with diffsol to be decided) | adjoint method | many initial values |
 | `tenferro-interpolate` | `interpolate` | splines, grid interpolation, Chebyshev | own | direct | many evaluation points |
 | `tenferro-fft` (moves here from tenferro-rs, see below) | `fft` | FFT, real FFT, DCT/DST | RustFFT, RealFFT; cuFFT on GPU | linear (transpose rules) | cuFFT |
+| `tenferro-einsum` (moves here from tenferro-rs, see below) | — (NumPy's `einsum`) | einsum, tensordot, contraction-order planning | `dot_general` of tenferro | linear in each operand | through `dot_general` |
+| `tenferro-ext-tropical` (moves here from tenferro-rs) | — | tropical semiring tensors and einsum | own kernels | tropical AD rules | none |
 
 Placement notes:
 
@@ -97,9 +99,16 @@ Placement notes:
 * FFT moves from tenferro-rs into this repository as `tenferro-fft`, the
   counterpart of `scipy.fft` (see "Public API only" below). DCT/DST is added
   there; signal processing can follow if needed.
-* `tenferro-einsum` stays in tenferro-rs: it is close to the core
-  (`dot_general`, tensor networks), and `tenferro-xla` and `ext/tropical`
-  depend on it. It is rewritten on the public API like any other family.
+* `tenferro-einsum` also moves here, once it is written on the public API
+  (decided 2026-11-23, replacing the earlier decision to keep it in
+  tenferro-rs). The reasons given for keeping it did not hold: `tenferro-xla`
+  uses it only in three integration tests (a dev-dependency), which move to
+  `tenferro-einsum`, and `ext/tropical` moves here as well. Being close to the
+  core is not a reason by itself: einsum is planning plus `dot_general`, which
+  is public.
+* `ext/tropical` (`tenferro-ext-tropical`) moves here with einsum. It uses only
+  einsum's public API (`Subscripts`, `ContractionTree`, `lowering::GemmPlan`,
+  `Error`).
 * Out of scope for now: `stats`, `spatial`, `ndimage`, `cluster`, `io`.
 
 Where the material already exists:
@@ -281,6 +290,25 @@ breaking the explicit-device rules; then the ban is enforced. The GPU window is
 also what tenferro-sci-rs's own GPU paths (`tenferro-krylov`,
 `tenferro-special`) need.
 
+**Moving `tenferro-einsum` and `ext/tropical`.** The same steps apply
+(einsum uses `PooledUninitOutput` and the hidden CUDA items too). Before the
+move, in tenferro-rs:
+
+* The `tenferro-xla` integration tests that build an n-ary einsum
+  (`stablehlo_lowering.rs`, `pjrt_execution.rs`, `xla_tool_execution.rs`)
+  move to `tenferro-einsum`, which takes `tenferro-xla` as a dev-dependency.
+  `tenferro-xla` keeps a test with an extension op defined in the test, to
+  check that extension ops lower to standard StableHLO ops.
+* tenferro-rs guides and tutorial code that use einsum (about 40 files under
+  `docs/`, including the tropical-extension tutorial) either move with the
+  crates or switch to `dot_general`; tenferro-rs keeps one extension example
+  of its own.
+
+Then `tenferro-einsum` and `tenferro-ext-tropical` move with their names
+unchanged, so downstream users (tensor4all-rs, tenferro-examples) only see a
+new repository. Their GPU path needs the same GPU validation in
+tenferro-sci-rs as cuFFT.
+
 **Moving `tenferro-fft`.** After those steps, and once tenferro-sci-rs can
 validate cuFFT on a GPU (tenferro-rs's local A100 gate has no counterpart here
 yet), `tenferro-fft` moves to tenferro-sci-rs. The crate name stays, so its
@@ -306,8 +334,8 @@ lands after the move.
   GPU gate. tenferro-sci-rs runs its own CI against released tenferro crates,
   and daily against tenferro-rs `main`, as tenferro-examples does.
 * **Naming.** `tenferro-<module>`, matching `tenferro-linalg` and
-  `tenferro-einsum` in tenferro-rs; `tenferro-fft` keeps its name when it moves
-  here. The repository is `tenferro-sci-rs`.
+  `tenferro-einsum`; `tenferro-fft`, `tenferro-einsum` and
+  `tenferro-ext-tropical` keep their names when they move here. The repository is `tenferro-sci-rs`.
 
 ## Validation
 
@@ -334,7 +362,7 @@ ready, both inside tenferro-sci-rs and in the layers below it.
 | The CPU stack on colmat 0.34 and threadteam 0.6 | [tenferro-rs#2597](https://github.com/tensor4all/tenferro-rs/issues/2597): publish tcontract 0.13, move tlinalg, then tenferro-rs | the first release of `tenferro-krylov` and everything after (development can start before it) | krylov already uses colmat 0.34 while tenferro-rs still pins `t4a-faer` 0.33 and threadteam 0.5.1. Two copies would build, but the stack is meant to have one faer and one threadteam, and threadteam 0.5.1 also pins every worker of a second engine on one CPU. |
 | `digamma`, `i0e`, `i1e`, `xlogy` in elem-simd-math | [elem-simd-math-rs#17](https://github.com/tensor4all/elem-simd-math-rs/issues/17), then a release | tenferro core ops | the CPU kernels of the core ops |
 | Core ops `erfc`, `lgamma`, `digamma`, `i0e`, `i1e`, `xlogy` | [tenferro-rs#2692](https://github.com/tensor4all/tenferro-rs/issues/2692) (`erfc` and `lgamma` can go first) | `tenferro-special` | the AD rules of the long tail are written with these functions, and losses and distributions use them directly |
-| Extensions on the public API only; a public GPU window; then `tenferro-fft` moves here | [tenferro-rs#2694](https://github.com/tensor4all/tenferro-rs/issues/2694) | every crate here (the ban), GPU paths of krylov and special (the GPU window), `tenferro-fft` and DCT/DST | see "Public API only" |
+| Extensions on the public API only; a public GPU window; then `tenferro-fft`, `tenferro-einsum` and `ext/tropical` move here | [tenferro-rs#2694](https://github.com/tensor4all/tenferro-rs/issues/2694) | every crate here (the ban), GPU paths of krylov and special (the GPU window), `tenferro-fft` and DCT/DST, `tenferro-einsum`, `tenferro-ext-tropical` | see "Public API only" |
 | DCT / DST in `tenferro-fft` | [tenferro-rs#2693](https://github.com/tensor4all/tenferro-rs/issues/2693), landing after the move | `tenferro-interpolate` (Chebyshev) | Chebyshev coefficients are a DCT of the samples; tenferro-fft has none today |
 
 ### Inside tenferro-sci-rs
