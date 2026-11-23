@@ -254,6 +254,42 @@ arithmetic into NaN (the error term computes inf − inf), so overflow and pole
 paths go through IEEE-correct helpers; and below about 1e-292 the low word is
 subnormal, so double-double precision degrades to `f64` there.
 
+### Side by side with few_special_functions
+
+[few_special_functions](https://github.com/MartinMikkelsen/few_special_functions)
+(f64 only, MIT) has families that xsf does not: Fermi-Dirac and Bose-Einstein,
+Clausen, Debye, Coulomb, Whittaker and Marcum Q. It overlaps xsf for Dawson,
+Fresnel, Voigt and the parabolic cylinder functions. The two crates stay
+independent and `tenferro-special` depends on both:
+
+* **No edge between the two libraries.** `few_special_functions` stays
+  independent, and the `specials` core must not depend on it. Each crate is
+  then usable on its own, and no core -> few edge blocks the other direction:
+  few_special_functions can reuse the core's gamma, digamma, zeta and Kummer
+  functions, which it carries as `pub(crate)` copies today.
+* **One name per function.** For an overlapping function, `tenferro-special`
+  picks one implementation after an mpmath comparison and exposes one name.
+  The other stays available in its own crate.
+* **The pin.** `few_special_functions = "=0.2.1"` in `[workspace.dependencies]`,
+  for every family. 0.2.1 is source-compatible with 0.2.0: `phi_dot`, `psi`
+  and `i` keep their `step` argument and ignore it. So one pin covers every
+  family, with no per-function feature sets.
+* **Error conventions.** A plain function returns NaN. The `*_checked` form
+  returns `Result` with a `#[non_exhaustive]` `SpecialError`, which stays
+  numeric (non-convergence, overflow, underflow). `NoConvergence` carries no
+  payload, or only the family and the iteration cap. Variant parameters are
+  types (an enum for Clausen order, a validated newtype for node counts), so
+  "invalid parameter" is not an error variant. A NaN at a point the docs call
+  in-domain is a test failure; each iterating family also has a test with a
+  small iteration cap that returns `NoConvergence`, with the plain function
+  returning NaN on the same input.
+* **Accuracy evidence.** The PR that wraps a family carries one small
+  precision table (the mpmath comparison), so the pin and the accuracy claim
+  land together. Known state for Coulomb: median 2e-14 and worst 2e-10 at
+  rho = 5, from cancellation in the Kummer series. The complex-argument `f`,
+  `g` and `h±` have no mpmath tables yet; that is a follow-up, not a blocker.
+  The f64-only limit (no `Df64`) is also a follow-up.
+
 ## Public API only
 
 Every crate in tenferro-sci-rs is written against tenferro's public API, and
