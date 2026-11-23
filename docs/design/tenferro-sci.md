@@ -266,28 +266,37 @@ independent and `tenferro-special` depends on both:
   independent, and the `specials` core must not depend on it. Each crate is
   then usable on its own, and no core -> few edge blocks the other direction:
   few_special_functions can reuse the core's gamma, digamma, zeta and Kummer
-  functions, which it carries as `pub(crate)` copies today.
+  functions, which it carries as `pub(crate)` copies today. Until
+  `tenferro-special` exists, `specials` re-exports the few_special_functions
+  families itself (tenferro-sci-rs#22); that edge moves up to
+  `tenferro-special` when it lands.
 * **One name per function.** For an overlapping function, `tenferro-special`
   picks one implementation after an mpmath comparison and exposes one name.
-  The other stays available in its own crate.
+  The other stays available in its own crate. (While `specials` carries the
+  re-export, the few_special_functions copy is reachable there too; the one
+  name rule applies from `tenferro-special` on.)
 * **The pin.** `few_special_functions = "=0.2.1"` in `[workspace.dependencies]`,
   for every family. 0.2.1 is source-compatible with 0.2.0: `phi_dot`, `psi`
   and `i` keep their `step` argument and ignore it. So one pin covers every
-  family, with no per-function feature sets.
-* **Error conventions.** A plain function returns NaN. The `*_checked` form
-  returns `Result` with a `#[non_exhaustive]` `SpecialError`, which stays
-  numeric (non-convergence, overflow, underflow). `NoConvergence` carries no
+  family, with no per-function feature sets. Some families take and return
+  `num_complex::Complex64`, so `num-complex` is pinned to the same 0.4 minor.
+* **Error conventions.** A plain function returns NaN. Each function that
+  iterates also has a `*_checked` form, which returns `Result` with a
+  `#[non_exhaustive]` `SpecialError`. The error stays numeric
+  (non-convergence, overflow, underflow). `NoConvergence` carries no
   payload, or only the family and the iteration cap. Variant parameters are
-  types (an enum for Clausen order, a validated newtype for node counts), so
-  "invalid parameter" is not an error variant. A NaN at a point the docs call
+  types (an enum for Clausen order; a validated newtype where a count is a
+  parameter), so "invalid parameter" is not an error variant. A NaN at a point the docs call
   in-domain is a test failure; each iterating family also has a test with a
   small iteration cap that returns `NoConvergence`, with the plain function
   returning NaN on the same input.
 * **Accuracy evidence.** The PR that wraps a family carries one small
   precision table (the mpmath comparison), so the pin and the accuracy claim
-  land together. Known state for Coulomb: median 2e-14 and worst 2e-10 at
-  rho = 5, from cancellation in the Kummer series. The complex-argument `f`,
-  `g` and `h±` have no mpmath tables yet; that is a follow-up, not a blocker.
+  land together. Known state for Coulomb: `F`, `G` and `H±` reach 4.7e-13
+  (1092 points); `phi_dot`, `psi` and `i` have median 2e-14 and worst 2e-10 at
+  rho = 5, from cancellation in the Kummer series. The complex `psi` and `i`
+  have mpmath tables; the complex-argument `f`, `g` and `h±` do not yet; that is a follow-up,
+  not a blocker.
   The f64-only limit (no `Df64`) is also a follow-up.
 
 ## Public API only
