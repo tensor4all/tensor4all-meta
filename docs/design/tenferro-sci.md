@@ -254,6 +254,52 @@ arithmetic into NaN (the error term computes inf − inf), so overflow and pole
 paths go through IEEE-correct helpers; and below about 1e-292 the low word is
 subnormal, so double-double precision degrades to `f64` there.
 
+### Side by side with few_special_functions
+
+[few_special_functions](https://github.com/MartinMikkelsen/few_special_functions)
+(f64 only, MIT) has families that xsf does not: Fermi-Dirac and Bose-Einstein,
+Clausen, Debye, Coulomb, Whittaker and Marcum Q. It overlaps xsf for Dawson,
+Fresnel, Voigt and the parabolic cylinder functions. The two crates stay
+independent and `tenferro-special` depends on both:
+
+* **No edge between the two libraries.** The target: `few_special_functions`
+  stays independent, and the `specials` core does not depend on it. Each crate
+  is then usable on its own, and no core -> few edge blocks the other
+  direction: few_special_functions can reuse the core's gamma, digamma, zeta
+  and Kummer functions, which it carries as `pub(crate)` copies today. Until
+  `tenferro-special` exists, `specials` re-exports the few_special_functions
+  families itself (tenferro-sci-rs#22); `specials` drops that dependency when
+  `tenferro-special` lands.
+* **One name per function.** For an overlapping function, `tenferro-special`
+  picks one implementation after an mpmath comparison and exposes one name.
+  The other stays available in its own crate. (While `specials` carries the
+  re-export, the few_special_functions copy is reachable there too; the one
+  name rule applies from `tenferro-special` on.)
+* **The pin.** `few_special_functions = "=0.2.1"` in `[workspace.dependencies]`,
+  for every family. 0.2.1 is source-compatible with 0.2.0: `phi_dot`, `psi`
+  and `i` keep their `step` argument and ignore it. So one pin covers every
+  family, with no per-function feature sets. Some families have
+  `num_complex::Complex64` in their signatures, so `tenferro-special` keeps to
+  the same `num-complex` 0.4.
+* **Error conventions.** A plain function returns NaN when a numerical
+  failure (non-convergence) occurs; an infinite value stays infinite. Each function that
+  iterates also has a `*_checked` form, which returns `Result` with a
+  `#[non_exhaustive]` `SpecialError`. The error stays numeric (non-convergence
+  today; overflow or underflow only if a family needs them). `NoConvergence` carries no
+  payload, or only the family and the iteration cap. Variant parameters are
+  types (an enum for Clausen order), so "invalid parameter" is not an error variant. A NaN at a point the docs call
+  in-domain is a test failure; each iterating family also has a test with a
+  small iteration cap that returns `NoConvergence`, with the plain function
+  returning NaN on the same input.
+* **Accuracy evidence.** The PR that wraps a family carries one small
+  precision table (the mpmath comparison), so the pin and the accuracy claim
+  land together. Known state for Coulomb: `F`, `G` and `H±` reach 4.7e-13
+  (1092 points); `phi_dot`, `psi` and `i` have median 2e-14 and worst 2e-10 at
+  rho = 5, from cancellation in the Kummer series. The complex `psi` and `i`
+  have mpmath tables; the complex-argument `f`, `g` and `h±` do not yet; that is a follow-up,
+  not a blocker.
+  The f64-only limit (no `Df64`) is also a follow-up.
+
 ## Public API only
 
 Every crate in tenferro-sci-rs is written against tenferro's public API, and
