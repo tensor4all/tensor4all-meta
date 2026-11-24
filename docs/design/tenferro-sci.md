@@ -83,7 +83,8 @@ The other modules follow the same split when they have an independent core.
 | `tenferro-krylov` | `sparse.linalg` (iterative part) | eigsolve, linsolve, exponentiate, svdsolve, Davidson | `krylov` | implicit differentiation | large matvecs |
 | `tenferro-optimize` | `optimize` | L-BFGS, Levenberg–Marquardt, trust region, root finding | own | gradients by AD; the solution by implicit differentiation | batched problems |
 | `tenferro-special` | `special` | gamma, Bessel, error functions, orthogonal polynomials | pure Rust port of SciPy's xsf | known derivative rules | xsf headers in NVRTC kernels |
-| `tenferro-integrate` | `integrate` | adaptive quadrature, ODE solvers including stiff ones | own (interop with diffsol to be decided) | adjoint method | many initial values |
+| `tenferro-integrate` | `integrate` (quadrature part) | adaptive quadrature, integration of samples, Gauss nodes and weights | own | through the integrand | many integrals at once |
+| `tenferro-diffsol` (deferred, see below) | `integrate` (`solve_ivp`, `odeint`) | ODE and DAE solvers, stiff and non-stiff | [diffsol](https://github.com/martinjrobins/diffsol) | adjoint (VJP), forward sensitivities (JVP) | many initial values or parameters |
 | `tenferro-interpolate` | `interpolate` | splines, grid interpolation, Chebyshev | own | direct | many evaluation points |
 | `tenferro-fft` (moves here from tenferro-rs, see below) | `fft` | FFT, real FFT, DCT/DST | RustFFT, RealFFT; cuFFT on GPU | linear (transpose rules) | cuFFT |
 | `tenferro-einsum` (moves here from tenferro-rs, see below) | — (NumPy's `einsum`) | einsum, tensordot, contraction-order planning | `dot_general` of tenferro | linear in each operand | through `dot_general` |
@@ -117,8 +118,15 @@ Where the material already exists:
   move onto krylov later.
 * `tenferro-optimize`: tenferro-examples already has Adam (`sciml-kit`),
   L-BFGS (`nonlinear-pinn`) and Levenberg–Marquardt (`pinn-gauss-newton`).
-* `tenferro-integrate`: the `neural-ode` example has RK4 with a checkpointed
-  discrete adjoint.
+* `tenferro-diffsol`: the `neural-ode` example has RK4 with a checkpointed
+  discrete adjoint, a reference to compare against.
+
+Placement of the ODE solvers. SciPy keeps `solve_ivp`, `odeint` and
+`solve_bvp` in `scipy.integrate` next to quadrature. Here they go to their own
+crate named after its core, as `tenferro-krylov` is named after krylov
+(`scipy.sparse.linalg` in SciPy). `tenferro-integrate` stays quadrature only,
+so a user of quadrature does not pull in diffsol and its linear algebra; the
+SciPy-to-tenferro-sci table points `solve_ivp` to `tenferro-diffsol`.
 
 ## Special functions
 
@@ -444,10 +452,10 @@ ready, both inside tenferro-sci-rs and in the layers below it.
    Rust xsf port can start earlier, tests first, because it does not depend on
    tenferro. Martin Mikkelsen's existing special-function code (Rust and Julia)
    is a candidate to merge or port (tenferro-sci-rs#2).
-4. **`tenferro-integrate`.** After optimize: implicit (stiff) ODE solvers take
-   Newton steps, and adjoint sensitivities are another implicit
-   differentiation. Gauss quadrature nodes come from an eigenproblem
-   (Golub–Welsch), which `tenferro-linalg` already provides.
+4. **`tenferro-integrate`.** Quadrature. Gauss quadrature nodes come from an
+   eigenproblem (Golub–Welsch), which `tenferro-linalg` already provides.
+   The ODE solvers are not in this step: `tenferro-diffsol` is deferred (see
+   "ODE solvers: tenferro-diffsol, deferred").
 5. **`tenferro-interpolate`.** Splines need only banded solves from
    `tenferro-linalg`; Chebyshev interpolation waits for DCT in `tenferro-fft`.
 
@@ -484,10 +492,90 @@ tenferro's gaps are fixed in tenferro-rs, not worked around here.
 Each module is sized for one owner, for example krylov with Ryo Watanabe. New
 contributors can own a module without learning tenferro's internals.
 
+## ODE solvers: tenferro-diffsol, deferred
+
+**Decision (2026-11-25).** ODE solvers come from
+[diffsol](https://github.com/martinjrobins/diffsol) (MIT), wrapped by a crate
+`tenferro-diffsol`, following the krylov pattern. diffsol already has BDF,
+SDIRK (TR-BDF2, ESDIRK34), Tsit5, DAEs with a mass matrix, events, forward
+sensitivities and a checkpointed adjoint; writing and validating stiff solvers
+and an adjoint ourselves would cost far more. **The crate is not started
+now.** Checked at diffsol `8b0012c` (2026-11-24).
+
+**Conditions to start.** Both:
+
+* colmat is usable as diffsol's linear algebra (below). diffsol-la depends on
+  faer, which is slower than colmat for the dense LU of a stiff solve.
+* A user needs it. This follows the tenferro-sci rule of adding a module when
+  it is needed, not porting an ODE suite in advance.
+
+**Changes needed in diffsol (upstream).**
+
+1. Make the linear-algebra dependencies optional. diffsol-la has `nalgebra` and
+   `faer` features, but depends on `nalgebra` and `faer-traits`
+   unconditionally, and on `faer` with its `rayon` feature on every non-wasm
+   target. tenferro-diffsol wants neither nalgebra nor a second thread pool
+   next to threadteam.
+2. A colmat backend in diffsol-la (`Matrix`, `LinearSolver`), contributed
+   upstream, sequential only (see "Parallelism").
+3. Fallible callbacks. The closures given to `OdeBuilder` return `()`; a
+   tenferro program returns `Result`, so an error could only leave by panic.
+4. Later, if needed: a dense Jacobian callback, so that a batched JVP (one
+   vmap) replaces the n JVP calls of the coloring path; complex scalars
+   (`Scalar` requires `Signed + PartialOrd` today; until then a complex ODE is
+   split into real and imaginary parts).
+
+**Boundary.** diffsol's closure API works on host slices
+(`Fn(&[T] y, &[T] p, T t, ..., &mut [T])`), so tenferro tensors do not
+implement diffsol's `Vector` trait (about 40 methods, many element-wise). The
+state stays in diffsol's own vectors and is copied at the op boundary. The
+user writes the right-hand side `f(y, t, p)` with tenferro; it is recorded
+once (tenferro-rs#2691) together with its JVP and its VJPs in `y` and `p`, and
+the four programs are handed to diffsol (`rhs_adjoint_implicit`). Calling a
+recorded program from the host many times must be cheap, since a small ODE
+evaluates `f` tens of thousands of times; if it is not, that is fixed in
+tenferro-rs.
+
+**Minimal scope.** `odeint(f, y0, p, ts, method, rtol, atol) -> Y[ts]` with
+BDF (stiff) and Tsit5 (non-stiff), `f64`, dense LU. SDIRK, DAEs, events,
+output functions and DiffSL come later. Validation against SciPy `solve_ivp`
+and closed forms (exponential decay, Robertson), with stated tolerances.
+
+**Differentiation.** One solve is one `ExtensionOp` with inputs `y0`, `p` and
+output `Y[ts]`. Its linearization is a forward-sensitivity op (diffsol's
+`solve_dense_sensitivities`), linear in the tangents of `y0` and `p`; the
+transpose of that op is the adjoint solve (`solve_with_checkpointing`, then
+`solve_adjoint_backwards_pass(t_eval, dgdu_eval)`, which takes a cotangent at
+each output time and so matches the op's cotangent `Ȳ[ts]` directly). The
+gradient is that of the continuous adjoint, accurate to the solver tolerances,
+which the docs state. Out of scope: higher order, derivatives with respect to
+`t0` and `ts`.
+
+**Parallelism.** colmat passes parallelism explicitly: `Par<'team>` is a
+borrowed, exclusive token, neither `Copy` nor `Clone`. diffsol stores its
+backend state in a `Context: Clone + Default` that every vector and matrix
+copies, `Matrix` is `'static` (so the context cannot borrow a team), and
+`LinearSolver` has no argument for an execution context; faer and CUDA fit
+because their contexts hold a `Copy` `Par` or an `Arc` stream. So:
+
+* Inside one ODE solve, linear algebra runs `Par::Seq`. Only stiff systems
+  with a large dense Jacobian would gain from more.
+* Parallelism is at the problem level: many initial values or parameters,
+  split over a threadteam team, each solve with `Par::Seq`. The right-hand
+  side is parallel inside tenferro when it is large.
+* Parallel linear algebra inside one solve waits for a need. The options then
+  are an explicit execution argument through diffsol's step and linear solver
+  (a large upstream API change), or an owned team in the context behind a
+  lock (against colmat's explicit style); neither is chosen now.
+* Batched GPU solves (diffsol-la's `Context::nbatch` and CUDA backend) come
+  after the CPU path.
+
 ## Open questions
 
-1. Whether `tenferro-integrate` wraps diffsol for stiff ODEs or implements its
-   own solvers.
+1. ~~Whether `tenferro-integrate` wraps diffsol for stiff ODEs or implements
+   its own solvers.~~ Decided 2026-11-25: wrap diffsol, in a crate of its own,
+   `tenferro-diffsol`; deferred until the conditions in "ODE solvers:
+   tenferro-diffsol, deferred" hold.
 2. The capability API that lets an `ExtensionOp` take part in fusion (scalar
    body, decomposition, properties), and whether `SemanticTransform` returns
    with it.

@@ -20,8 +20,8 @@
 <text x="454.0" y="247.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">erf, ...</text>
 <rect x="540" y="182" width="158" height="82" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
 <text x="619.0" y="208.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">tenferro-integrate</text>
-<text x="619.0" y="229.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">quadrature,</text>
-<text x="619.0" y="247.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">ODE + adjoint</text>
+<text x="619.0" y="229.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">adaptive</text>
+<text x="619.0" y="247.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">quadrature</text>
 <rect x="705" y="182" width="158" height="82" rx="10" fill="#FFFFFF" stroke="#B8B5AE" stroke-width="1.2"/>
 <text x="784.0" y="208.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#2C2C2A" text-anchor="middle">tenferro-interpolate</text>
 <text x="784.0" y="229.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#2C2C2A" text-anchor="middle">splines,</text>
