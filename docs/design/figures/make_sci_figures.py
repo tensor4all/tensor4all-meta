@@ -29,7 +29,7 @@ def sci_layers():
     names = [("tenferro-krylov", ["eigsolve, linsolve,", "exponentiate"]),
              ("tenferro-optimize", ["L-BFGS, LM,", "root finding"]),
              ("tenferro-special", ["gamma, Bessel,", "erf, ..."]),
-             ("tenferro-integrate", ["quadrature,", "ODE + adjoint"]),
+             ("tenferro-integrate", ["adaptive", "quadrature"]),
              ("tenferro-interpolate", ["splines,", "grid interpolation"])]
     x = 45
     for name, lines in names:
@@ -142,7 +142,7 @@ def sci_order():
         (172, "1. krylov", ["tenferro tensors,", "implicit diff"]),
         (312, "2. optimize", ["L-BFGS, LM,", "implicit diff"]),
         (452, "3. special", ["xsf port +", "ExtensionOp"]),
-        (592, "4. integrate", ["quadrature,", "ODE + adjoint"]),
+        (592, "4. integrate", ["quadrature,", "Gauss nodes"]),
         (732, "5. interpolate", ["splines,", "Chebyshev"]),
     ]
     for x, name, lines in crates:
