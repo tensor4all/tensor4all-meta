@@ -42,5 +42,6 @@ Published at <https://tensor4all.org/tensor4all-meta/logos/> from [`site/logos/`
 
 Hypothetical explorations, not implementation plans:
 
+- [Why pure Rust](docs/why_pure_rust.md): why the stack keeps its kernels in Rust instead of vendor libraries
 - [Why Rust for Julia tensor network developers](docs/why_rusty_julia.md)
 - [Why rewrite first-principles codes in Rust](docs/why_rusty_openmx.md), with the [OpenMX code analysis](docs/openmx_analysis.md)

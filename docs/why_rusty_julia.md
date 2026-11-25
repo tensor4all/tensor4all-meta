@@ -86,6 +86,8 @@ This changes when the infrastructure is well-standardized and AI agents can main
 
 Pure Rust avoids the worst of this, for two reasons.
 
+(For the stack-wide reasons, with measurements, see [Why pure Rust](why_pure_rust.md).)
+
 **The Rust code integrates into the host's package system.** Pure Rust dependencies are resolved entirely by `cargo` — no system libraries, no CMake, no pkg-config. On the Julia side, [RustToolChain.jl](https://github.com/AtelierArith/RustToolChainExamples.jl) (or the approach used by [sparse-ir-rs](https://github.com/SpM-lab/sparse-ir-rs)) builds the Rust code on the fly inside `Pkg.build()`, so users never touch `cargo` directly. For release distribution, the compiled binary can be packaged as a JLL artifact. Either way, the Rust code lives inside the host's package ecosystem, not beside it.
 
 **C library dependencies are injected from the host, not linked at Rust build time.** When Rust code needs HDF5, BLAS, MPI, or CUDA, it does not link against system-installed C libraries at compile time. Instead, the libraries are obtained directly from the host language's own packages — HDF5.jl, MPI.jl, CUDA.jl, LinearAlgebra — and injected at runtime:
