@@ -32,6 +32,16 @@
     <p class="lead">Rust libraries for scientific computing that grew out of tensor networks. At the top are quantics tensor trains, tensor cross interpolation and tree tensor networks; underneath are a tensor runtime with automatic differentiation, tensor contraction, batched linear algebra and the thread model they all share. Every layer can be used on its own.</p>
   </section>
 
+  <h2 id="why">Why a whole stack</h2>
+  <p>Scientific computing in Rust today is a set of good but separate crates. ndarray, nalgebra and faer each bring their own assumptions about memory layout and threads. C++ and Fortran have something Rust lacks: LAPACK and OpenMP as a shared base that everything above can rely on. One more crate does not change that. Replacing it takes a stack that is designed as one piece, from the threads (threadteam) through linear algebra (colmat) and tensors (tenferro) to general numerical algorithms (tenferro-sci-rs), which other Rust code can adopt as its base.</p>
+  <p>Matching C++ is where this starts, not the goal: being as fast is not a reason to move. colmat already measures on par with MKL and AOCL on the hardware we have tested. The case for moving is what is structurally hard to get in C++:</p>
+  <ul>
+    <li>an execution context that travels through every call as a typed value, so one caller owns the threads, even across nested libraries;</li>
+    <li>kernels that are verified in the same language and toolchain as the code above them;</li>
+    <li>packaging with Cargo alone, and results that are bitwise reproducible at a fixed thread count.</li>
+  </ul>
+  <p>The essay <a href="https://github.com/tensor4all/tensor4all-meta/blob/main/docs/why_pure_rust.md">Why pure Rust</a> gives the measurements, and what is not measured yet.</p>
+
   <h2 id="flagships"><span class="star">&#9733;</span> Flagship projects</h2>
   <p>Three projects carry the stack. Start with one of them; the rest of this page shows what they stand on.</p>
   <div class="cards">
