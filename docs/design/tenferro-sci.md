@@ -1,6 +1,6 @@
 # tenferro-sci: an algorithm collection on top of tenferro
 
-**Status:** Proposed (2026-11; special functions added 2026-11-21). The repository [tensor4all/tenferro-sci-rs](https://github.com/tensor4all/tenferro-sci-rs) exists with its rules and CI (created 2026-11-21). The first crate, the special-function core `specials` (gamma family, `f64` and double-double), is in review in [tenferro-sci-rs#6](https://github.com/tensor4all/tenferro-sci-rs/pull/6).
+**Status:** Proposed (2026-11; special functions added 2026-11-21; optimizers added 2026-11-25). The repository [tensor4all/tenferro-sci-rs](https://github.com/tensor4all/tenferro-sci-rs) exists with its rules and CI (created 2026-11-21). The first crate, the special-function core `specials` (gamma family, `f64` and double-double), is in review in [tenferro-sci-rs#6](https://github.com/tensor4all/tenferro-sci-rs/pull/6).
 **Scope:** a new repository `tensor4all/tenferro-sci-rs`, the existing `krylov` crate (Ryo-wtnb11/krylov-rs), and the reference data used to validate it.
 
 NumPy became the base of Python's scientific computing partly because SciPy
@@ -39,13 +39,14 @@ validated numerically.
 * **Independent cores.** Algorithms that need only vector operations
   (Krylov methods, scalar special functions, quadrature nodes and weights,
   interpolation weights) live in pure Rust crates that do not depend on
-  tenferro: krylov already exists, and the special-function core is a pure
-  Rust port of SciPy's xsf (see Special functions). They
+  tenferro: krylov already exists, the special-function core is a pure
+  Rust port of SciPy's xsf (see Special functions), and the quasi-Newton
+  iterations (line search, BFGS, L-BFGS) form a core too (see Optimizers). They
   are generic over traits such as `Vector` and `LinearMap`, so symtn, mdarray
   or ndarray users can use them too. A wider user base brings more
   contributors, as with threadteam-rs and tcontract-rs.
 * **tenferro-native algorithms.** Algorithms whose value comes from autodiff
-  or traced graphs (optimizers with implicit differentiation, ODE solvers with
+  or traced graphs (implicit differentiation of an optimizer's solution, ODE solvers with
   adjoint sensitivities, differentiable programs) are written on tenferro
   directly.
 
@@ -81,7 +82,7 @@ The other modules follow the same split when they have an independent core.
 | Crate | SciPy counterpart | Contents | Core | AD | GPU |
 | --- | --- | --- | --- | --- | --- |
 | `tenferro-krylov` | `sparse.linalg` (iterative part) | eigsolve, linsolve, exponentiate, svdsolve, Davidson | `krylov` | implicit differentiation | large matvecs |
-| `tenferro-optimize` | `optimize` | L-BFGS, Levenberg–Marquardt, trust region, root finding | own | gradients by AD; the solution by implicit differentiation | batched problems |
+| `tenferro-optimize` | `optimize` | L-BFGS, Levenberg–Marquardt, trust region, root finding | own pure Rust core (see Optimizers) | gradients by AD; the solution by implicit differentiation | batched problems |
 | `tenferro-special` | `special` | gamma, Bessel, error functions, orthogonal polynomials | pure Rust port of SciPy's xsf | known derivative rules | xsf headers in NVRTC kernels |
 | `tenferro-integrate` | `integrate` (quadrature part) | adaptive quadrature, integration of samples, Gauss nodes and weights | own | through the integrand | many integrals at once |
 | `tenferro-diffsol` (deferred, see below) | `integrate` (`solve_ivp`, `odeint`) | ODE and DAE solvers, stiff and non-stiff | [diffsol](https://github.com/martinjrobins/diffsol) | adjoint (VJP), forward sensitivities (JVP) | many initial values or parameters |
@@ -308,6 +309,106 @@ independent and `tenferro-special` depends on both:
   not a blocker.
   The f64-only limit (no `Df64`) is also a follow-up.
 
+## Optimizers
+
+**Proposed (2026-11-25).** The first algorithms are a line search, L-BFGS and
+BFGS. Levenberg–Marquardt, trust region and Newton–CG come after
+`tenferro-krylov`, because they need Hessian-vector products and a matrix-free
+linear solve.
+
+### First algorithms
+
+| Order | Algorithm | Why |
+| --- | --- | --- |
+| 1 | Line search for the strong Wolfe conditions (More–Thuente or Hager–Zhang) | How robust a quasi-Newton method is depends mostly on its line search; the BFGS update itself is a few dozen lines |
+| 2 | L-BFGS (two-loop recursion) | The main target: large n and tensor-valued parameters |
+| 3 | BFGS (dense inverse Hessian, O(n²) memory) | Small problems, and a reference for L-BFGS tests: with memory m at least the number of iterations, both take the same path |
+
+### Split into a core and a tenferro crate
+
+The iteration needs only vector operations, so it lives in an independent
+core that does not depend on tenferro, like krylov. It is generic over a
+`Vector` trait with the operations krylov uses (axpy, scale, dot, norm) and
+takes a caller-held execution context on every call. Workspace is allocated
+when the state is created; an iteration allocates nothing. Where the core
+lives and its name are open question 3.
+
+`tenferro-optimize` adds the tenferro parts:
+
+* `Vector` for tenferro tensors, and gradients by AD.
+* L-BFGS in the compact representation (Byrd, Nocedal and Schnabel 1994):
+  the stored pairs are two n×m tensors S and Y, so the two-loop recursion
+  becomes matrix-vector products plus an m×m problem. It goes through tenferro
+  instead of handwritten loops, and runs on the GPU.
+* Implicit differentiation of the solution. For x\*(θ) = argmin f(x, θ),
+  dx\*/dθ = −H⁻¹ ∂²f/∂x∂θ, solved with `tenferro-krylov`'s `linsolve` on
+  Hessian-vector products (forward over reverse). The L-BFGS pairs from the
+  forward solve can precondition that solve. Gradients never go through the
+  iterations.
+* Batched and traced use (below).
+
+### Configuration and state
+
+* **Configuration is separate and immutable.** Memory length, tolerances,
+  iteration limits and line-search parameters are a `Config` passed to every
+  call. The state holds none of them.
+* **The state owns the iterate.** It holds x, f(x), ∇f(x), the (s, y) pairs
+  and the line search in progress. Optax's form, where the parameters are
+  passed in from outside (`update(grad, state, params)`), fits first-order
+  methods such as Adam but not L-BFGS: a line search evaluates the objective
+  several times per step, and a curvature pair is valid only if x and the
+  gradient belong together. Keeping them in one place removes the bug of
+  updating x without its gradient.
+* **The state is plain data.** It contains no closure and no reference to the
+  objective, can be cloned for checkpoints, and has a fixed layout (the pairs
+  are a ring buffer of m preallocated vectors, or the n×m tensors S and Y).
+  When tenferro has `while_loop` (tenferro-rs#2691), the same state becomes the
+  loop carry of a traced optimizer without redesign.
+
+### Interface: ask and tell
+
+The primary interface hands every evaluation back to the caller (reverse
+communication), not a closure the optimizer calls:
+
+```rust
+pub enum Step<'a, V> {
+    Evaluate { x: &'a V },      // caller computes f(x) and the gradient, then calls tell
+    Converged(Termination),     // GradTol, FTol, MaxIter, LineSearchFailed, ...
+}
+
+impl<V: Vector> LbfgsState<V> {
+    pub fn new(cfg: &LbfgsConfig<V::Real>, ctx: &mut V::Ctx, x0: V) -> Self;
+    pub fn ask(&self) -> Step<'_, V>;
+    pub fn tell(&mut self, cfg: &LbfgsConfig<V::Real>, ctx: &mut V::Ctx, f: V::Real, grad: &V);
+}
+
+// A convenience driver is a thin loop over ask and tell.
+pub fn minimize<V, F>(f: F, x0: V, cfg: &LbfgsConfig<V::Real>, ctx: &mut V::Ctx) -> Report<V>
+where
+    F: FnMut(&mut V::Ctx, &V, &mut V) -> V::Real;
+```
+
+* The caller evaluates however it wants: a tenferro program on the GPU, a
+  batch of problems, an MPI reduction, or an asynchronous job. The optimizer
+  never borrows the objective.
+* Each transition can be tested on its own with fixed inputs, and the reason
+  for stopping is an enum in the returned report, never a panic.
+* For agents: names follow SciPy and Optim.jl, and doc comments cite the
+  algorithm numbers of Nocedal and Wright, *Numerical Optimization*, so an
+  implementation can be checked line by line against its source.
+
+### Material and validation
+
+* L-BFGS starts from the `nonlinear-pinn` example in tenferro-examples, with
+  provenance recorded.
+* Solutions are compared with `scipy.optimize.minimize` (`BFGS`, `L-BFGS-B`)
+  on small fixed problems (Rosenbrock, quadratics) with a stated tolerance.
+  Iteration counts are not compared with SciPy, since they depend on line
+  search details. Exact properties are asserted instead, for example that BFGS
+  with an exact line search finishes a quadratic in n steps.
+* The derivative of the solution is checked against finite differences of the
+  solution with respect to θ.
+
 ## Public API only
 
 Every crate in tenferro-sci-rs is written against tenferro's public API, and
@@ -447,7 +548,9 @@ ready, both inside tenferro-sci-rs and in the layers below it.
    optimization problem by the implicit function theorem needs a linear solve
    with the Hessian, which `tenferro-krylov` provides matrix-free. The
    optimizers themselves (L-BFGS, Levenberg–Marquardt) are mostly extracted
-   from tenferro-examples.
+   from tenferro-examples. The pure Rust core (line search, BFGS, L-BFGS; see
+   Optimizers) depends on nothing in tenferro and can start now; only the
+   implicit differentiation waits for krylov.
 3. **`tenferro-special`.** Needs the core ops (tenferro-rs#2692). The pure
    Rust xsf port can start earlier, tests first, because it does not depend on
    tenferro. Martin Mikkelsen's existing special-function code (Rust and Julia)
@@ -579,9 +682,9 @@ because their contexts hold a `Copy` `Par` or an `Arc` stream. So:
 2. The capability API that lets an `ExtensionOp` take part in fusion (scalar
    body, decomposition, properties), and whether `SemanticTransform` returns
    with it.
-3. Where the independent cores other than krylov and `specials` live: in
-   tenferro-sci-rs as tenferro-free crates (as `specials` does), or in their
-   own repositories.
+3. Where the independent cores other than krylov and `specials` (for example
+   the optimizer core) live: in tenferro-sci-rs as tenferro-free crates (as
+   `specials` does), or in their own repositories; and what they are called.
 4. Whether the xsf maintainers want to be involved in the port (the name is
    settled: `specials`).
 5. Reference data: `specials` generates it with a committed script
