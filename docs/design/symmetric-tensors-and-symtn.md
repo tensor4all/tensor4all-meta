@@ -1,6 +1,6 @@
 # Symmetric tensors: symtn, tenferro and tensor4all-rs
 
-**Status:** Decision record (2026-11-19; §3.1 added 2026-11-20).
+**Status:** Decision record (2026-11-19; §3.1 added 2026-11-20; §3.2 added 2026-11-25).
 **Scope:** [symtn-rs](https://github.com/Ryo-wtnb11/symtn-rs) (downstream, outside the org), [tenferro-rs](https://github.com/tensor4all/tenferro-rs) and the crates around it (`cpueinsum`, `tcontract`, `tlinalg`, strided-rs), [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs), and lessons from the [ITensor](https://github.com/ITensor) rewrite.
 **Checked against:** symtn-rs `main` `a01b11b` (2026-11-17, pins tenferro 0.11.0); tenferro-rs `main` `d48982d3` (2026-11-19, release 0.12.0); ITensor GradedArrays.jl `eceb349`, BlockSparseArrays.jl `d5ff336`, TensorAlgebra.jl `f25bff9`, ITensorBase.jl `bcc8f21`, ITensorActions `f809c30`; for §3.1, cpueinsum-rs `main` `6d748544` (2026-11-17) and tcontract-rs `main` `92db81ea` (2026-11-19). Findings come from reading code; nothing was built or benchmarked.
 
@@ -11,6 +11,7 @@
 3. **tensor4all provides symmetry-agnostic high-performance kernels.** Their API speaks only of flat buffers, offsets, strides, shapes, coefficients and plain integer group IDs; no sector type crosses it.
 4. **These kernels live outside the tenferro core.** The core already excludes irregular batches ([core boundary](./core-boundary-and-execution-ownership.md), "Irregular batches (different shapes per item, as with symmetry blocks) are out of scope for the core"), and grouped GEMM was removed from the core in [tensor4all/tenferro-rs#2198](https://github.com/tensor4all/tenferro-rs/issues/2198). The natural home is the `cpueinsum`/`tcontract` layer, where `cpueinsum::GroupedPlan` already lives, or a separate crate. For irregular-batch GEMM this is settled in §3.1: `cpueinsum::GroupedPlan` is the entry, with a fused executor in tcontract beneath it.
 5. **Payloads are dense tenferro tensors, so tenferro's AD applies directly** (section 4).
+6. **A sector-free block-sparse tensor type, if built, lives in tenferro-sci-rs** as `tenferro-sparse`, the counterpart of `scipy.sparse`, on top of the cpueinsum block-sparse contraction (§3.2). It is not built before that contraction exists and has a user.
 
 The reason for a single owner: the ITensor rewrite ended up with three symmetric-tensor implementations (BlockSparseArrays.jl, GradedArrays.jl, FusionTensors.jl), duplicated interfaces to avoid dependencies between them, and finally delegated non-abelian recoupling to TensorKit (section 5). Two implementations inside one ecosystem are not maintainable.
 
@@ -22,6 +23,7 @@ The reason for a single owner: the ITensor rewrite ended up with three symmetric
 | Kernel crates (`cpueinsum`/`tcontract` layer or new crate) | Irregular-batch strided GEMM, batched small-block permute/copy/axpy, batched per-block factorization, weighted truncation across groups, their plan caches, CPU and GPU versions | Any notion of sector or fusion rule |
 | tenferro core | Dense tensors, regular batches (`dot_general`), linalg, AD engine, engines and providers | Irregular batches |
 | tensor4all-rs | Named-index tensors without quantum numbers, tensor networks, TCI | Symmetric tensors |
+| tenferro-sci-rs (`tenferro-sparse`, deferred) | A sector-free block-sparse tensor type over a dense payload: sections, non-zero block coordinates, its AD rules as tenferro extension ops | Quantum numbers, flux, fusion rules, its own kernels |
 
 ## 3. Kernel candidates from symtn
 
@@ -81,6 +83,23 @@ The model is sector-free, as decision 3 requires: a section is a (sector, degene
 | Caller-supplied child plans | [tensor4all/cpueinsum-rs#79](https://github.com/tensor4all/cpueinsum-rs/issues/79) |
 
 Moving symtn's native provider onto `GroupedPlan` is symtn's decision. Two parity gaps stand in the way and are recorded in cpueinsum-rs#79: per-operand transposition (symtn expresses `Transpose`/`Adjoint` through strides; `GroupedPlan` jobs are compact column-major with Identity/Conjugate only) and symtn's work-weighted lane placement. The CUDA counterpart (`cuda_adapter/gemm.rs`) has no home yet; cpueinsum is CPU-only.
+
+### 3.2 A block-sparse tensor type: in tenferro-sci-rs, later
+
+Decided 2026-11-25. A user-facing block-sparse tensor type (a wrapper above the kernels) is placed in [tenferro-sci-rs](https://github.com/tensor4all/tenferro-sci-rs), as a crate `tenferro-sparse` that plays the role of `scipy.sparse` (SciPy's BSR format is the nearest counterpart). It is placed neither in the tenferro core nor in tensor4all-rs.
+
+Why there:
+- **Precedent.** `tenferro-einsum` and `tenferro-ext-tropical` move from tenferro-rs to tenferro-sci-rs ([tenferro-sci](./tenferro-sci.md), placement notes) because they need only tenferro's public API. A block-sparse type is the same kind of thing.
+- **Layering.** cpueinsum-rs#81 (structure-only planning, lowered to grouped GEMM) → tenferro (dense payload, AD engine, `ExtensionOp`) → `tenferro-sparse` (the type). In cuTENSOR's model the VJP of a block-sparse contraction is again a block-sparse contraction with the patterns exchanged (dA has A's pattern), so the AD rules close inside this layer.
+- **No conflict with earlier decisions.** The core still excludes irregular batches (decision 4), and tensor4all-rs still has no quantum numbers (decision 1): the type is sector-free and carries only section extents and non-zero block coordinates, as cuTENSOR's descriptor does.
+
+Lines that must hold:
+- **No quantum numbers.** Flux, conserved charges and QN-labelled axes stay in symtn or other tensor network libraries. If they creep in, the ecosystem gets two representations of block structure, the situation of ITensor's BlockSparseArrays.jl and GradedArrays.jl (§5.1).
+- **symtn is not required to use it.** Whether symtn adopts the type as its abelian payload is symtn's decision; the type must stand without symtn.
+
+Why later:
+- **The layer below is not ready.** cpueinsum-rs#81 is not implemented, and it lowers to `GroupedPlan`, which on symtn's own workloads is several times slower than symtn's native kernel from 16 threads up (Xeon Platinum 9242, measured in cpueinsum-rs#80: for example GP/native 8.06 on `c u1f` f64 and 19.75 on `gm-dom` c64 at 96 threads). The causes are lane placement by job count instead of by work, and outputs first-touched by the caller instead of the workers (symtn-rs#2582). The order is: port symtn's work-weighted lane placement and worker first-touch into `GroupedPlan` (cpueinsum-rs#80), then cpueinsum-rs#81, then this type.
+- **No user yet.** tenferro-sci adds a module only when it is needed ([tenferro-sci](./tenferro-sci.md), non-goals). Neither tensor4all-rs nor symtn needs this type today. A candidate first use is `tenferro-krylov` acting on block-sparse vectors and operators (for example a DMRG effective Hamiltonian); whether that is worth doing is a separate decision.
 
 ## 4. Dense payloads and AD
 

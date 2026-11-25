@@ -90,6 +90,7 @@ The other modules follow the same split when they have an independent core.
 | `tenferro-fft` (moves here from tenferro-rs, see below) | `fft` | FFT, real FFT, DCT/DST | RustFFT, RealFFT; cuFFT on GPU | linear (transpose rules) | cuFFT |
 | `tenferro-einsum` (moves here from tenferro-rs, see below) | — (NumPy's `einsum`) | einsum, tensordot, contraction-order planning | `dot_general` of tenferro | linear in each operand | through `dot_general` |
 | `tenferro-ext-tropical` (moves here from tenferro-rs) | — | tropical semiring tensors and einsum | own kernels | tropical AD rules | none |
+| `tenferro-sparse` (deferred, see below) | `sparse` (BSR) | sector-free block-sparse tensors over a dense payload | cpueinsum's block-sparse contraction (cpueinsum-rs#81) | block-sparse contractions with exchanged patterns | cuTENSOR block-sparse (later) |
 
 Placement notes:
 
@@ -111,6 +112,12 @@ Placement notes:
 * `ext/tropical` (`tenferro-ext-tropical`) moves here with einsum. It uses only
   einsum's public API (`Subscripts`, `ContractionTree`, `lowering::GemmPlan`,
   `Error`).
+* `tenferro-sparse` (decided 2026-11-25, deferred) holds a block-sparse tensor
+  type without quantum numbers: section extents and non-zero block coordinates
+  in cuTENSOR's model, over a dense tenferro payload. It is built only after
+  cpueinsum-rs#81 exists and a user needs it; quantum numbers stay in symtn or
+  other tensor network libraries. See
+  [symmetric tensors](./symmetric-tensors-and-symtn.md) §3.2.
 * Out of scope for now: `stats`, `spatial`, `ndimage`, `cluster`, `io`.
 
 Where the material already exists:
