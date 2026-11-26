@@ -1,6 +1,6 @@
 # tenferro-sci: an algorithm collection on top of tenferro
 
-**Status:** Proposed (2026-11; special functions added 2026-11-21; optimizers added 2026-11-25). The repository [tensor4all/tenferro-sci-rs](https://github.com/tensor4all/tenferro-sci-rs) exists with its rules and CI (created 2026-11-21). The first crate, the special-function core `specials` (gamma family, `f64` and double-double), is in review in [tenferro-sci-rs#6](https://github.com/tensor4all/tenferro-sci-rs/pull/6).
+**Status:** Proposed (2026-11; special functions added 2026-11-21; optimizers added 2026-11-25; optimizer core named `minimize` 2026-11-27). The repository [tensor4all/tenferro-sci-rs](https://github.com/tensor4all/tenferro-sci-rs) exists with its rules and CI (created 2026-11-21). The first crate, the special-function core `specials` (gamma family, `f64` and double-double), is in review in [tenferro-sci-rs#6](https://github.com/tensor4all/tenferro-sci-rs/pull/6).
 **Scope:** a new repository `tensor4all/tenferro-sci-rs`, the existing `krylov` crate (Ryo-wtnb11/krylov-rs), and the reference data used to validate it.
 
 NumPy became the base of Python's scientific computing partly because SciPy
@@ -41,7 +41,7 @@ validated numerically.
   interpolation weights) live in pure Rust crates that do not depend on
   tenferro: krylov already exists, the special-function core is a pure
   Rust port of SciPy's xsf (see Special functions), and the quasi-Newton
-  iterations (line search, BFGS, L-BFGS) form a core too (see Optimizers). They
+  iterations (line search, BFGS, L-BFGS) form a core too, `minimize` (see Optimizers). They
   are generic over traits such as `Vector` and `LinearMap`, so symtn, mdarray
   or ndarray users can use them too. A wider user base brings more
   contributors, as with threadteam-rs and tcontract-rs.
@@ -82,7 +82,7 @@ The other modules follow the same split when they have an independent core.
 | Crate | SciPy counterpart | Contents | Core | AD | GPU |
 | --- | --- | --- | --- | --- | --- |
 | `tenferro-krylov` | `sparse.linalg` (iterative part) | eigsolve, linsolve, exponentiate, svdsolve, Davidson | `krylov` | implicit differentiation | large matvecs |
-| `tenferro-optimize` | `optimize` | L-BFGS, Levenberg–Marquardt, trust region, root finding | own pure Rust core (see Optimizers) | gradients by AD; the solution by implicit differentiation | batched problems |
+| `tenferro-optimize` | `optimize` | L-BFGS, Levenberg–Marquardt, trust region, root finding | `minimize`, own pure Rust core (see Optimizers) | gradients by AD; the solution by implicit differentiation | batched problems |
 | `tenferro-special` | `special` | gamma, Bessel, error functions, orthogonal polynomials | pure Rust port of SciPy's xsf | known derivative rules | xsf headers in NVRTC kernels |
 | `tenferro-integrate` | `integrate` (quadrature part) | adaptive quadrature, integration of samples, Gauss nodes and weights | own | through the integrand | many integrals at once |
 | `tenferro-diffsol` (deferred, see below) | `integrate` (`solve_ivp`, `odeint`) | ODE and DAE solvers, stiff and non-stiff | [diffsol](https://github.com/martinjrobins/diffsol) | adjoint (VJP), forward sensitivities (JVP) | many initial values or parameters |
@@ -337,8 +337,23 @@ The iteration needs only vector operations, so it lives in an independent
 core that does not depend on tenferro, like krylov. It is generic over a
 `Vector` trait with the operations krylov uses (axpy, scale, dot, norm) and
 takes a caller-held execution context on every call. Workspace is allocated
-when the state is created; an iteration allocates nothing. Where the core
-lives and its name are open question 3.
+when the state is created; an iteration allocates nothing.
+
+The core is `minimize` (decided 2026-11-27), a tenferro-free crate in this
+workspace (`crates/minimize`), as `specials` is. The name follows
+`scipy.optimize.minimize`: the core covers unconstrained minimization, and
+`tenferro-optimize` covers the rest of `scipy.optimize`. The convenience driver
+is then `minimize::minimize`, as in SciPy.
+
+* **The line search is a module, not a crate.** `minimize::linesearch` works on
+  the scalar φ(α) and φ'(α) only and does not use the `Vector` trait, so it
+  lands first ([tenferro-sci-rs#38](https://github.com/tensor4all/tenferro-sci-rs/issues/38),
+  a port of SciPy's Moré–Thuente `DCSRCH`) before the trait is settled.
+* **No crate of its own for the line search.** Few users want a line search
+  without the optimizer around it, and its value (parity with SciPy's
+  `DCSRCH`, and the committed reference data) reaches them through `minimize`
+  just as well. A module with no dependencies splits out cheaply if that demand
+  appears.
 
 `tenferro-optimize` adds the tenferro parts:
 
@@ -689,9 +704,13 @@ because their contexts hold a `Copy` `Par` or an `Arc` stream. So:
 2. The capability API that lets an `ExtensionOp` take part in fusion (scalar
    body, decomposition, properties), and whether `SemanticTransform` returns
    with it.
-3. Where the independent cores other than krylov and `specials` (for example
+3. ~~Where the independent cores other than krylov and `specials` (for example
    the optimizer core) live: in tenferro-sci-rs as tenferro-free crates (as
-   `specials` does), or in their own repositories; and what they are called.
+   `specials` does), or in their own repositories; and what they are called.~~
+   Decided 2026-11-27 for the optimizer core: `minimize`, a tenferro-free crate
+   in tenferro-sci-rs, with the line search as a module (see Optimizers). The
+   other cores (quadrature rules, interpolation weights) stay open until they
+   start.
 4. Whether the xsf maintainers want to be involved in the port (the name is
    settled: `specials`).
 5. Reference data: `specials` generates it with a committed script
