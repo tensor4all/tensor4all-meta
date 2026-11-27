@@ -172,6 +172,11 @@ superagent is:
   work, so no loop starts.
 - The human can read any job's thread from a phone and step in with a mention.
   That replaces looking at a herdr pane.
+- Every job message starts with its tag, for example `[tenferro-rs#2704]`, so a
+  job stays readable in clients that do not show threads. Element X (iOS and
+  Android) reads and writes threads only with its Labs threads setting on (as
+  of 2026-11); without it, thread messages fall back to ordinary replies in the
+  main timeline, which the tag keeps sorted out.
 
 The cost is a handful of extra accounts per host, created once by the homeserver
 admin, and a Koushi host (the headless daemon, #2109) on every Linux machine.
