@@ -10,7 +10,7 @@ Repository-scoped design documents live in each implementation repository:
 
 | Document | Status | Summary |
 | --- | --- | --- |
-| [agent-swarm.md](./agent-swarm.md) | Proposal (2026-11) | The agent swarm from the user's side: what you can ask the chief, a worked example in each Matrix room, the rooms, and why it is safe. Full design in [agent-swarm-design.md](./agent-swarm-design.md): residents and jobs, host brokers and exclusive leases, the tailnet-only homeserver, operators, containers with no secrets, merge broker, cutover |
+| [agent-swarm.md](./agent-swarm.md) | Proposal (2026-11) | The agent swarm as it applies to tensor4all. The design moved to [shinaoka/agent-swarm](https://github.com/shinaoka/agent-swarm), which covers several projects |
 | [core-boundary-and-execution-ownership.md](./core-boundary-and-execution-ownership.md) | Proposed (2026-10) | What the tenferro core contains, and why the caller owns CPU threads and GPU streams while every layer borrows them |
 | [cpu-placement-token.md](./cpu-placement-token.md) | Explainer (2026-10) | The CPU placement token (`strided_exec::Exec`) with figures: what it is, how it is split, how the rules are checked |
 | [metal-backend.md](./metal-backend.md) | Detailed design, proposed (2026-11) | Apple GPU backend over a vendor-neutral shared allocation domain: f32/c32 on Metal with explicit `Unsupported` for f64, the paired CPU engine reading the same tensors with automatic waiting, run-time loading only (`t4a-metal-sys`/`t4a-metal-runtime`), MSL sources in t4a-gpu-kernels, MPS GEMM |
