@@ -80,6 +80,24 @@ other over our private network, so the job can run on any machine that fits
 (for example, a quiet one for a benchmark). Details:
 [Host brokers](./agent-swarm-design.md#host-brokers).
 
+## Does it remember?
+
+Yes, in plain files in a private git repository, so a restart or a full context
+loses nothing and any operator can read what an agent remembers.
+
+- **The chief remembers what you said.** Every instruction, word for word with
+  who and when, standing orders such as "no benchmarks on minipc-1 today" with
+  an expiry, the questions it is waiting for you to answer, and the
+  cross-repository priorities.
+- **Superagents remember little.** They re-read GitHub and the running jobs on
+  every wake, plus a one-page handoff and their work log. What can be looked up
+  is never copied.
+- **Workers remember nothing** beyond their job.
+- **The rules are shared and read-only.** Agents propose rule changes when you
+  keep correcting the same kind of decision; you accept or reject them.
+
+Details: [Memory](./agent-swarm-design.md#memory).
+
 ## What you no longer do
 
 - Read agents' terminal screens: each job's conversation is in its thread.
