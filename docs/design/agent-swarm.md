@@ -34,8 +34,9 @@ screen scraping. Workers are short-lived jobs that residents start through a
 host-side broker. Every agent, resident or worker, runs in a container that holds
 **no secrets**: GitHub, LLM-provider and Matrix credentials stay on the host,
 behind proxies that add them to requests the policy allows. Each host's broker
-owns that host, so a benchmark can lease a quiet mini PC exclusively. The human
-talks to the chief, and can read or join any room.
+owns that host, so a benchmark can lease a quiet mini PC exclusively. A few
+chosen humans, the operators, give instructions in one room, to the chief, and
+can read every other room.
 
 ## One kind of agent, two lifetimes
 
@@ -85,7 +86,7 @@ Who is what:
 
 ```mermaid
 flowchart TB
-  H["Human<br/>(any Matrix client)"]
+  H["Operators<br/>(chosen humans, any Matrix client)"]
   C["chief (resident)"]
   subgraph R["repository superagents (resident)"]
     S1["@tenferro-sa"]
@@ -163,20 +164,18 @@ Once every agent is on Matrix, a worker is instructed and heard the same way a
 superagent is:
 
 - Each host has one room, `#t4a-host-<name>`, whose members are that host's slot
-  accounts, the superagents, and the human. Each job is one thread in it.
+  accounts, the superagents, and the operators (read only). Each job is one
+  thread in it.
 - The superagent assigns and steers a job by mentioning the slot in the job's
-  thread. A slot is woken only by a mention from a superagent or the human.
+  thread. A slot is woken only by a mention from a superagent.
 - The worker posts progress in the thread **without** mentions, and mentions its
   superagent only when it is blocked on a decision and when it is done. A
   superagent's reply to "done" does not mention the slot unless it assigns more
   work, so no loop starts.
-- The human can read any job's thread from a phone and step in with a mention.
-  That replaces looking at a herdr pane.
-- Every job message starts with its tag, for example `[tenferro-rs#2704]`, so a
-  job stays readable in clients that do not show threads. Element X (iOS and
-  Android) reads and writes threads only with its Labs threads setting on (as
-  of 2026-11); without it, thread messages fall back to ordinary replies in the
-  main timeline, which the tag keeps sorted out.
+- Operators can read any job's thread from a phone. That replaces looking at a
+  herdr pane. To change what a job does, they tell the chief (see "Operators").
+- How a job's messages are tagged and threaded is in "Job messages: thread and
+  tag".
 
 The cost is a handful of extra accounts per host, created once by the homeserver
 admin, and a Koushi host (the headless daemon, #2109) on every Linux machine.
@@ -217,7 +216,7 @@ No. Each thing herdr does today has a replacement:
 The swarm does not use herdr at all. There is no interim phase in which the
 broker drives herdr panes: the swarm starts only once Koushi can host agents on
 the Linux machines and wake every harness we use (see "Build order and
-cutover"). For debugging, the human can attach to a job's container.
+cutover"). For debugging, an operator can attach to a job's container.
 
 ## Placement and exclusive leases
 
@@ -282,7 +281,7 @@ from the brokers. It is not needed at the current size.
 The rules and judgment a superagent applies (when to label `ai-ready`, what
 counts as a good PR, the maintainer's preferences) are kept per project in a
 private **judgment pack**, separate from the mechanism. The pack is mounted
-read-only into the container. Agents propose changes to it; only the human
+read-only into the container. Agents propose changes to it; only the owner
 accepts them. Keeping it read-only also means that a taken-over agent cannot
 rewrite the rules the next agent will follow.
 
@@ -301,10 +300,10 @@ allow-list.
 
 | Room | Members | Who is woken |
 | --- | --- | --- |
-| `#t4a-chief` | human, chief | chief, by every message (DM rule) |
-| `#t4a-status` | chief, all superagents, human | chief, by every message (room set to `all`) |
-| `#t4a-<repo>` | human, chief, that repository's superagent | the superagent, by a mention from the human or the chief |
-| `#t4a-host-<name>` | that host's slots, the superagents, human | a slot, by a mention from a superagent or the human (one thread per job) |
+| `#t4a-chief` | operators, chief | chief, by every message from an operator (room set to `all`) |
+| `#t4a-status` | chief, all superagents, operators (read) | chief, by every message (room set to `all`) |
+| `#t4a-<repo>` | chief, that repository's superagent, operators (read) | the superagent, by a mention from the chief |
+| `#t4a-host-<name>` | that host's slots, the superagents, operators (read) | a slot, by a mention from a superagent (one thread per job) |
 | `#t4a-<repo>-ci` (optional) | CI bot, superagent | the superagent, by every message (room set to `all`) |
 
 The number of rooms is fixed by the setup, not by the amount of work: **2 + one
@@ -316,6 +315,64 @@ but then every slot must join every repository room.)
 All rooms are invite-only and live on the swarm's own homeserver, unencrypted
 (see "The homeserver"). A person accepts every invite for an agent account;
 agents cannot join rooms by themselves (#2124).
+
+### Operators: humans speak only in `#t4a-chief`
+
+Instructions come from a short list of **operators**: the owner and other
+maintainers the owner chooses. Each has an account on the swarm homeserver.
+
+- **One entry point.** Operators give instructions only in `#t4a-chief`. The
+  chief's allow-list is the operator list, and the room is set to `all`, so every
+  operator message wakes it. The chief turns instructions into mentions of
+  superagents.
+- **Every other room is read-only for people.** Operators are members so they
+  can watch, but they are on no other agent's allow-list: a message from a person
+  in `#t4a-<repo>` or a host room wakes nobody. Agents therefore have exactly one
+  source of human authority to reason about, and a stray message cannot start
+  work.
+- **Who said what.** The chief records each instruction with the operator who
+  gave it and the date, word for word, as the current fleet does for approvals.
+- **Conflicts.** If two operators' instructions conflict, the chief does not
+  pick one. It asks in `#t4a-chief`, and the owner decides.
+- **Decisions that need a human stay on GitHub.** `human-approve-required`,
+  releases and accepted designs are decided by a maintainer of that repository on
+  GitHub, as today. An operator's word in Matrix starts the work, but does not
+  replace that record.
+- **Emergency stop.** An operator says "stop <repo>" or "stop all" to the chief.
+  If the chief itself is the problem, an operator stops jobs or a whole host with
+  the host broker's command line on that machine.
+- Adding or removing an operator is an owner action: the account is created or
+  deactivated on the homeserver and the operator list is changed in the chief's
+  profile.
+
+### Job messages: thread and tag
+
+A job's messages carry two things, and they do different jobs:
+
+| | Thread | Tag, e.g. `[tenferro-rs#2704]` |
+| --- | --- | --- |
+| What it is | Matrix thread whose root is the assignment message | text at the start of every message |
+| What it is for | grouping on screen | identifying the job |
+| Who relies on it | people reading | agents, and people when threads fail |
+| Required | yes, when sending works | always |
+
+Rules:
+
+1. The superagent opens a job by posting the assignment in the host room. That
+   message is the thread root, and it starts with the tag.
+2. Every later message about the job, from anyone, goes into that thread **and**
+   starts with the same tag.
+3. Agents identify a job by its tag (and the broker's job id), never by which
+   thread a message sits in.
+4. If a thread reply fails, the sender posts the same message in the main
+   timeline with the tag, instead of retrying forever.
+
+The tag is needed because threads are not reliable everywhere yet. Element X
+shows threads only with its Labs setting on (as of 2026-11), and even then a
+thread reply can fail. Clients without thread support show thread messages as
+ordinary replies in the main timeline, where the tag is what keeps jobs apart.
+A scheduled job without an issue uses its profile and date, for example
+`[triage tenferro-rs 2026-11-28]`.
 
 ### No reply loops
 
@@ -346,14 +403,14 @@ The swarm runs its own homeserver, reachable only on the tailnet:
   creates every account. Nobody outside the tailnet can DM, invite or mention an
   agent, so Matrix stops being a channel for outside prompt injection; the
   remaining untrusted input is GitHub and the web.
-- **Tailscale ACLs** let only the human's devices and the agent hosts reach the
+- **Tailscale ACLs** let only the operators' devices and the agent hosts reach the
   homeserver port. HTTPS comes from Tailscale's certificates for the tailnet
   name (`tailscale serve`), so clients see a normal `https://` server.
 - **A small server.** Tuwunel or Synapse; Koushi's own QA already runs against
   both.
-- **Collaborators** join by being added to the tailnet (or by node sharing) and
-  getting an account; the human keeps their main account on their usual
-  homeserver and adds the swarm account as a second account in Koushi.
+- **Operators** join by being added to the tailnet (or by node sharing) and
+  getting an account. Each keeps their main account on their usual homeserver
+  and adds the swarm account as a second account in Koushi or Element.
 
 **End-to-end encryption is off** in every swarm room. Rooms are created
 unencrypted (encryption cannot be turned off later), and the server's default
@@ -370,13 +427,13 @@ What it costs, and the rules that follow:
 
 - Anyone who gets the homeserver's database or a backup reads every message.
   Transport is still encrypted (WireGuard and TLS), but storage is not. Keep the
-  server and its backups on a machine only the human administers.
+  server and its backups on a machine only the owner administers.
 - **No secret ever goes into a Matrix message**, from a person or an agent.
   This was already true; now it matters more.
 - Code under embargo (a security fix before disclosure) is not discussed in
   swarm rooms.
 
-Using the human's existing public homeserver instead would also work, but then
+Using the owner's existing public homeserver instead would also work, but then
 outsiders can reach the agents' accounts, and E2EE would be needed again. The
 private server is the simpler and safer default.
 
@@ -497,8 +554,8 @@ the host proxies, reached over Unix sockets or an internal Docker network:
 | GitHub | a GitHub App private key on the host; the proxy mints installation tokens (valid 1 hour) scoped to one repository | through the GitHub proxy only |
 | LLM provider keys | host proxy configuration | through the LLM proxy only |
 | Matrix session, E2EE keys | Koushi Core (macOS Keychain; Linux per Koushi's open decision) | through the Koushi IPC socket, bound to one profile and one account |
-| crates.io token | the human's laptop only, as today | never |
-| SSH keys | the human's laptop only | never |
+| crates.io token | the owner's laptop only, as today | never |
+| SSH keys | the owner's laptop only | never |
 
 The Koushi IPC socket is mounted into the container. It is authenticated and
 profile-bound, so it lets the container act only as its own Matrix account, and
