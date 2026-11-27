@@ -33,8 +33,9 @@ accounts, hosted by Koushi Core, and talk in Matrix rooms instead of through
 screen scraping. Workers are short-lived jobs that residents start through a
 host-side broker. Every agent, resident or worker, runs in a container that holds
 **no secrets**: GitHub, LLM-provider and Matrix credentials stay on the host,
-behind proxies that add them to requests the policy allows. The human talks to
-the chief, and can read or join any room.
+behind proxies that add them to requests the policy allows. Each host's broker
+owns that host, so a benchmark can lease a quiet mini PC exclusively. The human
+talks to the chief, and can read or join any room.
 
 ## One kind of agent, two lifetimes
 
@@ -42,10 +43,10 @@ Superagents and workers must be told apart, but making them two different
 systems would double everything. Instead there is one kind of agent, described
 by a **profile**, and profiles differ along two axes only:
 
-- **Lifetime.** A **resident** runs continuously, has a Matrix account, and is
-  woken by Koushi. A **job** is started for one task or one scheduled run, has no
-  Matrix account, and ends; its result is what it left on GitHub plus a short
-  summary file.
+- **Lifetime.** A **resident** runs continuously, has its own Matrix account,
+  and is woken by Koushi. A **job** is started for one task or one scheduled run
+  in a fresh container on a worker slot, and ends; its result is what it left on
+  GitHub plus its Matrix thread.
 - **Scope.** Which repositories it may touch, which GitHub operations the proxy
   allows it, which hosts it may reach, and which judgment pack it reads.
 
@@ -91,8 +92,8 @@ flowchart TB
     S2["@t4a-rs-sa"]
     S3["@backend-sa"]
   end
-  LB["Launch broker (host)"]
-  subgraph J["jobs (containers, no Matrix account)"]
+  LB["Host brokers"]
+  subgraph J["jobs (fresh container on a worker slot)"]
     W1["impl #123"]
     W2["review PR #456"]
     W3["triage (hourly)"]
@@ -101,8 +102,10 @@ flowchart TB
   C -- "mention in #t4a-&lt;repo&gt;" --> S1 & S2 & S3
   S1 & S2 & S3 -. "reports, no mention" .-> ST["#t4a-status"]
   ST -. "room set to all" .-> C
-  S1 -- "launch / read / prompt / stop" --> LB
+  S1 -- "launch / interrupt / stop" --> LB
   LB --> W1 & W2
+  S1 -- "mention in job thread" --> W1
+  W1 -. "progress; mention only when blocked or done" .-> S1
   CRON["host scheduler"] --> LB --> W3
 ```
 
@@ -118,39 +121,157 @@ Why this split, and not more:
 - **Patrols are stateless jobs.** Issue triage (label, close what a merged PR
   fixed, fold duplicates) reads GitHub from scratch each run and writes nothing
   but its GitHub actions and a four-number report (closed, labelled, folded, net
-  change). It needs no Matrix account and no memory, so it is a scheduled job,
+  change). It needs no memory, so it is a scheduled job,
   not a resident. Splitting triage from dispatch is what keeps either from being
   starved of attention.
-- **Workers have no Matrix account.** Fewer accounts means fewer things that can
-  wake one another, fewer secrets in Koushi, and no loops. A worker that needs a
-  decision stops and says so in its summary; its superagent asks in Matrix.
+- **Workers talk over Matrix through slots, not accounts of their own.**
+  Creating and verifying a Matrix account per job is too heavy (a person
+  verifies each account once). Instead each host has a few long-lived **worker
+  slot** accounts (`@host-a-w1`, `@host-a-w2`, ...). A job runs in a fresh
+  container bound to one slot for its lifetime; the next job on that slot gets a
+  fresh container. See "Worker slots".
 - **A profile can change lifetime.** If one repository's triage grows into real
   ongoing work, its profile becomes a resident with an account. Nothing else
   changes.
 
-### The launch broker, and what happens to herdr
+### Host brokers
 
 Today the orchestrator drives herdr directly: it can start an agent in any pane,
-read any screen, type into any pane. Handing that to a resident in a container
-would give it every other agent on the machine. The **launch broker** is a small
-host service with a narrow interface:
+read any screen, type into any pane. Handing that to an agent in a container
+would give it every other agent on the machine. Instead every host runs one
+**host broker**, a small service that is the only way to start, stop or
+interrupt an agent there:
 
 | Call | Meaning |
 | --- | --- |
-| `launch(profile, repo, task, prompt)` | start a job container; the broker chooses image, mounts, runtime, egress and GitHub capabilities from the profile, never from the caller |
-| `list()` | jobs this caller started, with state (`running`, `idle`, `blocked`, `done`, `failed`) |
-| `read(job)` / `prompt(job, text)` / `stop(job)` | only for jobs this caller started |
-| `result(job)` | exit status, summary file, PR links |
+| `launch(profile, repo, task)` | start a job container on a free slot of a matching host; the broker chooses image, mounts, runtime, egress and GitHub capabilities from the profile, never from the caller |
+| `list()` | jobs this caller started, with state (`queued`, `running`, `done`, `failed`) and a heartbeat |
+| `interrupt(job)` / `stop(job)` | only for jobs this caller started |
+| `lease(host, exclusive)` | see "Placement and exclusive leases" |
 
-herdr stays, underneath. The broker starts each job as a herdr pane whose command
-is `docker run ...`, named `<owner>-<repo>-<role>-<id>`. The human keeps the same
-terminal view of every agent on every machine, and `read`/`prompt` are herdr's
-`agent read`/`agent prompt` restricted to the caller's own panes. Stage 1 is
-herdr plus containers; replacing herdr later only changes the broker's inside.
+An agent reaches only its own host's broker, through a socket mounted into its
+container. Brokers talk to one another over the tailnet with host keys, so a
+superagent on the laptop can launch a job on a remote mini PC without any
+network access of its own: its local broker forwards the call.
 
 Scheduled patrols are launched by the host scheduler (systemd timers or launchd)
 through the same broker, so they get the same containers and the same audit
 trail. This also removes the 7-day expiry of session-bound scheduled tasks.
+
+### Worker slots
+
+Once every agent is on Matrix, a worker is instructed and heard the same way a
+superagent is:
+
+- Each host has one room, `#t4a-host-<name>`, whose members are that host's slot
+  accounts, the superagents, and the human. Each job is one thread in it.
+- The superagent assigns and steers a job by mentioning the slot in the job's
+  thread. A slot is woken only by a mention from a superagent or the human.
+- The worker posts progress in the thread **without** mentions, and mentions its
+  superagent only when it is blocked on a decision and when it is done. A
+  superagent's reply to "done" does not mention the slot unless it assigns more
+  work, so no loop starts.
+- The human can read any job's thread from a phone and step in with a mention.
+  That replaces looking at a herdr pane.
+
+The cost is a handful of extra accounts per host, each verified once, and a
+Koushi host (the headless daemon, #2109) on every Linux machine.
+
+### Do we still need herdr?
+
+Not in the end state. Each thing herdr does today has a replacement:
+
+| herdr today | Replaced by |
+| --- | --- |
+| start an agent in a pane; keep it alive after SSH ends | host broker and container runtime (systemd keeps the broker up) |
+| `agent prompt` | a mention in Matrix, delivered by Koushi's wake feed |
+| `agent read` (screen scraping) | the job's Matrix thread, plus the harness session log for detail |
+| `agent wait` (idle, blocked, done) | broker heartbeat and container state; inside the sandbox there are no approval dialogs to get stuck on |
+| `send-keys esc` | `interrupt(job)` |
+
+herdr stays until Koushi can host agents on the Linux machines (Release 3,
+#2109) and wake pi and Codex (Release 2, #2127, #2128). Until then the broker
+starts jobs as herdr panes running `docker run ...`; herdr is the broker's
+backend, not something agents drive. For debugging, the human can still attach
+to a job's container.
+
+## Placement and exclusive leases
+
+Benchmarks need a quiet machine: nothing else running, boost off, the Docker
+daemon off the measured cores. Today this is a convention the orchestrator has to
+remember. It should be a mechanism.
+
+### Hosts declare labels, jobs declare needs
+
+```toml
+# hosts/minipc-1.toml
+labels = ["linux", "x86_64", "quiet"]
+measured_cpus = "0-7"
+slots = 2
+
+# profiles/bench.toml
+lifetime = "job"
+needs = { labels = ["quiet"], exclusive = true }
+```
+
+A superagent never names a machine. It asks for a profile; its broker forwards
+the request to a host whose labels match.
+
+### The host broker owns its host's lease
+
+There is no central scheduler. Each broker is the only authority over its own
+host, so exclusivity is a local lock, not a distributed one:
+
+1. An exclusive request is queued on the host. The broker stops admitting new
+   jobs there.
+2. Running jobs may finish up to a deadline set by priority; after it,
+   lower-priority jobs are interrupted and requeued.
+3. The broker runs the host's quiet checks (boost off, no other containers,
+   Docker daemon CPU affinity, load average) and refuses the lease if any fails.
+4. The job runs with `--cpuset-cpus` set to the measured cores. The lease has a
+   heartbeat and a time limit, so a crashed holder cannot lock the machine
+   forever.
+5. On exit the broker releases the lease and admits queued jobs again.
+
+People see the lease too: the broker posts "minipc-1 exclusive for tenferro
+bench #491 until 14:30" in the host room.
+
+### Should benchmarks use GitHub Actions self-hosted runners?
+
+A self-hosted runner is the same pattern, run by GitHub: the machine pulls jobs
+(no inbound ports), jobs are matched by labels, one runner process runs one job
+at a time (exclusive for free), and the queue, logs and results are tied to a
+commit.
+
+For **measurements** (a scripted, repeatable run, like the weekly full CPU
+benchmark) it is a good fit:
+
+- the benchmark is a checked-in workflow, not something an agent improvises, so
+  runs are comparable;
+- an agent triggers it with `gh workflow run` (`actions: write` through the
+  GitHub proxy) and reads the result like any other CI;
+- there is no coordinator to write.
+
+It needs care:
+
+- GitHub advises against self-hosted runners on public repositories, because a
+  fork pull request can run code on the machine. Register the runner only to a
+  runner group restricted to the benchmark repositories, trigger only on
+  `workflow_dispatch` and `schedule`, never on `pull_request`, and use ephemeral
+  runners that run each job in a container with no secrets.
+- Two schedulers on one machine need one lock. The runner's job-started hook
+  (`ACTIONS_RUNNER_HOOK_JOB_STARTED`) asks the host broker for an exclusive
+  lease, and the job-completed hook releases it, so agent jobs and runner jobs
+  never overlap.
+
+For **agent work** that needs the quiet machine (profiling, bisecting a
+regression, trying variants), a runner is the wrong shape: an Actions job is not
+interactive and cannot be steered. That stays an agent job with an exclusive
+lease.
+
+If the number of machines grows well beyond a handful, a batch scheduler (Slurm's
+exclusive allocation and node features do exactly this) can take over placement
+from the brokers. It is not needed at the current size.
 
 ### Judgment packs
 
@@ -341,9 +462,9 @@ steering comment newer than the last review). The superagent's GitHub identity
 cannot merge on its own; only the broker's can. Releases and repository settings
 are not exposed to any agent.
 
-Starting jobs works the same way through the launch broker (see "The launch
-broker, and what happens to herdr"): no agent has the Docker socket or direct
-herdr access, and the caller cannot choose mounts, network or credentials.
+Starting jobs works the same way through the host broker (see "Host brokers"):
+no agent has the Docker socket or direct herdr access, and the caller cannot
+choose mounts, network or credentials.
 
 ### Capability sets
 
@@ -353,11 +474,11 @@ The `github` and `egress` fields of a profile name one of these sets.
 | --- | --- | --- | --- |
 | chief | read all repositories, comment | none beyond LLM | its rooms |
 | superagent | its repositories: issues, labels, PR comments, draft/ready; merge through broker | none beyond LLM | its room, `#t4a-status` |
-| impl | push to `agent/<issue>-*` branches, open PRs, in one repository | build allow-list | none |
-| review | read, comment, add `xreview:done` | build allow-list | none |
-| bench | read; push to the benchmark data branch | build allow-list | none |
-| research | read-only, no push | web reads, logged | none |
-| triage | one repository: labels, comments, close an issue that a merged PR closes | none | none |
+| impl | push to `agent/<issue>-*` branches, open PRs, in one repository | build allow-list | its slot, the host room |
+| review | read, comment, add `xreview:done` | build allow-list | its slot, the host room |
+| bench | read; push to the benchmark data branch | build allow-list | its slot, the host room |
+| research | read-only, no push | web reads, logged | its slot, the host room |
+| triage | one repository: labels, comments, close an issue that a merged PR closes | none | its slot, the host room |
 
 The chief and superagents need no egress beyond the LLM proxy: anything that
 needs the web or a build is a job.
@@ -400,20 +521,21 @@ pulled once per host and shared read-only.
 Each stage is useful on its own and can be stopped after.
 
 1. **Sandboxed jobs, today's orchestrator.** Build the image. Write the first
-   launch broker as a thin wrapper around herdr that starts each worker as a
+   host broker as a thin wrapper around herdr that starts each worker as a
    `docker run` pane with the egress, LLM and GitHub proxies. Move GitHub access
    from personal tokens to a GitHub App. Move scheduled patrols to host timers
    through the broker. Nothing about Matrix yet.
-2. **Merge broker and profiles.** The orchestrator stops merging with the
+2. **Merge broker, profiles, leases.** The orchestrator stops merging with the
    human's account and goes through the merge broker. Profiles replace ad-hoc
-   agent start commands.
+   agent start commands. Benchmark hosts get exclusive leases, and the weekly
+   measurement moves to an ephemeral self-hosted runner that takes the lease
+   through its job hooks.
 3. **Repository superagents on macOS, over Matrix.** Needs Koushi Release 1
    (macOS, Claude Code; #2125, #2126, #2130–#2132). Start with two repositories
    and the chief; keep the others on the old orchestrator.
 4. **Superagents on the Linux hosts.** Needs Koushi Release 3, the headless
-   daemon (#2109), and Release 2 for pi and Codex (#2127, #2128). herdr stays as
-   the broker's backend and the human's terminal view; no agent drives it
-   directly any more.
+   daemon (#2109), and Release 2 for pi and Codex (#2127, #2128). Worker slots
+   on Matrix replace herdr; herdr is retired.
 
 ## Requests to Koushi
 
