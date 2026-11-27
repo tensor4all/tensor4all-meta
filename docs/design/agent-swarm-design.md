@@ -121,7 +121,7 @@ Why this split, and not more:
   CI, review labels, merge, issue closed) and the broker's list of running jobs.
   It stores only what cannot be derived: which job it started for which task,
   and what it is waiting for. Ledgers that someone must remember to update drift
-  from the truth; derived state does not.
+  from the truth; derived state does not. See "Memory".
 - **Patrols are stateless jobs.** Issue triage (label, close what a merged PR
   fixed, fold duplicates) reads GitHub from scratch each run and writes nothing
   but its GitHub actions and a four-number report (closed, labelled, folded, net
@@ -341,6 +341,115 @@ private **judgment pack**, separate from the mechanism. The pack is mounted
 read-only into the container. Agents propose changes to it; only the owner
 accepts them. Keeping it read-only also means that a taken-over agent cannot
 rewrite the rules the next agent will follow.
+
+### Memory
+
+Residents run for weeks; their sessions do not. A context fills up, a harness
+is updated, a machine reboots. Whatever an agent must still know after that is
+its memory, and it has to live outside the session. The mechanisms below come
+from the maintainer's current orchestrator, where they were tried first.
+
+#### Five layers, each with one owner
+
+| Layer | What it holds | Written by | Read by | Form |
+| --- | --- | --- | --- | --- |
+| **World** | PRs, CI, labels, merges, issues; running jobs and leases; room history | GitHub, the brokers, the homeserver | everyone | not stored by agents; derived on every wake |
+| **Runs** | which job was started for which task, what it waits for, until when | the superagent that started it | that superagent, the chief | `runs.json`, open runs only |
+| **Journal** | what the agent did and why; the current picture | each agent, its own files only | itself, the chief, operators | `worklog/<date>.md` (append-only), `handoff.md` (replaced) |
+| **Ledger** | consequential decisions with the rules they relied on, and which ones a human later rejected | agents append decisions; only the owner confirms a rejection | the review of rules | `decisions/*.jsonl`, `verdicts/*.jsonl` (append-only) |
+| **Judgment pack** | persona, numbered rules, project facts, knowledge, precedents | the owner, by accepting proposals | every agent, read-only | a directory pinned by its git tree hash |
+
+The rule that keeps this small: **do not store what can be derived.** Whether a
+PR is merged, red or a draft is read from GitHub each time, never copied into a
+file that someone must remember to update. Copies drift; the world does not.
+
+#### Superagents: derive, then read the journal
+
+A superagent needs little memory of its own. On every wake, and after any
+restart, it:
+
+1. reads its `handoff.md` (a page at most: what it is doing, what it waits for,
+   what it promised the chief);
+2. reads `runs.json` and checks each run against the world (job state, PR,
+   CI). A run whose task is done on GitHub is closed and gets one worklog line;
+3. reads the last few days of its worklog only when the first two leave a
+   question open.
+
+Every wait in `runs.json` has an `until`; a wait without one is rejected when
+written, so nothing waits forever unnoticed. After three failed attempts a run
+is parked and reported to the chief.
+
+#### The chief: memory it cannot derive
+
+The chief needs real memory, because its most important inputs exist nowhere
+else in machine-readable form: what operators asked for, what they decided,
+and what is still owed to them.
+
+| File | Holds | Example |
+| --- | --- | --- |
+| `instructions.jsonl` | every operator instruction, verbatim, with operator, time, the Matrix event id, and a status (`open`, `done`, `withdrawn`) | "alice 2026-11-28 09:02: find the einsum slowdown" → done 11:26 |
+| `standing-orders.md` | instructions that hold until revoked, each with an expiry | "no bench jobs on minipc-1 today (until 2026-11-28 24:00)" |
+| `questions.md` | what the chief asked the operators and is still waiting for | "tenferro-rs#2690 needs a human decision" |
+| `priorities.md` | cross-repository order of work and dependencies | "colmat 0.4 before tenferro 0.10" |
+| `handoff.md` | the current picture, rewritten when it changes | |
+
+Instructions are recorded only from messages by operators in `#t4a-chief`. The
+Matrix room history is the full record; these files are the index the chief
+can read in one go, and every entry points back to its Matrix event.
+
+When the chief's context fills, it starts a fresh session from `handoff.md`,
+open instructions, standing orders and open questions. That handoff is its
+whole continuity, so it is kept current after every change, not at the end of
+a session.
+
+#### Learning: decisions, rejections, proposals
+
+Agents record consequential decisions (merge, close, dispatch, reply, design
+call) as ledger lines naming the rule ids they relied on and the pack's tree
+hash, so it is always known which version of the rules a decision was made
+under. A line with no rule is itself a signal: the rules did not cover the
+case.
+
+Programs and agents may flag a later rejection as a *candidate* (a revert, an
+operator saying "no, not like that"), but only the owner confirms it. When a
+rule's confirmed rejection rate passes a threshold, the chief drafts a change
+to the pack. The owner accepts, edits or rejects it; nothing rewrites the rules
+by itself. A rejection that was a misapplication of a correct rule fixes the
+procedure, not the rule.
+
+#### Where it lives
+
+All of it is in one private git repository, one directory per agent, mounted
+into each container:
+
+```text
+swarm-state/
+  pack/                       judgment pack (read-only mount, pinned tree)
+  chief/                      instructions.jsonl, standing-orders.md, ...
+  agents/<name>/              handoff.md, runs.json, worklog/<date>.md
+  ledger/decisions/<date>/    one file per agent per day
+  ledger/verdicts/<date>/     owner only
+```
+
+- Each agent's own directory is mounted read-write; everything else read-only.
+  The chief gets read-only access to every superagent's directory, so it can
+  answer "what is everyone doing" without waking anyone.
+- The host broker commits and pushes the directories on a timer and when a job
+  ends. Agents never hold the credential for this repository.
+- Workers have no memory beyond their job. What they learn goes into their
+  report; if it should change how future work is done, the superagent turns it
+  into a pack proposal.
+
+#### Memory is also an attack surface
+
+A note written while reading a hostile issue survives the session that wrote
+it. Three guards:
+
+- the pack, which steers every agent, is read-only to all agents;
+- the chief's instruction files accept only operator messages from
+  `#t4a-chief`, never text quoted from GitHub or another room;
+- every memory file is plain text in git, so an operator can read and revert
+  what an agent remembered.
 
 ## Communication over Matrix
 
@@ -757,6 +866,9 @@ Most of what the swarm needs is already in the #2124 plan. Missing or open:
 6. Whether review workers may add `xreview:done` themselves (as the rules say
    today) or the merge broker verifies the review comment instead of trusting
    the label.
+7. Options other than Tailscale for the private network (headscale, plain
+   WireGuard, a reverse proxy with client certificates). Deferred: Tailscale
+   first.
 
 ## References
 
