@@ -255,38 +255,18 @@ host, so exclusivity is a local lock, not a distributed one:
 People see the lease too: the broker posts "minipc-1 exclusive for tenferro
 bench #491 until 14:30" in the host room.
 
-### Should benchmarks use GitHub Actions self-hosted runners?
+### Scheduled measurements, without self-hosted runners
 
-A self-hosted runner is the same pattern, run by GitHub: the machine pulls jobs
-(no inbound ports), jobs are matched by labels, one runner process runs one job
-at a time (exclusive for free), and the queue, logs and results are tied to a
-commit.
+The weekly full CPU benchmark and other scripted measurements are scheduled
+**bench jobs**: the host scheduler asks the broker for the `bench` profile, the
+broker takes the exclusive lease, and the job runs the benchmark script checked
+into the benchmark repository, so runs stay comparable. The job posts its
+summary in its thread and pushes results like any other job.
 
-For **measurements** (a scripted, repeatable run, like the weekly full CPU
-benchmark) it is a good fit:
-
-- the benchmark is a checked-in workflow, not something an agent improvises, so
-  runs are comparable;
-- an agent triggers it with `gh workflow run` (`actions: write` through the
-  GitHub proxy) and reads the result like any other CI;
-- there is no coordinator to write.
-
-It needs care:
-
-- GitHub advises against self-hosted runners on public repositories, because a
-  fork pull request can run code on the machine. Register the runner only to a
-  runner group restricted to the benchmark repositories, trigger only on
-  `workflow_dispatch` and `schedule`, never on `pull_request`, and use ephemeral
-  runners that run each job in a container with no secrets.
-- Two schedulers on one machine need one lock. The runner's job-started hook
-  (`ACTIONS_RUNNER_HOOK_JOB_STARTED`) asks the host broker for an exclusive
-  lease, and the job-completed hook releases it, so agent jobs and runner jobs
-  never overlap.
-
-For **agent work** that needs the quiet machine (profiling, bisecting a
-regression, trying variants), a runner is the wrong shape: an Actions job is not
-interactive and cannot be steered. That stays an agent job with an exclusive
-lease.
+We do not use GitHub Actions self-hosted runners. The broker already gives what a
+runner would (labels, a queue, one exclusive job at a time, logs), and a runner
+would add a second scheduler on the same machine that has to share the lock, plus
+the risk GitHub warns about for self-hosted runners on public repositories.
 
 If the number of machines grows well beyond a handful, a batch scheduler (Slurm's
 exclusive allocation and node features do exactly this) can take over placement
@@ -319,7 +299,14 @@ allow-list.
 | `#t4a-chief` | human, chief | chief, by every message (DM rule) |
 | `#t4a-status` | chief, all superagents, human | chief, by every message (room set to `all`) |
 | `#t4a-<repo>` | human, chief, that repository's superagent | the superagent, by a mention from the human or the chief |
+| `#t4a-host-<name>` | that host's slots, the superagents, human | a slot, by a mention from a superagent or the human (one thread per job) |
 | `#t4a-<repo>-ci` (optional) | CI bot, superagent | the superagent, by every message (room set to `all`) |
+
+The number of rooms is fixed by the setup, not by the amount of work: **2 + one
+per superagent + one per host**. With five superagents and three hosts that is
+10 rooms. Jobs are threads, so a thousand jobs add no rooms. (Putting job
+threads in the repository rooms instead of host rooms would make it 2 + 5 = 7,
+but then every slot must join every repository room.)
 
 All rooms are invite-only and live on the swarm's own homeserver, unencrypted
 (see "The homeserver"). A person accepts every invite for an agent account;
@@ -597,9 +584,7 @@ land, the current fleet keeps running unchanged.
 3. The host broker: profiles, slots, launch/interrupt/stop, forwarding over the
    tailnet, exclusive leases and quiet checks.
 4. The merge broker, enforcing `superagent.md`.
-5. The ephemeral self-hosted runner for scheduled measurements, taking its lease
-   through the job hooks.
-6. Matrix: the tailnet-only homeserver, the chief, superagent and slot
+5. Matrix: the tailnet-only homeserver, the chief, superagent and slot
    accounts signed in on their Koushi hosts, the unencrypted rooms and
    allow-lists.
 
