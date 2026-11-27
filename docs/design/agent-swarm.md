@@ -177,6 +177,26 @@ superagent is:
 The cost is a handful of extra accounts per host, each verified once, and a
 Koushi host (the headless daemon, #2109) on every Linux machine.
 
+### One Matrix device per account, reused forever
+
+Containers never sign in to Matrix. Koushi Core on the host holds each account's
+single session, and a container only talks to Core over the IPC socket. So:
+
+- **devices = accounts**, one each, no matter how many jobs or containers run.
+  With a chief, five superagents and three hosts with two slots each, that is 12
+  accounts and 12 devices;
+- a fresh container on a slot reuses the slot's device; so does a restart of
+  Koushi, which keeps the device ID and keys in its encrypted store and never
+  recreates crypto under a saved device ID (missing or wrong state fails closed
+  instead);
+- each device is verified once, when the account is first signed in on its host;
+- signing an account out through Koushi removes its device on the homeserver, so
+  retiring a slot leaves nothing behind.
+
+A new device appears only if a host's Koushi store is lost and the account is
+signed in again. The old device should then be removed on the homeserver; that is
+part of the host-rebuild checklist.
+
 ### Do we still need herdr?
 
 No. Each thing herdr does today has a replacement:
