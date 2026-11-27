@@ -63,6 +63,23 @@ you what matters, as in step 1 at 11:26.
 With five superagents and three machines that is 10 rooms. Jobs are threads, so
 the number of rooms does not grow with the work.
 
+## Behind the scenes
+
+Only three kinds of participants are AI agents: the chief, the superagents and
+the workers. The rest are ordinary programs that always behave the same way.
+
+| | AI agent? | Where |
+| --- | --- | --- |
+| chief, superagents, workers | yes | one container each |
+| host broker: starts and stops containers, reserves machines | no, a daemon | one per machine |
+| host scheduler: starts patrols at set times | no, systemd timers / launchd | one per machine |
+| Koushi: holds the Matrix accounts, wakes agents | no, a daemon | one per machine |
+
+A superagent asks its own machine's broker for a job; the brokers talk to each
+other over our private network, so the job can run on any machine that fits
+(for example, a quiet one for a benchmark). Details:
+[Host brokers](./agent-swarm-design.md#host-brokers).
+
 ## What you no longer do
 
 - Read agents' terminal screens: each job's conversation is in its thread.
