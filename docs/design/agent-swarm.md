@@ -5,7 +5,7 @@ that runs today is described in
 [`tensor4all-agent-rules/docs/agent-fleet`](https://github.com/tensor4all/tensor4all-agent-rules/blob/main/docs/agent-fleet/README.md),
 and the rules every superagent follows are in
 [`rules/common/superagent.md`](https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/common/superagent.md).
-Those stay authoritative until a stage below replaces them.
+Those stay authoritative until the cutover described in "Build order and cutover".
 
 ## The problem
 
@@ -179,7 +179,7 @@ Koushi host (the headless daemon, #2109) on every Linux machine.
 
 ### Do we still need herdr?
 
-Not in the end state. Each thing herdr does today has a replacement:
+No. Each thing herdr does today has a replacement:
 
 | herdr today | Replaced by |
 | --- | --- |
@@ -189,11 +189,10 @@ Not in the end state. Each thing herdr does today has a replacement:
 | `agent wait` (idle, blocked, done) | broker heartbeat and container state; inside the sandbox there are no approval dialogs to get stuck on |
 | `send-keys esc` | `interrupt(job)` |
 
-herdr stays until Koushi can host agents on the Linux machines (Release 3,
-#2109) and wake pi and Codex (Release 2, #2127, #2128). Until then the broker
-starts jobs as herdr panes running `docker run ...`; herdr is the broker's
-backend, not something agents drive. For debugging, the human can still attach
-to a job's container.
+The swarm does not use herdr at all. There is no interim phase in which the
+broker drives herdr panes: the swarm starts only once Koushi can host agents on
+the Linux machines and wake every harness we use (see "Build order and
+cutover"). For debugging, the human can attach to a job's container.
 
 ## Placement and exclusive leases
 
@@ -463,7 +462,7 @@ cannot merge on its own; only the broker's can. Releases and repository settings
 are not exposed to any agent.
 
 Starting jobs works the same way through the host broker (see "Host brokers"):
-no agent has the Docker socket or direct herdr access, and the caller cannot
+no agent has the Docker socket, and the caller cannot
 choose mounts, network or credentials.
 
 ### Capability sets
@@ -494,7 +493,7 @@ needs the web or a build is a job.
 - Claude Code with a subscription login keeps an OAuth credential in the
   container. Whether Claude Code can run against an `ANTHROPIC_BASE_URL` proxy
   with a subscription, or must use an API key held by the proxy, has to be
-  checked before stage 1. Until then, treat that credential as exposed and give
+  checked before the cutover. Until then, treat that credential as exposed and give
   it to no role that reads untrusted content without a short expiry.
 
 ## The agent image
@@ -516,26 +515,43 @@ that, and its diff (versions, digests) is the place to review supply-chain
 changes. An image that holds every tool is large; that is fine, because it is
 pulled once per host and shared read-only.
 
-## Stages
+## Build order and cutover
 
-Each stage is useful on its own and can be stopped after.
+We go to the end state in one step, without running the old orchestrator and
+the swarm side by side, and without an interim herdr-based broker.
 
-1. **Sandboxed jobs, today's orchestrator.** Build the image. Write the first
-   host broker as a thin wrapper around herdr that starts each worker as a
-   `docker run` pane with the egress, LLM and GitHub proxies. Move GitHub access
-   from personal tokens to a GitHub App. Move scheduled patrols to host timers
-   through the broker. Nothing about Matrix yet.
-2. **Merge broker, profiles, leases.** The orchestrator stops merging with the
-   human's account and goes through the merge broker. Profiles replace ad-hoc
-   agent start commands. Benchmark hosts get exclusive leases, and the weekly
-   measurement moves to an ephemeral self-hosted runner that takes the lease
-   through its job hooks.
-3. **Repository superagents on macOS, over Matrix.** Needs Koushi Release 1
-   (macOS, Claude Code; #2125, #2126, #2130–#2132). Start with two repositories
-   and the chief; keep the others on the old orchestrator.
-4. **Superagents on the Linux hosts.** Needs Koushi Release 3, the headless
-   daemon (#2109), and Release 2 for pi and Codex (#2127, #2128). Worker slots
-   on Matrix replace herdr; herdr is retired.
+**Prerequisites (Koushi).** Agent accounts with the wake feed and the IPC
+(Release 1: #2125, #2126, #2130–#2132), the pi and Codex plugins (Release 2:
+#2127, #2128; DeepSeek Harness #2129 if we use it), the Linux headless daemon
+(Release 3: #2109), and the requests in "Requests to Koushi" below. Until these
+land, the current fleet keeps running unchanged.
+
+**Build, in this order, while the current fleet keeps running:**
+
+1. The agent image family and its weekly rebuild.
+2. The host proxies (egress, LLM, GitHub) and the GitHub App; the subscription
+   versus API-key question for Claude Code is settled here.
+3. The host broker: profiles, slots, launch/interrupt/stop, forwarding over the
+   tailnet, exclusive leases and quiet checks.
+4. The merge broker, enforcing `superagent.md`.
+5. The ephemeral self-hosted runner for scheduled measurements, taking its lease
+   through the job hooks.
+6. Matrix: the chief, superagent and slot accounts, signed in and verified on
+   their Koushi hosts; the rooms and allow-lists.
+
+Each piece is tested on its own against a disposable repository and a test
+homeserver before the cutover; nothing above touches the live repositories.
+
+**Cutover (one day).** Stop the orchestrator's scheduled rounds. Let running
+herdr agents finish or stop them, and write their state into the issues and pull
+requests they were on. Revoke the personal GitHub tokens and provider keys on
+the agent machines, and remove the agents' GitHub account's write access in
+favour of the App. Start the chief and the superagents. The new superagents
+derive their state from GitHub, so no ledger has to be migrated.
+
+**Rollback.** Keep the old orchestrator's instructions and the herdr setup on
+disk for a few weeks. Rolling back means re-issuing tokens, which is the point:
+the old setup is the one that holds secrets on the hosts.
 
 ## Requests to Koushi
 
