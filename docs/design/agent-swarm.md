@@ -125,8 +125,7 @@ Why this split, and not more:
   not a resident. Splitting triage from dispatch is what keeps either from being
   starved of attention.
 - **Workers talk over Matrix through slots, not accounts of their own.**
-  Creating and verifying a Matrix account per job is too heavy (a person
-  verifies each account once). Instead each host has a few long-lived **worker
+  Creating a Matrix account and a Koushi sign-in per job is too heavy. Instead each host has a few long-lived **worker
   slot** accounts (`@host-a-w1`, `@host-a-w2`, ...). A job runs in a fresh
   container bound to one slot for its lifetime; the next job on that slot gets a
   fresh container. See "Worker slots".
@@ -174,8 +173,8 @@ superagent is:
 - The human can read any job's thread from a phone and step in with a mention.
   That replaces looking at a herdr pane.
 
-The cost is a handful of extra accounts per host, each verified once, and a
-Koushi host (the headless daemon, #2109) on every Linux machine.
+The cost is a handful of extra accounts per host, created once by the homeserver
+admin, and a Koushi host (the headless daemon, #2109) on every Linux machine.
 
 ### One Matrix device per account, reused forever
 
@@ -189,7 +188,8 @@ single session, and a container only talks to Core over the IPC socket. So:
   Koushi, which keeps the device ID and keys in its encrypted store and never
   recreates crypto under a saved device ID (missing or wrong state fails closed
   instead);
-- each device is verified once, when the account is first signed in on its host;
+- on the swarm's own homeserver (see "The homeserver") there is no end-to-end
+  encryption, so there are no device keys to verify or back up;
 - signing an account out through Koushi removes its device on the homeserver, so
   retiring a slot leaves nothing behind.
 
@@ -321,8 +321,9 @@ allow-list.
 | `#t4a-<repo>` | human, chief, that repository's superagent | the superagent, by a mention from the human or the chief |
 | `#t4a-<repo>-ci` (optional) | CI bot, superagent | the superagent, by every message (room set to `all`) |
 
-All rooms are invite-only and end-to-end encrypted. A person accepts every
-invite for an agent account; agents cannot join rooms by themselves (#2124).
+All rooms are invite-only and live on the swarm's own homeserver, unencrypted
+(see "The homeserver"). A person accepts every invite for an agent account;
+agents cannot join rooms by themselves (#2124).
 
 ### No reply loops
 
@@ -344,6 +345,48 @@ mention the original sender. Until it exists, superagents post to
 `#t4a-status` as new messages, not replies. A per-room hop budget in Core (for
 example, at most N wakes of one account per room per 10 minutes) would be a
 second guard; that is also a request to Koushi.
+
+### The homeserver
+
+The swarm runs its own homeserver, reachable only on the tailnet:
+
+- **Not on the internet, no federation, no open registration.** The admin
+  creates every account. Nobody outside the tailnet can DM, invite or mention an
+  agent, so Matrix stops being a channel for outside prompt injection; the
+  remaining untrusted input is GitHub and the web.
+- **Tailscale ACLs** let only the human's devices and the agent hosts reach the
+  homeserver port. HTTPS comes from Tailscale's certificates for the tailnet
+  name (`tailscale serve`), so clients see a normal `https://` server.
+- **A small server.** Tuwunel or Synapse; Koushi's own QA already runs against
+  both.
+- **Collaborators** join by being added to the tailnet (or by node sharing) and
+  getting an account; the human keeps their main account on their usual
+  homeserver and adds the swarm account as a second account in Koushi.
+
+**End-to-end encryption is off** in every swarm room. Rooms are created
+unencrypted (encryption cannot be turned off later), and the server's default
+for new rooms is set to unencrypted. What this buys:
+
+- no device verification, no recovery keys, no key backup for agent accounts,
+  and the open Koushi question of where a headless Linux host keeps its key
+  store mostly disappears (Koushi still keeps each account's access token);
+- the homeserver's database is a complete, searchable audit log of what every
+  agent was told and said;
+- debugging and admin tools can read rooms directly.
+
+What it costs, and the rules that follow:
+
+- Anyone who gets the homeserver's database or a backup reads every message.
+  Transport is still encrypted (WireGuard and TLS), but storage is not. Keep the
+  server and its backups on a machine only the human administers.
+- **No secret ever goes into a Matrix message**, from a person or an agent.
+  This was already true; now it matters more.
+- Code under embargo (a security fix before disclosure) is not discussed in
+  swarm rooms.
+
+Using the human's existing public homeserver instead would also work, but then
+outsiders can reach the agents' accounts, and E2EE would be needed again. The
+private server is the simpler and safer default.
 
 ### What stays on GitHub
 
@@ -556,8 +599,9 @@ land, the current fleet keeps running unchanged.
 4. The merge broker, enforcing `superagent.md`.
 5. The ephemeral self-hosted runner for scheduled measurements, taking its lease
    through the job hooks.
-6. Matrix: the chief, superagent and slot accounts, signed in and verified on
-   their Koushi hosts; the rooms and allow-lists.
+6. Matrix: the tailnet-only homeserver, the chief, superagent and slot
+   accounts signed in on their Koushi hosts, the unencrypted rooms and
+   allow-lists.
 
 Each piece is tested on its own against a disposable repository and a test
 homeserver before the cutover; nothing above touches the live repositories.
@@ -586,21 +630,27 @@ Most of what the swarm needs is already in the #2124 plan. Missing or open:
    boundary on macOS and under gVisor on Linux.
 4. **Per-profile send restrictions**: a profile may send only in the rooms its
    role names, so a taken-over superagent cannot post elsewhere as its account.
-5. The open decisions already recorded in #2140 matter here too: cursor
-   acknowledgement for the push subscription (#2132) and store-key storage on a
-   headless Linux host (#2109).
+5. **Agent accounts on a homeserver without E2EE**: sign-in and the agent path
+   must work when the account never sets up cross-signing or key backup, and
+   the agent must be able to create unencrypted rooms and DMs.
+6. The open decisions already recorded in #2140 matter here too: cursor
+   acknowledgement for the push subscription (#2132), and store-key storage on a
+   headless Linux host (#2109), which matters less without E2EE but still
+   protects the access token.
 
 ## Open decisions
 
 1. The split of repositories among superagents, and which patrols are jobs of
    their own from the start (issue triage is the first candidate).
-2. Whether the chief runs on the laptop (as today) or on a Linux host under the
+2. Tuwunel or Synapse for the swarm homeserver, and which machine hosts it and
+   its backups.
+3. Whether the chief runs on the laptop (as today) or on a Linux host under the
    headless daemon.
-3. gVisor for GPU and benchmark roles, or `runc` with the other layers only.
+4. gVisor for GPU and benchmark roles, or `runc` with the other layers only.
    Decide after measuring.
-4. How Claude Code authenticates inside a container (subscription login versus
+5. How Claude Code authenticates inside a container (subscription login versus
    an API key held by the LLM proxy).
-5. Whether review workers may add `xreview:done` themselves (as the rules say
+6. Whether review workers may add `xreview:done` themselves (as the rules say
    today) or the merge broker verifies the review comment instead of trusting
    the label.
 
