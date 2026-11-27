@@ -329,7 +329,7 @@ linear solve.
 | --- | --- | --- |
 | 1 | Line search for the strong Wolfe conditions (More–Thuente or Hager–Zhang) | How robust a quasi-Newton method is depends mostly on its line search; the BFGS update itself is a few dozen lines |
 | 2 | L-BFGS (two-loop recursion) | The main target: large n and tensor-valued parameters |
-| 3 | BFGS (dense inverse Hessian, O(n²) memory) | Small problems, and a reference for L-BFGS tests: with memory m at least the number of iterations, both take the same path |
+| 3 | BFGS (dense inverse Hessian, O(n²) memory) | Small problems, and a reference for L-BFGS tests: with the same H₀ (including any scaling), line search and first trial step, and memory m at least the number of iterations, both take the same path |
 
 ### Split into a core and a tenferro crate
 
