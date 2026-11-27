@@ -141,21 +141,75 @@ Why this split, and not more:
 
 Today the orchestrator drives herdr directly: it can start an agent in any pane,
 read any screen, type into any pane. Handing that to an agent in a container
-would give it every other agent on the machine. Instead every host runs one
-**host broker**, a small service that is the only way to start, stop or
-interrupt an agent there:
+would give it every other agent on the machine. Instead every machine runs one
+**host broker**, the only way to start, stop or interrupt an agent there.
+
+#### What is a program, and what is an agent
+
+Only the chief, the superagents and the workers are LLM agents. Everything else
+on a machine is an ordinary program with fixed behaviour:
+
+| On every machine | Kind | Runs as | Does |
+| --- | --- | --- | --- |
+| host broker | program (daemon), no LLM | systemd service (launchd on macOS), outside any container | starts and stops containers, holds slots and leases, forwards requests to other machines, posts lease notices |
+| host scheduler | OS feature, not a separate program | systemd timers (launchd on macOS) | at set times runs `t4a-broker launch --profile triage ...`; nothing else |
+| Koushi Core | program (daemon) | the headless `koushi` daemon (the desktop app on macOS) | holds the Matrix sessions of the accounts on this machine, wakes agents |
+| proxies, merge broker | programs (daemons) | systemd services | add credentials to allowed requests, check merge rules |
+| agents | LLM agents | one container each | the actual work |
+
+So "the broker decides" always means fixed code decides, never a model.
+
+#### How they talk
+
+| From → to | Channel | How the caller is identified |
+| --- | --- | --- |
+| agent → its machine's broker | a Unix socket the broker creates for that container and mounts into it; JSON requests | by the socket itself: the broker made it for one container and one profile |
+| broker → broker on another machine | HTTPS over the tailnet | the peer machine's Tailscale identity, checked against the host list |
+| host scheduler → broker | the broker's command line on the same machine | local root/user permission |
+| agent ↔ Matrix | Koushi's IPC socket mounted into the container, bound to one account | Koushi profile |
+| broker → Matrix | the broker's own bot account (`@<machine>-broker`) through the local Koushi | Koushi profile |
+
+The broker's interface is small:
 
 | Call | Meaning |
 | --- | --- |
-| `launch(profile, repo, task)` | start a job container on a free slot of a matching host; the broker chooses image, mounts, runtime, egress and GitHub capabilities from the profile, never from the caller |
+| `launch(profile, repo, task, host?)` | start a job on a free slot of a matching machine; the broker chooses image, mounts, runtime, egress and GitHub capabilities from the profile, never from the caller |
 | `list()` | jobs this caller started, with state (`queued`, `running`, `done`, `failed`) and a heartbeat |
 | `interrupt(job)` / `stop(job)` | only for jobs this caller started |
-| `lease(host, exclusive)` | see "Placement and exclusive leases" |
+| `hosts()` | the machines, their labels, free slots and current leases |
 
-An agent reaches only its own host's broker, through a socket mounted into its
-container. Brokers talk to one another over the tailnet with host keys, so a
-superagent on the laptop can launch a job on a remote mini PC without any
-network access of its own: its local broker forwards the call.
+#### A superagent can place work on any machine
+
+A superagent may launch the profiles its own profile lists (`may_launch`) on any
+machine of the swarm whose labels satisfy the profile's `needs`. It does not
+need to know where the machines are or have any network access:
+
+```mermaid
+sequenceDiagram
+  participant SA as tenferro-sa (container on the laptop)
+  participant BL as broker (laptop)
+  participant BM as broker (minipc-1)
+  participant K as Koushi (minipc-1)
+  participant W as worker container (slot minipc-1-w1)
+  SA->>BL: launch(bench, tenferro-rs, #2709) over its socket
+  BL->>BL: may tenferro-sa launch "bench"? yes
+  BL->>BM: which machines match "quiet", exclusive? (hosts)
+  BL->>BM: launch(...) over the tailnet
+  BM->>BM: take exclusive lease, quiet checks
+  BM->>W: docker run (runsc), worktree + Koushi socket for minipc-1-w1
+  BM->>K: post "[tenferro-rs#2709] minipc-1 reserved" as @minipc-1-broker
+  BM-->>BL: job id
+  BL-->>SA: job id, host minipc-1
+  SA->>K: (via Matrix) mention @minipc-1-w1 in the job thread with the task
+  K->>W: wake the worker
+```
+
+- With no `host`, the local broker picks the least busy matching machine. With
+  `host`, it uses that machine if its labels match, and refuses otherwise.
+- If no machine is free, the job is queued on one that matches, and the
+  superagent sees `queued` in `list()`.
+- The superagent cannot ask for a mount, a network or a credential; those come
+  from the profile on the machine that runs the job.
 
 Scheduled patrols are launched by the host scheduler (systemd timers or launchd)
 through the same broker, so they get the same containers and the same audit
@@ -189,8 +243,8 @@ Containers never sign in to Matrix. Koushi Core on the host holds each account's
 single session, and a container only talks to Core over the IPC socket. So:
 
 - **devices = accounts**, one each, no matter how many jobs or containers run.
-  With a chief, five superagents and three hosts with two slots each, that is 12
-  accounts and 12 devices;
+  With a chief, five superagents, and three hosts with two slots and one broker
+  account each, that is 15 accounts and 15 devices;
 - a fresh container on a slot reuses the slot's device; so does a restart of
   Koushi, which keeps the device ID and keys in its encrypted store and never
   recreates crypto under a saved device ID (missing or wrong state fails closed
@@ -306,7 +360,7 @@ allow-list.
 | `#t4a-chief` | operators, chief | chief, by every message from an operator (room set to `all`) |
 | `#t4a-status` | chief, all superagents, operators (read) | chief, by every message (room set to `all`) |
 | `#t4a-<repo>` | chief, that repository's superagent, operators (read) | the superagent, by a mention from the chief |
-| `#t4a-host-<name>` | that host's slots, the superagents, operators (read) | a slot, by a mention from a superagent (one thread per job) |
+| `#t4a-host-<name>` | that host's slots and broker, the superagents, operators (read) | a slot, by a mention from a superagent (one thread per job) |
 | `#t4a-<repo>-ci` (optional) | CI bot, superagent | the superagent, by every message (room set to `all`) |
 
 The number of rooms is fixed by the setup, not by the amount of work: **2 + one
